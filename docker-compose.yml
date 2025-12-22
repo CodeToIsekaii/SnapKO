@@ -1,0 +1,16 @@
+version: "3.8"
+
+# Supabase local dev uses its own Docker stack via `pnpm db:start` (supabase start).
+# This compose file is reserved for optional utilities (pgAdmin, Redis, etc.) later.
+services:
+  placeholder:
+    image: alpine:3.20
+    command:
+      [
+        "sh",
+        "-lc",
+        "echo 'SnapKO docker-compose placeholder. Use: pnpm db:start' && sleep 3600"
+      ]
+
+
+

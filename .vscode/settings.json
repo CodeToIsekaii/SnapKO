@@ -1,0 +1,7 @@
+{
+  "deno.enable": true,
+  "deno.enablePaths": ["./supabase/functions"],
+  "deno.unstable": true,
+  "javascript.validate.enable": false, // Tắt validate JS mặc định ở vùng Deno
+  "typescript.validate.enable": true
+}
