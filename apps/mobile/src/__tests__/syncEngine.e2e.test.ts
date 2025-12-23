@@ -22,6 +22,7 @@ describe("Sync Engine E2E Tests", () => {
         quantity_change_base: 10,
         unit_cost_at_time: 50000,
         source_photo_urls: ["file:///local/photo.jpg"],
+        local_image_path: "file:///local/photo.jpg",
         ai_parsed_json: null,
         staff_note: null,
         is_verified: true,

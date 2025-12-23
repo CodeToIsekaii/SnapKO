@@ -55,6 +55,7 @@ interface LocalIngredient {
 interface InventoryCaptureScreenProps {
   onBack: () => void;
   onOpenSettings: () => void;
+  onNavigateToConfirm?: (items: AiMappedItem[], localImagePath: string) => void;
 }
 
 // Fuzzy match score
@@ -81,8 +82,10 @@ function getMatchScore(
 export default function InventoryCaptureScreen({
   onBack,
   onOpenSettings,
+  onNavigateToConfirm,
 }: InventoryCaptureScreenProps) {
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [localImagePath, setLocalImagePath] = useState<string | null>(null);
   const [parsing, setParsing] = useState(false);
   const [loadingStep, setLoadingStep] = useState<string>(""); // Multi-step loading
   const [items, setItems] = useState<AiMappedItem[]>([]);
@@ -112,21 +115,28 @@ export default function InventoryCaptureScreen({
     }
   };
 
-  // Compress image to <1MB
-  const compressImage = async (
+  // Compress image to <1MB and save locally
+  // ImageManipulator already saves to cache, we just use that URI
+  const compressAndSaveImage = async (
     uri: string
-  ): Promise<{ base64: string; mimeType: string }> => {
+  ): Promise<{ base64: string; mimeType: string; savedPath: string }> => {
+    // Resize to 1024px width, compress to 70% quality (~200KB)
     const manipulated = await ImageManipulator.manipulateAsync(
       uri,
-      [{ resize: { width: 1280 } }],
+      [{ resize: { width: 1024 } }],
       { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
     );
 
+    // Read as base64 for AI
     const base64 = await FileSystem.readAsStringAsync(manipulated.uri, {
-      encoding: "base64",
+      encoding: "base64" as const,
     });
 
-    return { base64, mimeType: "image/jpeg" };
+    // Use manipulated URI as local path (already saved by ImageManipulator)
+    const savedPath = manipulated.uri;
+
+    console.log(`[Capture] Saved compressed image: ${savedPath}`);
+    return { base64, mimeType: "image/jpeg", savedPath };
   };
 
   // Take photo
@@ -213,12 +223,15 @@ export default function InventoryCaptureScreen({
     setError(null);
 
     try {
-      // Step 1: Compress image
+      // Step 1: Compress and save image
       setLoadingStep("📷 Đang nén ảnh...");
-      const { base64, mimeType } = await compressImage(imageUri);
+      const { base64, mimeType, savedPath } = await compressAndSaveImage(
+        imageUri
+      );
+      setLocalImagePath(savedPath);
 
       // Step 2: Upload to AI
-      setLoadingStep("☁️ Đang tải ảnh lên...");
+      setLoadingStep("☁️ Đang gửi lên AI...");
       const response = await fetch(
         `${Env.SUPABASE_URL}/functions/v1/ai-parse-inventory`,
         {
@@ -244,6 +257,11 @@ export default function InventoryCaptureScreen({
       if (data.items && data.items.length > 0) {
         const mapped = autoMapItems(data.items);
         setItems(mapped);
+
+        // If 2-screen mode enabled, navigate to ConfirmScreen
+        if (onNavigateToConfirm && savedPath) {
+          onNavigateToConfirm(mapped, savedPath);
+        }
       } else {
         setError("Không tìm thấy nguyên liệu. Thử chụp lại?");
       }

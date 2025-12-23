@@ -8,3 +8,6 @@ export * from "./schemas";
 
 // Logic functions
 export * from "./logic";
+
+// Interfaces
+export * from "./interfaces/database";

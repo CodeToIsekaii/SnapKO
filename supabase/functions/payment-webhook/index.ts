@@ -1,7 +1,9 @@
-// Payment Webhook Edge Function: Receive SePay/Casso webhook and extend subscription
+// Payment Webhook Edge Function: Receive SePay/Casso/PayOS webhook and extend subscription
 // Uses native Deno.serve() API per project rules
 
 import { createClient } from "supabase";
+
+// ==================== TYPES ====================
 
 interface SePayWebhookBody {
   id: number;
@@ -49,11 +51,13 @@ interface PayOSWebhookBody {
     currency: string;
     paymentLinkId: string;
     status: string;
-    checkoutResponseCode: string;
-    checkoutResponseMessage: string;
+    checkoutResponseCode?: string;
+    checkoutResponseMessage?: string;
   };
   signature: string;
 }
+
+// ==================== HELPERS ====================
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -63,18 +67,64 @@ const corsHeaders = {
 
 // Parse short code from transfer content
 function extractShortCode(content: string): string | null {
-  // Look for pattern: SNAPKO XXXXXX or SNAPKO-XXXXXX
   const match = content.match(/SNAPKO[- ]?([A-Z0-9]{6})/i);
   return match ? match[1].toUpperCase() : null;
 }
 
 // Calculate subscription extension based on amount
 function getSubscriptionDays(amount: number): number {
-  // Pricing tiers (VND)
   if (amount >= 990000) return 365; // Yearly
   if (amount >= 99000) return 30; // Monthly
   return 0;
 }
+
+/**
+ * Verify PayOS webhook signature using HMAC SHA256
+ * Per PayOS docs: signature = HMAC_SHA256(checksumKey, sortedDataString)
+ */
+async function verifyPayOSSignature(
+  data: PayOSWebhookBody["data"],
+  signature: string,
+  checksumKey: string
+): Promise<boolean> {
+  try {
+    // Sort data fields alphabetically and create query string
+    const sortedKeys = Object.keys(data).sort();
+    const dataString = sortedKeys
+      .map((key) => `${key}=${data[key as keyof typeof data]}`)
+      .join("&");
+
+    // Generate HMAC SHA256 using Web Crypto API (Deno native)
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(checksumKey);
+    const msgData = encoder.encode(dataString);
+
+    const cryptoKey = await crypto.subtle.importKey(
+      "raw",
+      keyData,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+
+    const signatureBuffer = await crypto.subtle.sign(
+      "HMAC",
+      cryptoKey,
+      msgData
+    );
+    const hashArray = Array.from(new Uint8Array(signatureBuffer));
+    const expectedSignature = hashArray
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    return expectedSignature === signature;
+  } catch (err) {
+    console.error("[PayOS] Signature verification error:", err);
+    return false;
+  }
+}
+
+// ==================== MAIN HANDLER ====================
 
 Deno.serve(async (req: Request) => {
   // Handle CORS preflight
@@ -86,15 +136,14 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const sepayApiKey = Deno.env.get("SEPAY_API_KEY");
+    const payosChecksumKey = Deno.env.get("PAYOS_CHECKSUM_KEY");
 
     if (!supabaseUrl || !supabaseServiceKey) {
       throw new Error("Missing Supabase environment variables");
     }
 
-    // Verify webhook signature (SePay sends secure-token header)
+    // Verify SePay webhook signature
     const secureToken = req.headers.get("secure-token");
-
-    // If SEPAY_API_KEY is set, verify it matches
     if (sepayApiKey && secureToken !== sepayApiKey) {
       console.log("Invalid secure-token");
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -143,8 +192,27 @@ Deno.serve(async (req: Request) => {
     ) {
       // PayOS format
       const payos = body as PayOSWebhookBody;
-      // In production, you would verify PayOS signature here using crypto-js
-      // But for simple bank transfers via PayOS, we can trust the specific data structure
+
+      // Verify PayOS signature if checksum key is configured
+      if (payosChecksumKey) {
+        const isValid = await verifyPayOSSignature(
+          payos.data,
+          payos.signature,
+          payosChecksumKey
+        );
+        if (!isValid) {
+          console.log("[PayOS] Invalid signature");
+          return new Response(
+            JSON.stringify({ error: "Invalid PayOS signature" }),
+            {
+              status: 401,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
+        console.log("[PayOS] Signature verified successfully");
+      }
+
       content = payos.data.description || "";
       amount = payos.data.amount;
       transactionCode = payos.data.reference || String(payos.data.orderCode);
@@ -161,7 +229,6 @@ Deno.serve(async (req: Request) => {
 
     if (!shortCode) {
       console.log("No short code found in content:", content);
-      // Log as failed transaction
       await supabaseAdmin.from("payment_transactions").insert({
         business_id: null,
         amount,
@@ -240,7 +307,6 @@ Deno.serve(async (req: Request) => {
       ? new Date(business.subscription_expires_at)
       : new Date();
 
-    // If already expired, start from now
     const startDate = baseDate < new Date() ? new Date() : baseDate;
     const newExpiration = new Date(startDate);
     newExpiration.setDate(newExpiration.getDate() + extensionDays);

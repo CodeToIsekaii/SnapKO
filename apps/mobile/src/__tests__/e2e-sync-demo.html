@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SnapKO E2E Test - Mobile Sync Flow</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        color: white;
+        min-height: 100vh;
+        padding: 24px;
+      }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      h1 {
+        text-align: center;
+        margin-bottom: 8px;
+        font-size: 28px;
+      }
+      .subtitle {
+        text-align: center;
+        color: #94a3b8;
+        margin-bottom: 32px;
+      }
+      .devices {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+      }
+      .device {
+        background: #1e293b;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      }
+      .device-header {
+        background: #334155;
+        padding: 12px 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .device-title {
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #22c55e;
+      }
+      .status-dot.offline {
+        background: #ef4444;
+      }
+      .status-dot.syncing {
+        background: #f59e0b;
+        animation: pulse 1s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+      .device-screen {
+        padding: 16px;
+        min-height: 400px;
+      }
+
+      /* Mobile Specific */
+      .capture-area {
+        background: #0f172a;
+        border-radius: 12px;
+        padding: 16px;
+        text-align: center;
+        margin-bottom: 16px;
+      }
+      .capture-preview {
+        width: 100%;
+        height: 150px;
+        background: #374151;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #9ca3af;
+        margin-bottom: 12px;
+      }
+      .capture-preview.has-image {
+        background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><rect fill="%23475569" width="200" height="100"/><text x="100" y="55" text-anchor="middle" fill="%2394A3B8" font-size="12">📷 Receipt Image</text></svg>');
+        background-size: cover;
+      }
+      .btn {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        transition: all 0.2s;
+      }
+      .btn:hover {
+        transform: translateY(-1px);
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .btn-primary {
+        background: #e07a2f;
+        color: white;
+      }
+      .btn-success {
+        background: #22c55e;
+        color: white;
+      }
+      .btn-secondary {
+        background: #475569;
+        color: white;
+      }
+
+      .parsed-items {
+        background: #0f172a;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .item-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #334155;
+      }
+      .item-row:last-child {
+        border: none;
+      }
+      .item-name {
+        font-weight: 500;
+      }
+      .item-qty {
+        color: #6b8e23;
+      }
+      .confidence-badge {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        background: rgba(107, 142, 35, 0.2);
+        color: #6b8e23;
+      }
+      .confidence-badge.low {
+        background: rgba(239, 68, 68, 0.2);
+        color: #ef4444;
+      }
+
+      .pending-badge {
+        background: #f59e0b;
+        color: #0f172a;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      /* Desktop Specific */
+      .log-list {
+        background: #0f172a;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .log-header {
+        background: #334155;
+        padding: 12px 16px;
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .log-item {
+        padding: 12px 16px;
+        border-bottom: 1px solid #1e293b;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .log-item.new {
+        background: rgba(34, 197, 94, 0.1);
+        animation: slideIn 0.5s ease-out;
+      }
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateX(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+      .log-type {
+        background: #3b82f6;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+      }
+      .log-time {
+        color: #64748b;
+        font-size: 12px;
+      }
+
+      /* Toast */
+      .toast {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #059669;
+        color: white;
+        padding: 16px 24px;
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        animation: toastIn 0.3s ease-out;
+        z-index: 1000;
+      }
+      @keyframes toastIn {
+        from {
+          opacity: 0;
+          transform: translateY(-20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      /* Timeline */
+      .timeline {
+        margin-top: 32px;
+        background: #1e293b;
+        border-radius: 12px;
+        padding: 24px;
+      }
+      .timeline-title {
+        font-size: 18px;
+        font-weight: 600;
+        margin-bottom: 16px;
+      }
+      .timeline-steps {
+        display: flex;
+        justify-content: space-between;
+      }
+      .step {
+        flex: 1;
+        text-align: center;
+        position: relative;
+      }
+      .step::after {
+        content: "";
+        position: absolute;
+        top: 20px;
+        left: 50%;
+        width: 100%;
+        height: 2px;
+        background: #334155;
+        z-index: 0;
+      }
+      .step:last-child::after {
+        display: none;
+      }
+      .step-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: #334155;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 8px;
+        font-size: 18px;
+        position: relative;
+        z-index: 1;
+      }
+      .step.active .step-icon {
+        background: #e07a2f;
+      }
+      .step.complete .step-icon {
+        background: #22c55e;
+      }
+      .step-label {
+        font-size: 12px;
+        color: #94a3b8;
+      }
+      .step.active .step-label {
+        color: #e07a2f;
+      }
+      .step.complete .step-label {
+        color: #22c55e;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🧪 SnapKO E2E Test</h1>
+      <p class="subtitle">Mobile Capture → Offline → Sync → Desktop Display</p>
+
+      <div class="devices">
+        <!-- Mobile Device -->
+        <div class="device" id="mobile">
+          <div class="device-header">
+            <div class="device-title">
+              <span>📱</span>
+              <span>Mobile App</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px">
+              <span id="mobile-status-text">Online</span>
+              <div class="status-dot" id="mobile-status"></div>
+            </div>
+          </div>
+          <div class="device-screen">
+            <div class="capture-area">
+              <div class="capture-preview" id="capture-preview">
+                📷 Chưa có ảnh
+              </div>
+              <button
+                class="btn btn-primary"
+                id="btn-capture"
+                onclick="captureImage()"
+              >
+                📸 Chụp ảnh
+              </button>
+            </div>
+
+            <div class="parsed-items" id="parsed-items" style="display: none">
+              <h4 style="margin-bottom: 12px">AI Parsed Items</h4>
+              <div id="items-list"></div>
+              <button
+                class="btn btn-success"
+                style="width: 100%; margin-top: 12px"
+                id="btn-confirm"
+                onclick="confirmSave()"
+              >
+                ✅ Xác nhận & Lưu
+              </button>
+            </div>
+
+            <div id="pending-section" style="display: none; margin-top: 16px">
+              <div
+                style="
+                  display: flex;
+                  justify-content: space-between;
+                  align-items: center;
+                  margin-bottom: 12px;
+                "
+              >
+                <span>Pending Sync</span>
+                <span class="pending-badge" id="pending-count">1 log</span>
+              </div>
+              <button
+                class="btn btn-secondary"
+                id="btn-toggle-network"
+                onclick="toggleNetwork()"
+              >
+                ⚡ Toggle Offline/Online
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Desktop Device -->
+        <div class="device" id="desktop">
+          <div class="device-header">
+            <div class="device-title">
+              <span>💻</span>
+              <span>Desktop App</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px">
+              <span>Realtime</span>
+              <div class="status-dot" id="desktop-status"></div>
+            </div>
+          </div>
+          <div class="device-screen">
+            <div class="log-list">
+              <div class="log-header">📋 Inventory Logs</div>
+              <div id="desktop-logs">
+                <div class="log-item">
+                  <div>
+                    <span class="log-type">IMPORT</span>
+                    <span style="margin-left: 8px">Rượu Vodka x5</span>
+                  </div>
+                  <span class="log-time">10:30</span>
+                </div>
+                <div class="log-item">
+                  <div>
+                    <span class="log-type">AUDIT</span>
+                    <span style="margin-left: 8px">Bia Tiger x24</span>
+                  </div>
+                  <span class="log-time">09:15</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Timeline -->
+      <div class="timeline">
+        <h3 class="timeline-title">🔄 E2E Flow Progress</h3>
+        <div class="timeline-steps">
+          <div class="step" id="step-1">
+            <div class="step-icon">📷</div>
+            <div class="step-label">Capture</div>
+          </div>
+          <div class="step" id="step-2">
+            <div class="step-icon">🤖</div>
+            <div class="step-label">AI Parse</div>
+          </div>
+          <div class="step" id="step-3">
+            <div class="step-icon">✅</div>
+            <div class="step-label">Confirm</div>
+          </div>
+          <div class="step" id="step-4">
+            <div class="step-icon">📴</div>
+            <div class="step-label">Offline</div>
+          </div>
+          <div class="step" id="step-5">
+            <div class="step-icon">📶</div>
+            <div class="step-label">Reconnect</div>
+          </div>
+          <div class="step" id="step-6">
+            <div class="step-icon">☁️</div>
+            <div class="step-label">Sync</div>
+          </div>
+          <div class="step" id="step-7">
+            <div class="step-icon">💻</div>
+            <div class="step-label">Desktop</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" style="display: none"></div>
+
+    <script>
+      let isOnline = true;
+      let hasPending = false;
+      let currentStep = 0;
+
+      const mockItems = [
+        { name: "Rượu Hennessy VSOP", qty: "2 chai", confidence: 95 },
+        { name: "Bia Heineken", qty: "24 lon", confidence: 88 },
+        { name: "Red Bull", qty: "12 lon", confidence: 72 },
+      ];
+
+      function updateStep(step) {
+        currentStep = step;
+        for (let i = 1; i <= 7; i++) {
+          const el = document.getElementById(`step-${i}`);
+          el.classList.remove("active", "complete");
+          if (i < step) el.classList.add("complete");
+          if (i === step) el.classList.add("active");
+        }
+      }
+
+      function showToast(message) {
+        const toast = document.getElementById("toast");
+        toast.textContent = message;
+        toast.style.display = "block";
+        setTimeout(() => (toast.style.display = "none"), 3000);
+      }
+
+      function captureImage() {
+        updateStep(1);
+        document.getElementById("capture-preview").classList.add("has-image");
+        document.getElementById("capture-preview").innerHTML = "📷 Receipt.jpg";
+
+        // Simulate AI parsing
+        setTimeout(() => {
+          updateStep(2);
+          document.getElementById("parsed-items").style.display = "block";
+
+          let itemsHtml = "";
+          mockItems.forEach((item) => {
+            const badgeClass = item.confidence < 85 ? "low" : "";
+            itemsHtml += `
+            <div class="item-row">
+              <div>
+                <span class="item-name">${item.name}</span>
+                <span class="confidence-badge ${badgeClass}">${item.confidence}%</span>
+              </div>
+              <span class="item-qty">${item.qty}</span>
+            </div>
+          `;
+          });
+          document.getElementById("items-list").innerHTML = itemsHtml;
+        }, 1500);
+      }
+
+      function confirmSave() {
+        updateStep(3);
+        document.getElementById("btn-confirm").disabled = true;
+        document.getElementById("btn-confirm").textContent = "✅ Đã lưu";
+        document.getElementById("pending-section").style.display = "block";
+        hasPending = true;
+
+        // Go offline
+        setTimeout(() => {
+          toggleNetwork();
+          updateStep(4);
+        }, 1000);
+      }
+
+      function toggleNetwork() {
+        isOnline = !isOnline;
+        const dot = document.getElementById("mobile-status");
+        const text = document.getElementById("mobile-status-text");
+
+        if (isOnline) {
+          dot.classList.remove("offline");
+          text.textContent = "Online";
+
+          if (hasPending) {
+            updateStep(5);
+
+            // Trigger sync
+            setTimeout(() => {
+              updateStep(6);
+              dot.classList.add("syncing");
+              text.textContent = "Syncing...";
+
+              setTimeout(() => {
+                // Sync complete
+                dot.classList.remove("syncing");
+                text.textContent = "Online";
+                document.getElementById("pending-count").textContent = "0 logs";
+                hasPending = false;
+
+                // Desktop receives
+                updateStep(7);
+                const desktopLogs = document.getElementById("desktop-logs");
+                const newLog = document.createElement("div");
+                newLog.className = "log-item new";
+                newLog.innerHTML = `
+                <div>
+                  <span class="log-type" style="background: #22C55E;">NEW</span>
+                  <span style="margin-left: 8px;">📱 Rượu Hennessy + 2 items</span>
+                </div>
+                <span class="log-time">Now</span>
+              `;
+                desktopLogs.insertBefore(newLog, desktopLogs.firstChild);
+
+                showToast("📱 Mobile: IMPORT log đã đồng bộ!");
+              }, 2000);
+            }, 500);
+          }
+        } else {
+          dot.classList.add("offline");
+          text.textContent = "Offline";
+        }
+      }
+
+      // Auto-start demo
+      setTimeout(() => {
+        showToast('👋 Click "Chụp ảnh" để bắt đầu E2E test');
+      }, 1000);
+    </script>
+  </body>
+</html>

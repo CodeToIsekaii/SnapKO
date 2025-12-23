@@ -75,12 +75,86 @@ export function initDatabase(): Database.Database {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS daily_inventory_stats (
+      id TEXT PRIMARY KEY NOT NULL,
+      date TEXT NOT NULL UNIQUE,
+      total_value_warehouse REAL NOT NULL DEFAULT 0,
+      total_value_bar REAL NOT NULL DEFAULT 0,
+      total_items INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_pending_synced ON pending_sync_logs(synced);
     CREATE INDEX IF NOT EXISTS idx_ingredients_business ON local_ingredients(business_id);
+    CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_inventory_stats(date);
   `);
 
   console.log("[Database] Initialized at:", dbPath);
+
+  // Run daily snapshot on startup
+  runDailySnapshot(db);
+
   return db;
+}
+
+/**
+ * Daily Snapshot Function (per user feedback)
+ * Runs on app startup to capture daily inventory value
+ */
+export function runDailySnapshot(database: Database.Database): void {
+  try {
+    const today = new Date().toISOString().slice(0, 10); // "2025-12-23"
+
+    // Check if today's snapshot already exists
+    const existing = database
+      .prepare("SELECT date FROM daily_inventory_stats WHERE date = ?")
+      .get(today);
+
+    if (!existing) {
+      console.log("[Snapshot] Running daily inventory snapshot...");
+
+      // Calculate total values
+      const stats = database
+        .prepare(
+          `
+        SELECT 
+          SUM(warehouse_qty * unit_cost) as wh_val,
+          SUM(bar_qty * unit_cost) as bar_val,
+          COUNT(*) as item_count
+        FROM local_ingredients
+      `
+        )
+        .get() as {
+        wh_val: number | null;
+        bar_val: number | null;
+        item_count: number;
+      };
+
+      // Insert snapshot
+      database
+        .prepare(
+          `
+        INSERT INTO daily_inventory_stats (id, date, total_value_warehouse, total_value_bar, total_items)
+        VALUES (?, ?, ?, ?, ?)
+      `
+        )
+        .run(
+          `snapshot_${today}`,
+          today,
+          stats.wh_val || 0,
+          stats.bar_val || 0,
+          stats.item_count || 0
+        );
+
+      console.log(
+        `[Snapshot] Saved: Warehouse=${stats.wh_val}, Bar=${stats.bar_val}, Items=${stats.item_count}`
+      );
+    } else {
+      console.log("[Snapshot] Today's snapshot already exists, skipping.");
+    }
+  } catch (err) {
+    console.error("[Snapshot] Error:", err);
+  }
 }
 
 // Get database instance
@@ -216,6 +290,101 @@ export function registerDatabaseIPC(): void {
     `
       )
       .all(limit);
+  });
+
+  // ==================== WEEK 2: COGS REPORT ====================
+  ipcMain.handle("db:getCOGSReport", () => {
+    const database = getDatabase();
+
+    // Get summary data
+    const summaryRow = database
+      .prepare(
+        `
+        SELECT 
+          COUNT(*) as itemCount,
+          SUM((warehouse_qty + bar_qty) * unit_cost) as totalValue,
+          SUM(CASE WHEN (warehouse_qty + bar_qty) < 10 THEN 1 ELSE 0 END) as lowStockCount
+        FROM local_ingredients
+      `
+      )
+      .get() as {
+      itemCount: number;
+      totalValue: number;
+      lowStockCount: number;
+    };
+
+    // Get monthly data from daily_inventory_stats (real data, not mock!)
+    const monthlyData = database
+      .prepare(
+        `
+        SELECT 
+          date,
+          total_value_warehouse as warehouse,
+          total_value_bar as bar
+        FROM daily_inventory_stats
+        ORDER BY date DESC
+        LIMIT 6
+      `
+      )
+      .all() as Array<{ date: string; warehouse: number; bar: number }>;
+
+    // Format for chart (reverse to show oldest first)
+    const months = monthlyData.reverse().map((row) => ({
+      name: new Date(row.date).toLocaleDateString("vi-VN", { month: "short" }),
+      warehouse: row.warehouse,
+      bar: row.bar,
+    }));
+
+    // If no historical data yet, use current values
+    if (months.length === 0) {
+      const currentWarehouse = database
+        .prepare(
+          "SELECT SUM(warehouse_qty * unit_cost) as val FROM local_ingredients"
+        )
+        .get() as { val: number };
+      const currentBar = database
+        .prepare(
+          "SELECT SUM(bar_qty * unit_cost) as val FROM local_ingredients"
+        )
+        .get() as { val: number };
+
+      months.push({
+        name: new Date().toLocaleDateString("vi-VN", { month: "short" }),
+        warehouse: currentWarehouse?.val || 0,
+        bar: currentBar?.val || 0,
+      });
+    }
+
+    // Mock loss data (TODO: Calculate from inventory_logs)
+    const losses = [
+      { name: "Hao hụt", value: 500000, color: "#E07A2F" },
+      { name: "Hỏng", value: 300000, color: "#E63946" },
+      { name: "Mất", value: 100000, color: "#FFC857" },
+    ];
+
+    return {
+      summary: {
+        totalValue: summaryRow?.totalValue || 0,
+        itemCount: summaryRow?.itemCount || 0,
+        lowStockCount: summaryRow?.lowStockCount || 0,
+      },
+      monthly: months,
+      losses,
+    };
+  });
+
+  // ==================== WEEK 2: STAFF MANAGEMENT ====================
+  ipcMain.handle("db:getStaffProfiles", () => {
+    const database = getDatabase();
+    return database
+      .prepare(
+        `
+        SELECT * FROM local_profiles 
+        WHERE role = 'STAFF' OR role = 'staff'
+        ORDER BY created_at DESC
+      `
+      )
+      .all();
   });
 
   console.log("[Database] IPC handlers registered");

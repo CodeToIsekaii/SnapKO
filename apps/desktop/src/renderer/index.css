@@ -1,0 +1,158 @@
+/**
+ * SnapKO Desktop - Global Styles
+ * Includes thermal printer CSS per user feedback
+ */
+
+/* Reset */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background-color: #0f172a;
+  color: #f5f3ef;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Prevent text selection during drag */
+.no-select {
+  user-select: none;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* ========================================
+   THERMAL PRINTER CSS (80mm Bill Printer)
+   Per user feedback - critical for print
+   ======================================== */
+@media print {
+  @page {
+    margin: 0;
+    size: auto;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    margin: 0;
+    padding: 10px;
+    width: 80mm; /* Fixed width for 80mm thermal printer */
+    font-size: 12px;
+    color: #000;
+    background: #fff;
+  }
+
+  /* Hide all non-print elements */
+  .no-print,
+  header,
+  footer,
+  nav,
+  button,
+  .toast,
+  .sidebar {
+    display: none !important;
+  }
+
+  /* Show only print content */
+  .print-content {
+    display: block !important;
+  }
+
+  /* Compact table for receipt */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+
+  th,
+  td {
+    padding: 4px 2px;
+    text-align: left;
+    border-bottom: 1px dashed #000;
+  }
+
+  /* Logo/Header for receipt */
+  .print-header {
+    text-align: center;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #000;
+  }
+
+  .print-header h1 {
+    font-size: 16px;
+    font-weight: bold;
+  }
+
+  /* Footer for receipt */
+  .print-footer {
+    text-align: center;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed #000;
+    font-size: 10px;
+  }
+
+  /* Barcode/QR placeholder */
+  .print-barcode {
+    text-align: center;
+    margin: 10px 0;
+  }
+
+  /* Total line emphasis */
+  .print-total {
+    font-weight: bold;
+    font-size: 14px;
+    border-top: 2px solid #000;
+    padding-top: 6px;
+    margin-top: 6px;
+  }
+}
+
+/* Utility classes */
+.text-center {
+  text-align: center;
+}
+.text-right {
+  text-align: right;
+}
+.font-bold {
+  font-weight: 700;
+}
+.text-sm {
+  font-size: 12px;
+}
+.text-xs {
+  font-size: 11px;
+}
+.mt-2 {
+  margin-top: 8px;
+}
+.mb-2 {
+  margin-bottom: 8px;
+}

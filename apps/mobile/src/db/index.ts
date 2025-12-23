@@ -48,6 +48,7 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       quantity_change_base REAL,
       unit_cost_at_time REAL,
       source_photo_urls TEXT NOT NULL DEFAULT '[]',
+      local_image_path TEXT,
       ai_parsed_json TEXT,
       staff_note TEXT,
       is_verified INTEGER NOT NULL DEFAULT 0,

@@ -7,6 +7,7 @@ export { default as LoginScreen } from "./LoginScreen";
 export { default as InviteJoinScreen } from "./InviteJoinScreen";
 export { default as PendingScreen } from "./PendingScreen";
 export { default as InventoryCaptureScreen } from "./InventoryCaptureScreen";
+export { default as ConfirmLogScreen } from "./ConfirmLogScreen";
 export { default as IngredientsListScreen } from "./IngredientsListScreen";
 export { default as RecipeScreen } from "./RecipeScreen";
 export { default as RecipeListScreen } from "./RecipeListScreen";

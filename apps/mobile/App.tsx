@@ -21,10 +21,12 @@ import {
   InviteJoinScreen,
   PendingScreen,
   InventoryCaptureScreen,
+  ConfirmLogScreen,
   SettingsScreen,
   OwnerPendingListScreen,
   DashboardScreen,
 } from "./src/screens";
+import type { ConfirmItem } from "./src/screens/ConfirmLogScreen";
 
 // F&B Theme Colors
 const colors = {
@@ -67,13 +69,22 @@ type Screen =
   | "STAFF_PENDING"
   | "DASHBOARD"
   | "INVENTORY_CAPTURE"
+  | "CONFIRM_LOG"
   | "SETTINGS"
   | "OWNER_PENDING_LIST";
+
+// State for ConfirmLog screen
+interface ConfirmLogParams {
+  items: ConfirmItem[];
+  localImagePath: string;
+}
 
 function AppNavigator() {
   const { authState, setStaffPending, clearStaffPending, signOut } = useAuth();
   const [currentScreen, setCurrentScreen] = React.useState<Screen>("LOGIN");
   const [dbReady, setDbReady] = React.useState(false);
+  const [confirmLogParams, setConfirmLogParams] =
+    React.useState<ConfirmLogParams | null>(null);
 
   // Initialize DB and sync engine
   useEffect(() => {
@@ -192,6 +203,32 @@ function AppNavigator() {
             setCurrentScreen(isOwner ? "DASHBOARD" : "INVENTORY_CAPTURE")
           }
           onOpenSettings={() => setCurrentScreen("SETTINGS")}
+          onNavigateToConfirm={(items, localImagePath) => {
+            setConfirmLogParams({ items, localImagePath });
+            setCurrentScreen("CONFIRM_LOG");
+          }}
+        />
+      );
+
+    case "CONFIRM_LOG":
+      if (!confirmLogParams) {
+        setCurrentScreen("INVENTORY_CAPTURE");
+        return null;
+      }
+      return (
+        <ConfirmLogScreen
+          items={confirmLogParams.items}
+          localImagePath={confirmLogParams.localImagePath}
+          location="WAREHOUSE"
+          type="IMPORT"
+          onBack={() => {
+            setConfirmLogParams(null);
+            setCurrentScreen("INVENTORY_CAPTURE");
+          }}
+          onSuccess={() => {
+            setConfirmLogParams(null);
+            setCurrentScreen(isOwner ? "DASHBOARD" : "INVENTORY_CAPTURE");
+          }}
         />
       );
 

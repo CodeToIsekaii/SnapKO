@@ -28,6 +28,7 @@ export interface PendingSyncLog {
   quantity_change_base: number | null;
   unit_cost_at_time: number | null;
   source_photo_urls: string[];
+  local_image_path: string | null; // Local image path (before upload)
   ai_parsed_json: string | null;
   staff_note: string | null;
   is_verified: boolean;
@@ -93,6 +94,7 @@ export async function initSyncSchema(db: SQLite.SQLiteDatabase): Promise<void> {
       quantity_change_base REAL,
       unit_cost_at_time REAL,
       source_photo_urls TEXT NOT NULL DEFAULT '[]',
+      local_image_path TEXT,
       ai_parsed_json TEXT,
       staff_note TEXT,
       is_verified INTEGER NOT NULL DEFAULT 0,
@@ -259,6 +261,7 @@ export async function cleanupLocalImage(logId: string): Promise<void> {
 }
 
 // Sync pending logs to server
+// Enhanced: Upload local images first, then sync data
 export async function syncPendingLogs(
   db: SQLite.SQLiteDatabase
 ): Promise<{ synced: number; failed: number }> {
@@ -271,7 +274,9 @@ export async function syncPendingLogs(
 
   try {
     // Get unsynced logs
-    const rows = await db.getAllAsync<PendingSyncLog>(
+    const rows = await db.getAllAsync<
+      PendingSyncLog & { local_image_path: string | null }
+    >(
       "SELECT * FROM pending_sync_logs WHERE synced = 0 ORDER BY created_at ASC LIMIT 50"
     );
 
@@ -281,30 +286,69 @@ export async function syncPendingLogs(
       return { synced: 0, failed: 0 };
     }
 
-    // Transform for API
-    const logs = rows.map((row) => ({
-      id: row.id,
-      ingredient_id: row.ingredient_id,
-      location: row.location,
-      type: row.type,
-      ai_parsed_quantity: row.ai_parsed_quantity,
-      ai_confidence_score: row.ai_confidence_score,
-      final_confirmed_quantity: row.final_confirmed_quantity,
-      quantity_change_base: row.quantity_change_base,
-      unit_cost_at_time: row.unit_cost_at_time,
-      source_photos: JSON.parse(
-        (row.source_photo_urls as unknown as string) || "[]"
-      ),
-      ai_parsed_json: row.ai_parsed_json
-        ? JSON.parse(row.ai_parsed_json)
-        : null,
-      staff_note: row.staff_note,
-      is_verified: row.is_verified,
-      diff_percentage: row.diff_percentage,
-      created_at: row.created_at,
-    }));
+    // Process each log: upload image first, then prepare for sync
+    const logsForSync: any[] = [];
 
-    // Call sync-up API
+    for (const row of rows) {
+      let imageUrl: string | null = null;
+
+      // Step 1: Upload local image if exists
+      if (row.local_image_path) {
+        console.log(`[SyncEngine] Uploading image for log ${row.id}...`);
+        imageUrl = await uploadImageToStorage(row.local_image_path);
+
+        if (!imageUrl) {
+          // Image upload failed - skip this log, retry later
+          console.warn(
+            `[SyncEngine] Image upload failed for ${row.id}, will retry later`
+          );
+          await db.runAsync(
+            "UPDATE pending_sync_logs SET sync_error = ? WHERE id = ?",
+            ["Image upload failed", row.id]
+          );
+          continue;
+        }
+
+        // Mark image for cleanup after successful sync
+        markImageForCleanup(row.id, row.local_image_path);
+      }
+
+      // Step 2: Prepare log data with uploaded image URL
+      const existingPhotos = JSON.parse(
+        (row.source_photo_urls as unknown as string) || "[]"
+      );
+      const sourcePhotos = imageUrl
+        ? [...existingPhotos, imageUrl]
+        : existingPhotos;
+
+      logsForSync.push({
+        id: row.id,
+        ingredient_id: row.ingredient_id,
+        location: row.location,
+        type: row.type,
+        ai_parsed_quantity: row.ai_parsed_quantity,
+        ai_confidence_score: row.ai_confidence_score,
+        final_confirmed_quantity: row.final_confirmed_quantity,
+        quantity_change_base: row.quantity_change_base,
+        unit_cost_at_time: row.unit_cost_at_time,
+        source_photos: sourcePhotos,
+        ai_parsed_json: row.ai_parsed_json
+          ? JSON.parse(row.ai_parsed_json)
+          : null,
+        staff_note: row.staff_note,
+        is_verified: row.is_verified,
+        diff_percentage: row.diff_percentage,
+        created_at: row.created_at,
+      });
+    }
+
+    if (logsForSync.length === 0) {
+      syncStatus.isSyncing = false;
+      notifyStatusChange();
+      return { synced: 0, failed: rows.length };
+    }
+
+    // Step 3: Call sync-up API
     const response = await fetch(`${Env.SUPABASE_URL}/functions/v1/sync-up`, {
       method: "POST",
       headers: {
@@ -312,7 +356,7 @@ export async function syncPendingLogs(
         apikey: Env.SUPABASE_ANON_KEY,
         Authorization: `Bearer ${Env.SUPABASE_ANON_KEY}`,
       },
-      body: JSON.stringify({ logs }),
+      body: JSON.stringify({ logs: logsForSync }),
     });
 
     const result = await response.json();
@@ -324,10 +368,10 @@ export async function syncPendingLogs(
       for (const r of result.results) {
         if (r.success) {
           await db.runAsync(
-            "UPDATE pending_sync_logs SET synced = 1, sync_error = NULL WHERE id = ?",
+            "UPDATE pending_sync_logs SET synced = 1, sync_error = NULL, local_image_path = NULL WHERE id = ?",
             [r.id]
           );
-          // Cleanup local image only after DB sync confirmed (per user tech suggestion #2)
+          // Step 4: Cleanup local image after DB sync confirmed
           await cleanupLocalImage(r.id);
           syncedCount++;
         } else {
@@ -343,6 +387,9 @@ export async function syncPendingLogs(
     syncStatus.lastSyncAt = new Date().toISOString();
     await updatePendingCount(db);
 
+    console.log(
+      `[SyncEngine] Sync complete: ${syncedCount} synced, ${failedCount} failed`
+    );
     return { synced: syncedCount, failed: failedCount };
   } catch (err) {
     console.error("Sync error:", err);
