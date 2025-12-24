@@ -5,7 +5,11 @@
  * to wrap all handlers. DO NOT use try/catch repeatedly in main logic."
  */
 
-import { corsHeaders, jsonResponse, errorResponse } from "./cors.ts";
+import {
+  corsHeaders,
+  jsonResponse as _jsonResponse,
+  errorResponse,
+} from "./cors.ts";
 
 /**
  * Custom application error with HTTP status
