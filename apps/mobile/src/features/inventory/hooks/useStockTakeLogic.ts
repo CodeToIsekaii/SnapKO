@@ -1,28 +1,42 @@
 /**
  * useStockTakeLogic - Hook for Stock Check Workflow (Snap 3)
- * Per .antigravityrules Section D.3 (COMPLEX LOGIC!)
+ * Per UPDATED .antigravityrules Section D.3 - "Smart 3-Snap Workflow"
  *
- * CRITICAL RULES:
- * - STORAGE (Warehouse): PARTIAL CHECK - Items NOT in photo remain unchanged
- * - SERVICE (Bar): FULL CHECK - Missing items trigger warning
+ * IMPLICIT TRANSFER LOGIC (Critical!):
+ * The AI reads BOTH "Tồn cuối" (Closing Stock) AND "Nhập" (Import from Warehouse)
  *
- * Flow:
- * 1. Select area (Kho Tổng vs Quầy Bar)
- * 2. Capture handwritten stock sheet
- * 3. Call AI to OCR items
- * 4. Calculate variance (Theoretical vs Actual)
- * 5. If high variance: Show VarianceAlertModal (MANDATORY)
- * 6. Queue for sync
+ * 4-Step Calculation per user guidance:
+ * 1. Stock Start = Current system stock for Bar
+ * 2. Import_Qty = AI reads from "Nhập" column (0 if empty)
+ * 3. Theoretical (New) = Stock Start + Import_Qty
+ * 4. Variance = Actual (Tồn cuối) - Theoretical (New)
+ *
+ * VARIANCE THRESHOLDS:
+ * - < 2%: Log silently (acceptable waste)
+ * - 2-15%: Yellow Warning Modal
+ * - > 15%: Red Critical Modal + Haptic
  */
 
 import { useState, useCallback, useMemo } from "react";
+import * as Haptics from "expo-haptics";
+import { Alert } from "react-native";
 import {
   parseStockWithAI,
   type ParsedStockItem,
   type ParsedStockResponse,
 } from "../../../services/aiService";
 import { syncQueue } from "../../../services/syncQueue";
-import { analyzeVariance, FRAUD_THRESHOLDS } from "@snapko/shared";
+import { getDb } from "../../../db";
+import { checkPerfectScoreTrap } from "@snapko/shared";
+
+// =============================================
+// VARIANCE THRESHOLDS (per updated .antigravityrules)
+// =============================================
+export const VARIANCE_THRESHOLDS = {
+  SILENT: 2, // < 2%: Log silently
+  WARNING: 15, // 2-15%: Yellow warning
+  CRITICAL: 15, // > 15%: Red critical + Haptic
+} as const;
 
 // =============================================
 // TYPES
@@ -30,51 +44,63 @@ import { analyzeVariance, FRAUD_THRESHOLDS } from "@snapko/shared";
 
 interface StockCheckItem extends ParsedStockItem {
   ingredient_id?: string;
-  theoretical_qty: number;
-  actual_qty: number;
-  variance: number;
+  // Stock calculation fields (4-step logic)
+  stock_start: number; // Step 1: Current system stock
+  import_qty: number; // Step 2: AI-detected import from Warehouse
+  theoretical_after_import: number; // Step 3: stock_start + import_qty
+  actual_qty: number; // From AI: Tồn cuối
+  variance: number; // Step 4: actual - theoretical_after_import
   variance_percentage: number;
-  // Gatekeeper fields
-  requires_evidence: boolean;
+  // Variance type
+  variance_type: "surplus" | "shortage" | "ok";
+  // Gatekeeper fields (tiered)
+  requires_reason: boolean; // 2-15%: Need reason
+  requires_evidence: boolean; // > 15%: Need reason + photo
   variance_reason?: string;
   evidence_photo_url?: string;
   notes?: string;
 }
 
 interface StockTakeState {
-  // Step tracking
   step: "select_area" | "capturing" | "processing" | "reviewing" | "saving";
   error: string | null;
-  // Area selection
   selectedAreaId?: string;
   selectedAreaType?: "warehouse" | "bar";
   isPartialCheck: boolean;
-  // AI results
   items: StockCheckItem[];
   itemsNeedingReview: number;
   warnings: string[];
   confidence: number;
-  // Missing items (for FULL check)
   missingItems: { id: string; name: string }[];
-  // Local
   localImagePath?: string;
+  // Implicit Transfer tracking
+  hasImplicitTransfers: boolean;
+  itemsWithImport: StockCheckItem[];
+  // Anti-Fraud tracking
+  isPerfectScoreTrap: boolean;
+  perfectScoreShown: boolean;
 }
 
 const initialState: StockTakeState = {
   step: "select_area",
   error: null,
-  isPartialCheck: true,
+  isPartialCheck: false, // Always full check for Bar
   items: [],
   itemsNeedingReview: 0,
   warnings: [],
   confidence: 0,
   missingItems: [],
+  hasImplicitTransfers: false,
+  itemsWithImport: [],
+  isPerfectScoreTrap: false,
+  perfectScoreShown: false,
 };
 
 export interface UseStockTakeLogicReturn {
   state: StockTakeState;
   // Computed
   hasHighVarianceItems: boolean;
+  hasCriticalVariance: boolean;
   canSubmit: boolean;
   // Actions
   selectArea: (areaId: string, areaType: "warehouse" | "bar") => void;
@@ -98,19 +124,33 @@ export interface UseStockTakeLogicReturn {
 export function useStockTakeLogic(): UseStockTakeLogicReturn {
   const [state, setState] = useState<StockTakeState>(initialState);
 
-  // Computed: Check if any items have high variance
+  // Computed: Check if any items require action (>= 2%)
   const hasHighVarianceItems = useMemo(() => {
+    return state.items.some(
+      (item) => item.requires_reason || item.requires_evidence
+    );
+  }, [state.items]);
+
+  // Computed: Check if any items have critical variance (> 15%)
+  const hasCriticalVariance = useMemo(() => {
     return state.items.some((item) => item.requires_evidence);
   }, [state.items]);
 
-  // Computed: Can submit (all high-variance items have reason + evidence)
+  // Computed: Can submit
   const canSubmit = useMemo(() => {
-    const highVarianceItems = state.items.filter(
-      (item) => item.requires_evidence
-    );
-    return highVarianceItems.every(
+    // All items needing evidence must have it
+    const evidenceItems = state.items.filter((item) => item.requires_evidence);
+    const evidenceOk = evidenceItems.every(
       (item) => item.variance_reason && item.evidence_photo_url
     );
+
+    // All items needing reason (but not evidence) must have reason
+    const reasonItems = state.items.filter(
+      (item) => item.requires_reason && !item.requires_evidence
+    );
+    const reasonOk = reasonItems.every((item) => item.variance_reason);
+
+    return evidenceOk && reasonOk;
   }, [state.items]);
 
   const selectArea = useCallback(
@@ -119,8 +159,7 @@ export function useStockTakeLogic(): UseStockTakeLogicReturn {
         ...prev,
         selectedAreaId: areaId,
         selectedAreaType: areaType,
-        // Per .antigravityrules: Warehouse = Partial, Bar = Full
-        isPartialCheck: areaType === "warehouse",
+        isPartialCheck: false, // Always full check per updated rules
         step: "select_area",
       }));
     },
@@ -139,7 +178,7 @@ export function useStockTakeLogic(): UseStockTakeLogicReturn {
     async (
       imageUri: string,
       businessId: string,
-      currentStock: Map<string, number> // ingredient_id -> theoretical qty
+      currentStock: Map<string, number>
     ) => {
       setState((prev) => ({
         ...prev,
@@ -152,47 +191,81 @@ export function useStockTakeLogic(): UseStockTakeLogicReturn {
         const result: ParsedStockResponse = await parseStockWithAI(
           imageUri,
           businessId,
-          state.selectedAreaType || "warehouse"
+          "bar" // Always checking Bar per updated rules
         );
 
         if (!result.success) {
           throw new Error(result.error || "Không thể đọc phiếu kiểm");
         }
 
-        // Calculate variance for each item
+        // =============================================
+        // 4-STEP IMPLICIT TRANSFER LOGIC
+        // Per user guidance: Calculate variance AFTER implicit transfer
+        // =============================================
         const processedItems: StockCheckItem[] = result.items.map((item) => {
-          const theoreticalQty = item.ingredient_id
+          // Step 1: Stock Start = Current system stock for Bar
+          const stockStart = item.ingredient_id
             ? currentStock.get(item.ingredient_id) || 0
             : 0;
-          const actualQty = item.quantity;
-          const variance = actualQty - theoreticalQty;
+
+          // Step 2: Import_Qty = AI reads from "Nhập" column (0 if empty)
+          const aiItem = item as unknown as {
+            import_qty?: number;
+            stock_qty?: number;
+          };
+          const importQty = aiItem.import_qty || 0;
+
+          // Step 3: Theoretical (New) = Stock Start + Import_Qty
+          const theoreticalAfterImport = stockStart + importQty;
+
+          // Step 4: Actual = AI đọc từ cột "Tồn cuối"
+          const actualQty = aiItem.stock_qty || item.quantity || 0;
+
+          // Step 4: Variance = Actual - Theoretical (New)
+          const variance = actualQty - theoreticalAfterImport;
           const variancePercentage =
-            theoreticalQty > 0
-              ? Math.abs((variance / theoreticalQty) * 100)
+            theoreticalAfterImport > 0
+              ? Math.abs((variance / theoreticalAfterImport) * 100)
               : 0;
 
-          // Check if high variance (requires evidence)
+          // Determine variance type
+          let varianceType: "surplus" | "shortage" | "ok" = "ok";
+          if (variance > 0) varianceType = "surplus";
+          else if (variance < 0) varianceType = "shortage";
+
+          // TIERED THRESHOLDS
+          const requiresReason =
+            variancePercentage >= VARIANCE_THRESHOLDS.SILENT &&
+            variancePercentage <= VARIANCE_THRESHOLDS.WARNING;
           const requiresEvidence =
-            variancePercentage > FRAUD_THRESHOLDS.HIGH_VARIANCE_PERCENTAGE;
+            variancePercentage > VARIANCE_THRESHOLDS.CRITICAL;
 
           return {
             ...item,
-            theoretical_qty: theoreticalQty,
+            ingredient_id: item.ingredient_id,
+            stock_start: stockStart,
+            import_qty: importQty,
+            theoretical_after_import: theoreticalAfterImport,
             actual_qty: actualQty,
             variance,
             variance_percentage: Math.round(variancePercentage * 100) / 100,
+            variance_type: varianceType,
+            requires_reason: requiresReason,
             requires_evidence: requiresEvidence,
           };
         });
 
-        // For FULL CHECK (Bar): Find missing items
-        let missingItems: { id: string; name: string }[] = [];
-        if (!state.isPartialCheck) {
-          const scannedIds = new Set(
-            result.items.map((i) => i.ingredient_id).filter(Boolean)
+        // Find items with imports for Implicit Transfer creation
+        const itemsWithImport = processedItems.filter(
+          (item) => item.import_qty > 0
+        );
+
+        // Warnings
+        const warnings = [...(result.warnings || [])];
+        if (itemsWithImport.length > 0) {
+          warnings.push(
+            `Phát hiện ${itemsWithImport.length} nguyên liệu có nhập từ Kho Tổng. Transfer Log sẽ được tạo tự động.`
           );
-          // TODO: Get all expected items from currentStock that are not in scannedIds
-          // This would require the full ingredient list, simplified here
         }
 
         setState((prev) => ({
@@ -200,9 +273,11 @@ export function useStockTakeLogic(): UseStockTakeLogicReturn {
           step: "reviewing",
           items: processedItems,
           itemsNeedingReview: result.items_needing_review,
-          warnings: result.warnings,
+          warnings,
           confidence: result.confidence,
-          missingItems,
+          missingItems: [],
+          hasImplicitTransfers: itemsWithImport.length > 0,
+          itemsWithImport,
         }));
       } catch (error) {
         setState((prev) => ({
@@ -212,7 +287,7 @@ export function useStockTakeLogic(): UseStockTakeLogicReturn {
         }));
       }
     },
-    [state.selectedAreaType, state.isPartialCheck]
+    []
   );
 
   const updateItemQuantity = useCallback((index: number, actualQty: number) => {
@@ -220,22 +295,33 @@ export function useStockTakeLogic(): UseStockTakeLogicReturn {
       const items = [...prev.items];
       const item = items[index];
 
-      const variance = actualQty - item.theoretical_qty;
+      const variance = actualQty - item.theoretical_after_import;
       const variancePercentage =
-        item.theoretical_qty > 0
-          ? Math.abs((variance / item.theoretical_qty) * 100)
+        item.theoretical_after_import > 0
+          ? Math.abs((variance / item.theoretical_after_import) * 100)
           : 0;
+
+      let varianceType: "surplus" | "shortage" | "ok" = "ok";
+      if (variance > 0) varianceType = "surplus";
+      else if (variance < 0) varianceType = "shortage";
+
+      const requiresReason =
+        variancePercentage >= VARIANCE_THRESHOLDS.SILENT &&
+        variancePercentage <= VARIANCE_THRESHOLDS.WARNING;
       const requiresEvidence =
-        variancePercentage > FRAUD_THRESHOLDS.HIGH_VARIANCE_PERCENTAGE;
+        variancePercentage > VARIANCE_THRESHOLDS.CRITICAL;
 
       items[index] = {
         ...item,
         actual_qty: actualQty,
         variance,
         variance_percentage: Math.round(variancePercentage * 100) / 100,
+        variance_type: varianceType,
+        requires_reason: requiresReason,
         requires_evidence: requiresEvidence,
-        // Clear reason if variance is now acceptable
-        variance_reason: requiresEvidence ? item.variance_reason : undefined,
+        // Clear if no longer required
+        variance_reason:
+          requiresReason || requiresEvidence ? item.variance_reason : undefined,
         evidence_photo_url: requiresEvidence
           ? item.evidence_photo_url
           : undefined,
@@ -263,49 +349,182 @@ export function useStockTakeLogic(): UseStockTakeLogicReturn {
 
   const confirmAndSave = useCallback(
     async (businessId: string): Promise<string | null> => {
-      // Validate: All high-variance items must have reason + evidence
       if (!canSubmit) {
         setState((prev) => ({
           ...prev,
-          error:
-            "Vui lòng điền lý do và chụp ảnh bằng chứng cho các mục có chênh lệch cao",
+          error: "Vui lòng điền lý do cho các mục có chênh lệch cao",
         }));
         return null;
+      }
+
+      // =============================================
+      // ANTI-FRAUD: Perfect Score Trap Check (MVP P1)
+      // Per .antigravityrules Section 7.E.3
+      // =============================================
+      const trapResult = checkPerfectScoreTrap(
+        state.items.map((item) => ({
+          variance: item.variance,
+          unit: item.unit || "",
+        }))
+      );
+
+      let isFlagged = false;
+      let flagReason: string | null = null;
+
+      if (trapResult.isSuspicious) {
+        // Show Toast/Alert message per .UXUIrules
+        Alert.alert(
+          "🧐 Số liệu quá hoàn hảo",
+          `Bạn có chắc đã cân đo kỹ ${trapResult.perfectCount}/${trapResult.totalLiquidPowder} món định lượng không?\n\nNếu tiếp tục, phiếu này sẽ được đánh dấu để chủ quán kiểm tra.`,
+          [
+            {
+              text: "Kiểm tra lại",
+              style: "cancel",
+              onPress: () => {
+                setState((prev) => ({ ...prev, step: "reviewing" }));
+              },
+            },
+            {
+              text: "Tôi chắc chắn",
+              style: "destructive",
+              onPress: () => {
+                // Mark as flagged and continue
+                isFlagged = true;
+                flagReason = "SUSPICIOUS_PERFECT_MATCH";
+              },
+            },
+          ]
+        );
+
+        // If user chose "Kiểm tra lại", return early
+        if (!isFlagged) {
+          return null;
+        }
+      }
+
+      // =============================================
+      // ANTI-FRAUD: Haptic Feedback for Critical Variance (>15%)
+      // Per .antigravityrules Section 7.E.2 Level 3
+      // =============================================
+      const hasCriticalItems = state.items.some(
+        (item) => item.variance_percentage > VARIANCE_THRESHOLDS.CRITICAL
+      );
+      if (hasCriticalItems) {
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
 
       setState((prev) => ({ ...prev, step: "saving", error: null }));
 
       try {
-        // Queue each item as a separate log
-        const queueIds: string[] = [];
+        const db = getDb();
+        const now = new Date().toISOString();
 
-        for (const item of state.items) {
-          const logData = {
-            business_id: businessId,
+        // Step 1: Create Implicit Transfer Logs for items with import
+        if (state.hasImplicitTransfers && db) {
+          const warehouseAreaId = "warehouse_default"; // TODO: Get from config
+          const barAreaId = state.selectedAreaId || "bar_default";
+
+          for (const item of state.itemsWithImport) {
+            if (item.ingredient_id && item.import_qty > 0) {
+              const transferId = `transfer_${Date.now()}_${Math.random()
+                .toString(36)
+                .substring(7)}`;
+
+              await db.runAsync(
+                `INSERT INTO local_transfer_logs 
+                 (id, business_id, from_area_id, to_area_id, items_json, notes, created_at, synced)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+                [
+                  transferId,
+                  businessId,
+                  warehouseAreaId,
+                  barAreaId,
+                  JSON.stringify([
+                    {
+                      ingredient_id: item.ingredient_id,
+                      ingredient_name: item.ingredient_name,
+                      quantity: item.import_qty,
+                    },
+                  ]),
+                  "Tự động tạo từ phiếu kiểm kho (Smart Sheet)",
+                  now,
+                ]
+              );
+
+              // Queue for sync
+              await syncQueue.queueAction("TRANSFER", {
+                transfer_id: transferId,
+                business_id: businessId,
+                from_area_id: warehouseAreaId,
+                to_area_id: barAreaId,
+                items: [
+                  {
+                    ingredient_id: item.ingredient_id,
+                    quantity: item.import_qty,
+                  },
+                ],
+              });
+            }
+          }
+        }
+
+        // Step 2: Create Waste Logs for items with shortage
+        if (db) {
+          const shortageItems = state.items.filter(
+            (item) => item.variance_type === "shortage" && item.variance_reason
+          );
+
+          for (const item of shortageItems) {
+            if (item.ingredient_id) {
+              const wasteId = `waste_${Date.now()}_${Math.random()
+                .toString(36)
+                .substring(7)}`;
+
+              await db.runAsync(
+                `INSERT INTO local_waste_logs 
+                 (id, business_id, ingredient_id, area_id, quantity, reason, notes, created_at, synced)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+                [
+                  wasteId,
+                  businessId,
+                  item.ingredient_id,
+                  state.selectedAreaId || "",
+                  Math.abs(item.variance),
+                  item.variance_reason || "UNKNOWN",
+                  item.notes || null,
+                  now,
+                ]
+              );
+            }
+          }
+        }
+
+        // Step 3: Queue stock take log for sync (with Anti-Fraud flags)
+        const logData = {
+          business_id: businessId,
+          area_id: state.selectedAreaId,
+          is_flagged: isFlagged, // Anti-fraud: flagged if Perfect Score Trap triggered
+          flag_reason: flagReason, // 'SUSPICIOUS_PERFECT_MATCH', etc.
+          items: state.items.map((item) => ({
             ingredient_id: item.ingredient_id,
-            area_id: state.selectedAreaId,
-            is_partial_check: state.isPartialCheck,
-            type: "stock_take",
-            theoretical_qty: item.theoretical_qty,
+            stock_start: item.stock_start,
+            import_qty: item.import_qty,
+            theoretical_after_import: item.theoretical_after_import,
             actual_qty: item.actual_qty,
             variance: item.variance,
             variance_percentage: item.variance_percentage,
             variance_reason: item.variance_reason,
-            evidence_photo_url: item.evidence_photo_url,
-            notes: item.notes,
-            ai_confidence: item.confidence,
-            unit: item.unit,
-            created_at: new Date().toISOString(),
-          };
+          })),
+          ai_confidence: state.confidence,
+          created_at: now,
+        };
 
-          const id = await syncQueue.queueAction("STOCK_TAKE", logData, {
-            localImagePath: state.localImagePath,
-          });
-          queueIds.push(id);
-        }
+        const queueId = await syncQueue.queueAction("STOCK_TAKE", logData, {
+          localImagePath: state.localImagePath,
+        });
 
         setState(initialState);
-        return queueIds[0] || null; // Return first ID as reference
+        return queueId;
       } catch (error) {
         setState((prev) => ({
           ...prev,
@@ -325,6 +544,7 @@ export function useStockTakeLogic(): UseStockTakeLogicReturn {
   return {
     state,
     hasHighVarianceItems,
+    hasCriticalVariance,
     canSubmit,
     selectArea,
     startCapture,

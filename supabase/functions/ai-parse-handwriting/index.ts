@@ -21,7 +21,8 @@ const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 interface StockItem {
   ingredient_name: string;
-  quantity: number;
+  stock_qty: number; // Tồn cuối (Closing Stock)
+  import_qty: number; // Nhập trong ca (Import from Warehouse, default 0)
   unit?: string;
   confidence: number;
   needs_review: boolean; // True if AI is uncertain
@@ -37,21 +38,29 @@ interface ParsedStockSheet {
 }
 
 // Gemini prompt for handwritten stock sheet OCR
-// Per .antigravityrules: Cần trả về JSON schema chặt chẽ
+// Per UPDATED .antigravityrules: Must read "Tồn cuối" AND "Nhập/Import" columns
 const HANDWRITING_PROMPT = `Bạn là một AI chuyên đọc chữ viết tay tiếng Việt trên phiếu kiểm kho của nhà hàng/quán bar.
 
-QUAN TRỌNG: Chữ viết tay nhân viên thường:
+QUAN TRỌNG - "SMART SHEET" FEATURE:
+Phiếu kiểm thường có 2 CỘT SỐ LIỆU:
+1. **Cột "TỒN CUỐI"** (hoặc "Tồn", "Closing"): Số lượng đếm được cuối ca
+2. **Cột "NHẬP"** (hoặc "Import", "Nhập vào"): Số lượng nhập từ Kho Tổng trong ca
+
+NẾU CỘT NHẬP ĐỂ TRỐNG hoặc GẠCH NGANG (-), trả về import_qty = 0, KHÔNG trả về null.
+
+Chữ viết tay nhân viên thường:
 - Viết tắt (VD: "bơ" = bơ, "sr" = sữa rút, "cf" = cà phê)
 - Số viết ẩu, khó đọc
 - Bôi xóa, gạch ngang
 
 Hãy phân tích hình ảnh phiếu kiểm này và trả về JSON với format sau:
 {
-  "check_type": "warehouse" hoặc "bar" (nếu nhận biết được),
+  "check_type": "bar",
   "items": [
     {
       "ingredient_name": "tên nguyên liệu (chuẩn hóa)",
-      "quantity": số lượng (số),
+      "stock_qty": số lượng TỒN CUỐI (số),
+      "import_qty": số lượng NHẬP trong ca (số, mặc định 0),
       "unit": "đơn vị nếu có",
       "confidence": độ tin cậy 0-100,
       "needs_review": true nếu không chắc chắn,
@@ -66,9 +75,10 @@ QUY TẮC QUAN TRỌNG:
 1. Trả về JSON thuần túy, KHÔNG có markdown
 2. Số liệu phải là số, không phải string
 3. Nếu confidence < 85, đặt needs_review = true
-4. Nếu không đọc được số, trả về quantity = 0 và needs_review = true
-5. Chuẩn hóa tên nguyên liệu (VD: "sr" → "Sữa tươi", "cf" → "Cà phê")
-6. Thêm warning nếu phát hiện chữ bị gạch xóa hoặc sửa`;
+4. Nếu không đọc được số TỒN, trả về stock_qty = 0 và needs_review = true
+5. Nếu cột NHẬP để trống hoặc gạch ngang, trả về import_qty = 0 (KHÔNG null)
+6. Chuẩn hóa tên nguyên liệu (VD: "sr" → "Sữa tươi", "cf" → "Cà phê")
+7. Thêm warning nếu phát hiện chữ bị gạch xóa hoặc sửa`;
 
 async function callGemini(imageBase64: string): Promise<ParsedStockSheet> {
   if (!GEMINI_API_KEY) {

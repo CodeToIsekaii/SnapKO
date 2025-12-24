@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { LowStockAlert } from "../../../components";
 
 const COLORS = {
   background: "#121212",
@@ -50,6 +51,14 @@ const SNAP_ACTIONS = [
     color: COLORS.warning,
     route: "/camera/stock",
   },
+  {
+    id: "transfer",
+    title: "Chuyển kho",
+    subtitle: "Kho → Quầy Bar",
+    icon: "swap-horizontal",
+    color: "#9B59B6",
+    route: "/camera/transfer",
+  },
 ];
 
 export default function DashboardScreen() {
@@ -67,6 +76,9 @@ export default function DashboardScreen() {
           })}
         </Text>
       </View>
+
+      {/* Low Stock Alert */}
+      <LowStockAlert />
 
       {/* 3-Snap Quick Actions */}
       <View style={styles.section}>

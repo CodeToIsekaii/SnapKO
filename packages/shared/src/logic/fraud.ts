@@ -118,6 +118,63 @@ export function analyzeVariance(
 }
 
 /**
+ * Check for "Perfect Score Trap" - Per UPDATED .antigravityrules Section E.1
+ *
+ * LOGIC (refined per user guidance):
+ * 1. Filter liquid/powder items (g, ml, kg, l)
+ * 2. If total < 5, skip (not enough evidence)
+ * 3. If ALL filtered items have 0% variance → SUSPICIOUS
+ *
+ * Example: 7 liquid items, all 7 with 0% variance → FLAG
+ *          7 liquid items, 6 with 0%, 1 with 2% → OK (might be real counting)
+ */
+export function checkPerfectScoreTrap(
+  items: { variance: number; unit: string }[]
+): { isSuspicious: boolean; perfectCount: number; totalLiquidPowder: number } {
+  // 1. Filter liquid/powder items
+  const liquidPowderItems = items.filter((i) =>
+    ["g", "ml", "kg", "l", "gam", "lít", "gram", "liter"].includes(
+      i.unit.toLowerCase()
+    )
+  );
+
+  // 2. If fewer than 5 liquid/powder items, skip check
+  if (liquidPowderItems.length < 5) {
+    return {
+      isSuspicious: false,
+      perfectCount: 0,
+      totalLiquidPowder: liquidPowderItems.length,
+    };
+  }
+
+  // 3. Count items with perfect 0% variance
+  const perfectItems = liquidPowderItems.filter((i) => i.variance === 0);
+
+  // 4. If ALL liquid/powder items are 0% variance → SUSPICIOUS
+  const isSuspicious = perfectItems.length === liquidPowderItems.length;
+
+  return {
+    isSuspicious,
+    perfectCount: perfectItems.length,
+    totalLiquidPowder: liquidPowderItems.length,
+  };
+}
+
+/**
+ * Detect "Lazy Counting" pattern - Anti-fraud feature
+ * Flags if user repeatedly enters round numbers (e.g., 10, 20, 50, 100)
+ */
+export function detectLazyCounting(items: { actual_qty: number }[]): boolean {
+  const roundNumbers = [10, 20, 25, 50, 100, 200, 500];
+  const suspiciousItems = items.filter((item) =>
+    roundNumbers.includes(item.actual_qty)
+  );
+
+  // If more than 70% of items are round numbers → suspicious
+  return suspiciousItems.length > items.length * 0.7;
+}
+
+/**
  * Check if consecutive logs show suspicious "perfect match" pattern
  * (Variance Trap detection)
  */

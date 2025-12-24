@@ -66,12 +66,29 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
     );
 
     -- Inventory logs with area_id (offline first)
+    -- Updated per .antigravityrules: Added is_flagged + flag_reason for anti-fraud
     CREATE TABLE IF NOT EXISTS local_inventory_logs (
       id TEXT PRIMARY KEY NOT NULL,
       area_id TEXT,
       is_partial_check INTEGER NOT NULL DEFAULT 0,
       ai_raw_json TEXT,
       confirmed_json TEXT,
+      is_flagged INTEGER NOT NULL DEFAULT 0,  -- Anti-fraud: TRUE if suspicious
+      flag_reason TEXT,                       -- 'SUSPICIOUS_PERFECT_MATCH', 'LAZY_COUNTING'
+      created_at TEXT NOT NULL,
+      synced INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- Waste logs (NEW per updated .antigravityrules)
+    -- Records items marked as Broken/Spilled during shortage check
+    CREATE TABLE IF NOT EXISTS local_waste_logs (
+      id TEXT PRIMARY KEY NOT NULL,
+      business_id TEXT NOT NULL,
+      ingredient_id TEXT NOT NULL,
+      area_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      reason TEXT NOT NULL, -- 'BROKEN', 'EXPIRED', 'SPILLED', 'THEFT_CONFIRMED'
+      notes TEXT,
       created_at TEXT NOT NULL,
       synced INTEGER NOT NULL DEFAULT 0
     );
