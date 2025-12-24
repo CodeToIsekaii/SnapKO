@@ -159,3 +159,110 @@ export function calculateDailyCOGSSummary(logs: InventoryLog[]): {
     netCost: imports - waste,
   };
 }
+
+// =============================================
+// WEIGHTED AVERAGE COGS CALCULATION
+// Per .antigravityrules Section C.1
+// =============================================
+
+/**
+ * Calculate Weighted Average Cost on Import
+ * Formula: ((OldQty * OldCost) + (ImportQty * ImportPrice)) / (OldQty + ImportQty)
+ *
+ * IMPORTANT: This is a PURE FUNCTION for client-side preview.
+ * The actual update MUST use the Postgres function `update_ingredient_cost_on_import`
+ * to ensure atomicity (transaction).
+ */
+export function calculateWeightedAverageCost(
+  oldQty: number,
+  oldCost: number,
+  importQty: number,
+  importPrice: number
+): number {
+  const totalQty = oldQty + importQty;
+
+  if (totalQty <= 0) {
+    return importPrice; // Edge case: no existing inventory
+  }
+
+  const newCost = (oldQty * oldCost + importQty * importPrice) / totalQty;
+
+  return Math.round(newCost * 10000) / 10000; // Round to 4 decimal places
+}
+
+/**
+ * Preview import effect on inventory value
+ */
+export interface ImportPreview {
+  ingredient_id: string;
+  ingredient_name: string;
+
+  old_qty: number;
+  old_cost: number;
+  old_value: number;
+
+  import_qty: number;
+  import_price: number;
+  import_value: number;
+
+  new_qty: number;
+  new_cost: number;
+  new_value: number;
+
+  cost_change: number;
+  cost_change_pct: number;
+}
+
+export function previewImportEffect(
+  ingredient: {
+    id: string;
+    name: string;
+    current_qty: number;
+    current_cost: number;
+  },
+  importQty: number,
+  importPrice: number
+): ImportPreview {
+  const oldValue = ingredient.current_qty * ingredient.current_cost;
+  const importValue = importQty * importPrice;
+  const newQty = ingredient.current_qty + importQty;
+  const newCost = calculateWeightedAverageCost(
+    ingredient.current_qty,
+    ingredient.current_cost,
+    importQty,
+    importPrice
+  );
+  const newValue = newQty * newCost;
+  const costChange = newCost - ingredient.current_cost;
+  const costChangePct =
+    ingredient.current_cost > 0
+      ? (costChange / ingredient.current_cost) * 100
+      : 0;
+
+  return {
+    ingredient_id: ingredient.id,
+    ingredient_name: ingredient.name,
+    old_qty: ingredient.current_qty,
+    old_cost: ingredient.current_cost,
+    old_value: oldValue,
+    import_qty: importQty,
+    import_price: importPrice,
+    import_value: importValue,
+    new_qty: newQty,
+    new_cost: newCost,
+    new_value: newValue,
+    cost_change: Math.round(costChange * 10000) / 10000,
+    cost_change_pct: Math.round(costChangePct * 100) / 100,
+  };
+}
+
+/**
+ * Calculate COGS percentage (Cost to Price ratio)
+ */
+export function calculateCOGSPercentage(
+  cost: number,
+  sellingPrice: number
+): number {
+  if (sellingPrice <= 0) return 0;
+  return Math.round((cost / sellingPrice) * 10000) / 100;
+}
