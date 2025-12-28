@@ -158,16 +158,34 @@ export default function LoginScreen() {
               </View>
             )}
           </TouchableOpacity>
-        </View>
 
-        {/* Staff Join Link */}
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Bạn là nhân viên?</Text>
-          <Link href="/(auth)/join-staff" asChild>
-            <TouchableOpacity>
-              <Text style={styles.linkText}>Tham gia doanh nghiệp</Text>
+          {/* Forgot Password Link */}
+          <Link href="/(auth)/forgot-password" asChild>
+            <TouchableOpacity style={styles.forgotPassword}>
+              <Text style={styles.forgotPasswordText}>Quên mật khẩu?</Text>
             </TouchableOpacity>
           </Link>
+        </View>
+
+        {/* Register & Staff Links */}
+        <View style={styles.footer}>
+          <View style={styles.registerRow}>
+            <Text style={styles.footerText}>Chưa có tài khoản?</Text>
+            <Link href="/(auth)/register" asChild>
+              <TouchableOpacity>
+                <Text style={styles.linkText}>Đăng ký</Text>
+              </TouchableOpacity>
+            </Link>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.staffRow}>
+            <Text style={styles.footerText}>Bạn là nhân viên?</Text>
+            <Link href="/(auth)/join-staff" asChild>
+              <TouchableOpacity>
+                <Text style={styles.linkText}>Nhập mã mời</Text>
+              </TouchableOpacity>
+            </Link>
+          </View>
         </View>
       </View>
     </KeyboardAvoidingView>
@@ -252,9 +270,9 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   footer: {
-    marginTop: 48,
+    marginTop: 32,
     alignItems: "center",
-    gap: 8,
+    gap: 16,
   },
   footerText: {
     color: COLORS.textSecondary,
@@ -264,5 +282,28 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     fontSize: 16,
     fontWeight: "600",
+  },
+  forgotPassword: {
+    alignSelf: "flex-end",
+    marginTop: -8,
+  },
+  forgotPasswordText: {
+    color: COLORS.textSecondary,
+    fontSize: 14,
+  },
+  registerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  divider: {
+    width: 40,
+    height: 1,
+    backgroundColor: COLORS.border,
+  },
+  staffRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
 });

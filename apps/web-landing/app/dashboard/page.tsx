@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
+import { User } from "@supabase/supabase-js";
+
+/**
+ * Owner Dashboard - Staff Approval Page
+ * Requires login, redirects to /auth/login if not authenticated
+ */
 
 type PendingProfile = {
   id: string;
@@ -12,75 +20,88 @@ type PendingProfile = {
 };
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [sessionReady, setSessionReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [pending, setPending] = useState<PendingProfile[]>([]);
-  const [err, setErr] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function refreshPending() {
-    const { data: sessionData } = await supabase.auth.getSession();
-    if (!sessionData.session) {
-      setPending([]);
-      return;
-    }
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id, full_name, phone_number, status, role")
-      .eq("role", "STAFF")
-      .eq("status", "PENDING")
-      .order("created_at", { ascending: false });
+  // Check for OAuth error in URL params
+  const oauthError = searchParams.get("error");
+  const errorDescription = searchParams.get("error_description");
+  const authError = oauthError
+    ? `${oauthError}${errorDescription ? `: ${errorDescription}` : ""}`
+    : null;
 
-    if (error) throw error;
-    setPending((data ?? []) as PendingProfile[]);
-  }
-
+  // Check session and redirect if not logged in
   useEffect(() => {
     let mounted = true;
-    (async () => {
+
+    const checkSession = async () => {
       const { data } = await supabase.auth.getSession();
       if (!mounted) return;
-      setSessionReady(true);
-      if (data.session) {
-        try {
-          await refreshPending();
-        } catch (e: any) {
-          setErr(String(e?.message ?? e));
+
+      if (!data.session) {
+        router.push("/auth/login");
+        return;
+      }
+      setUser(data.session.user);
+      setIsLoading(false);
+      // Load pending in background, don't block
+      refreshPending().catch(console.error);
+    };
+
+    checkSession();
+
+    const { data: sub } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (!mounted) return;
+        if (event === "SIGNED_OUT" || !session) {
+          router.push("/auth/login");
+        } else {
+          setUser(session.user);
+          setIsLoading(false); // Ensure loading is set to false
+          refreshPending().catch(console.error);
         }
       }
-    })();
-    const { data: sub } = supabase.auth.onAuthStateChange(async () => {
-      try {
-        await refreshPending();
-      } catch (e: any) {
-        setErr(String(e?.message ?? e));
-      }
-    });
+    );
+
     return () => {
       mounted = false;
       sub.subscription.unsubscribe();
     };
-  }, [supabase]);
+  }, [supabase, router]);
 
-  async function signIn() {
-    setErr(null);
-    setBusy(true);
+  async function refreshPending() {
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, full_name, phone_number, status, role")
+        .eq("role", "STAFF")
+        .eq("status", "PENDING")
+        .order("created_at", { ascending: false });
+
       if (error) throw error;
-      await refreshPending();
-    } catch (e: any) {
-      setErr(String(e?.message ?? e));
-    } finally {
-      setBusy(false);
+      setPending((data ?? []) as PendingProfile[]);
+    } catch (e: unknown) {
+      let message = "Unknown error";
+      if (e instanceof Error) {
+        message = e.message;
+      } else if (typeof e === "object" && e !== null) {
+        message = JSON.stringify(e);
+      } else {
+        message = String(e);
+      }
+      setError(message);
     }
   }
 
-  async function approve(profileId: string, approve: boolean) {
-    setErr(null);
+  async function approve(profileId: string, isApproved: boolean) {
+    setError(null);
     setBusy(true);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
@@ -89,7 +110,7 @@ export default function DashboardPage() {
 
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      if (!url || !anonKey) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY");
+      if (!url || !anonKey) throw new Error("Missing Supabase config");
 
       const res = await fetch(`${url}/functions/v1/invite-approve`, {
         method: "POST",
@@ -98,7 +119,7 @@ export default function DashboardPage() {
           apikey: anonKey,
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ profileId, approve }),
+        body: JSON.stringify({ profileId, approve: isApproved }),
       });
 
       if (!res.ok) {
@@ -106,104 +127,188 @@ export default function DashboardPage() {
         throw new Error(t || `HTTP ${res.status}`);
       }
       await refreshPending();
-    } catch (e: any) {
-      setErr(String(e?.message ?? e));
+    } catch (e: unknown) {
+      let message = "Unknown error";
+      if (e instanceof Error) {
+        message = e.message;
+      } else if (typeof e === "object" && e !== null) {
+        message = JSON.stringify(e);
+      } else {
+        message = String(e);
+      }
+      setError(message);
     } finally {
       setBusy(false);
     }
   }
 
-  if (!sessionReady) {
-    return <div className="p-8 text-sm text-zinc-600">Loading...</div>;
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    router.push("/auth/login");
+  }
+
+  // Calculate trial days remaining (14 days from account creation)
+  const getTrialDaysLeft = () => {
+    if (!user?.created_at) return 14;
+    const createdAt = new Date(user.created_at);
+    const now = new Date();
+    const diffMs = now.getTime() - createdAt.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    return Math.max(0, 14 - diffDays);
+  };
+
+  const trialDaysLeft = getTrialDaysLeft();
+  const isTrialExpired = trialDaysLeft === 0;
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#FAF9F7] flex items-center justify-center">
+        <div className="text-[#6F6B63]">Đang tải...</div>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 p-8 text-zinc-900">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-        <header className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold">Owner Dashboard</h1>
-            <p className="text-sm text-zinc-600">Approve/Reject Staff (Week 2)</p>
+    <div className="min-h-screen bg-[#FAF9F7]">
+      {/* Header */}
+      <header className="bg-white border-b border-[#E0DCD5]">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+          <Link href="/" className="text-[#E07A2F] font-bold text-xl">
+            SnapKO
+          </Link>
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-[#6F6B63]">{user?.email}</span>
+            <button
+              onClick={handleLogout}
+              className="text-sm text-[#6F6B63] hover:text-red-600"
+            >
+              Đăng xuất
+            </button>
           </div>
-        </header>
+        </div>
+      </header>
 
-        <section className="rounded-2xl border bg-white p-5">
-          <h2 className="text-lg font-semibold">Login</h2>
-          <p className="mt-1 text-sm text-zinc-600">Owner dùng Email/Password (Supabase Auth).</p>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <input
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="owner@email.com"
-              className="rounded-xl border px-3 py-2 text-sm"
-            />
-            <input
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              type="password"
-              placeholder="password"
-              className="rounded-xl border px-3 py-2 text-sm"
-            />
+      {/* Trial Banner */}
+      {isTrialExpired ? (
+        <div className="bg-red-500 text-white">
+          <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+            <span className="text-sm font-medium">
+              ⚠️ Bản dùng thử đã hết hạn. Nâng cấp để tiếp tục sử dụng.
+            </span>
+            <Link
+              href="/pricing"
+              className="px-4 py-1.5 bg-white text-red-500 text-sm font-semibold rounded-lg hover:bg-red-50"
+            >
+              Nâng cấp ngay
+            </Link>
           </div>
+        </div>
+      ) : (
+        <div className="bg-[#6B8E23] text-white">
+          <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+            <span className="text-sm font-medium">
+              🎉 Bản dùng thử miễn phí: còn{" "}
+              <strong>{trialDaysLeft} ngày</strong>
+            </span>
+            <Link
+              href="/pricing"
+              className="px-4 py-1.5 bg-white/20 text-white text-sm font-medium rounded-lg hover:bg-white/30"
+            >
+              Xem gói Pro
+            </Link>
+          </div>
+        </div>
+      )}
 
-          <button
-            disabled={busy}
-            onClick={signIn}
-            className="mt-4 rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            {busy ? "Working..." : "Sign in"}
-          </button>
+      {/* Main */}
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        <div className="mb-8">
+          <h1 className="text-2xl font-bold text-[#1E1E1E]">Owner Dashboard</h1>
+          <p className="text-[#6F6B63]">Duyệt nhân viên đăng ký</p>
+        </div>
 
-          {err ? <p className="mt-3 text-sm text-red-600">{err}</p> : null}
-        </section>
+        {(error || authError) && (
+          <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl mb-6">
+            {authError && (
+              <p className="font-medium">Lỗi đăng nhập: {authError}</p>
+            )}
+            {error && <p>{error}</p>}
+          </div>
+        )}
 
-        <section className="rounded-2xl border bg-white p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Pending Staff</h2>
+        <div className="bg-white rounded-2xl border border-[#E0DCD5] p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-lg font-semibold text-[#1E1E1E]">
+              Nhân viên chờ duyệt ({pending.length})
+            </h2>
             <button
               disabled={busy}
-              onClick={() => refreshPending().catch((e) => setErr(String(e?.message ?? e)))}
-              className="rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-50"
+              onClick={refreshPending}
+              className="px-4 py-2 text-sm font-medium text-[#6F6B63] border border-[#E0DCD5] rounded-xl hover:bg-[#FAF9F7] disabled:opacity-50"
             >
-              Refresh
+              Làm mới
             </button>
           </div>
 
-          <div className="mt-4 grid gap-3">
-            {pending.length === 0 ? (
-              <p className="text-sm text-zinc-600">No pending staff.</p>
-            ) : (
-              pending.map((p) => (
-                <div key={p.id} className="flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between">
+          {pending.length === 0 ? (
+            <p className="text-[#6F6B63] text-center py-8">
+              Không có nhân viên nào đang chờ duyệt.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {pending.map((p) => (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between p-4 border border-[#E0DCD5] rounded-xl"
+                >
                   <div>
-                    <div className="font-semibold">{p.full_name ?? "(no name)"}</div>
-                    <div className="text-sm text-zinc-600">{p.phone_number ?? "(no phone)"}</div>
+                    <div className="font-semibold text-[#1E1E1E]">
+                      {p.full_name ?? "(Không có tên)"}
+                    </div>
+                    <div className="text-sm text-[#6F6B63]">
+                      {p.phone_number ?? "(Không có SĐT)"}
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <button
                       disabled={busy}
                       onClick={() => approve(p.id, true)}
-                      className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                      className="px-4 py-2 text-sm font-semibold text-white bg-[#6B8E23] hover:bg-[#5a7a1e] rounded-xl disabled:opacity-50"
                     >
-                      Approve
+                      Duyệt
                     </button>
                     <button
                       disabled={busy}
                       onClick={() => approve(p.id, false)}
-                      className="rounded-xl bg-red-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                      className="px-4 py-2 text-sm font-semibold text-white bg-red-500 hover:bg-red-600 rounded-xl disabled:opacity-50"
                     >
-                      Reject
+                      Từ chối
                     </button>
                   </div>
                 </div>
-              ))
-            )}
-          </div>
-        </section>
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Quick links */}
+        <div className="mt-8 grid md:grid-cols-2 gap-4">
+          <Link
+            href="/reports"
+            className="p-4 bg-white border border-[#E0DCD5] rounded-xl hover:shadow-md transition-shadow"
+          >
+            <h3 className="font-semibold text-[#1E1E1E]">📊 Báo cáo</h3>
+            <p className="text-sm text-[#6F6B63]">Xem báo cáo tồn kho</p>
+          </Link>
+          <Link
+            href="/pricing"
+            className="p-4 bg-white border border-[#E0DCD5] rounded-xl hover:shadow-md transition-shadow"
+          >
+            <h3 className="font-semibold text-[#1E1E1E]">💳 Gói cước</h3>
+            <p className="text-sm text-[#6F6B63]">Nâng cấp lên Pro</p>
+          </Link>
+        </div>
+      </main>
     </div>
   );
 }
-
-

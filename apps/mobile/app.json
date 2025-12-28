@@ -67,8 +67,7 @@
           "photosPermission": "SnapKO cần truy cập thư viện ảnh để chọn hóa đơn có sẵn."
         }
       ],
-      "expo-secure-store",
-      "expo-auth-session"
+      "expo-secure-store"
     ],
     "extra": {
       "eas": {

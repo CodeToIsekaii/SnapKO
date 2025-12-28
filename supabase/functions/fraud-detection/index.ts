@@ -10,7 +10,129 @@
  */
 
 // deno-lint-ignore-file
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  createClient,
+  SupabaseClient,
+} from "https://esm.sh/@supabase/supabase-js@2";
+
+// Define minimal Database schema for tables used in this function
+// Must include all required properties for GenericSchema
+interface Database {
+  public: {
+    Tables: {
+      fraud_alerts: {
+        Row: {
+          id: string;
+          created_at: string;
+          business_id: string;
+          log_type: string;
+          log_id: string;
+          alert_type: string;
+          risk_level: string;
+          ingredient_id: string | null;
+          variance_percentage: number | null;
+          notes: string | null;
+        };
+        Insert: {
+          id?: string;
+          created_at?: string;
+          business_id: string;
+          log_type: string;
+          log_id: string;
+          alert_type: string;
+          risk_level: string;
+          ingredient_id?: string | null;
+          variance_percentage?: number | null;
+          notes?: string | null;
+        };
+        Update: {
+          id?: string;
+          created_at?: string;
+          business_id?: string;
+          log_type?: string;
+          log_id?: string;
+          alert_type?: string;
+          risk_level?: string;
+          ingredient_id?: string | null;
+          variance_percentage?: number | null;
+          notes?: string | null;
+        };
+        Relationships: [];
+      };
+      inventory_logs: {
+        Row: {
+          id: string;
+          ingredient_id: string;
+          variance: number;
+          variance_percentage: number;
+          business_id: string;
+          created_at: string;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+      storage_areas: {
+        Row: {
+          id: string;
+          business_id: string;
+          type: string;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+      import_logs: {
+        Row: {
+          id: string;
+          business_id: string;
+          target_area_id: string;
+          created_at: string;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+      transfer_logs: {
+        Row: {
+          id: string;
+          business_id: string;
+          created_at: string;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+      stock_levels: {
+        Row: {
+          id: string;
+          quantity: number;
+          area_id: string;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+      ingredients: {
+        Row: {
+          id: string;
+          name: string;
+          min_threshold: number;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+    };
+    Views: Record<string, never>;
+    Functions: Record<string, never>;
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
+  };
+}
+
+// Type alias for Supabase client with proper Database types
+type SupabaseClientType = SupabaseClient<Database>;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -32,6 +154,9 @@ type AlertType =
   | "ghost_transfer"
   | "low_stock";
 
+// Use the Insert type from Database schema directly
+type FraudAlertInsert = Database["public"]["Tables"]["fraud_alerts"]["Insert"];
+
 interface FraudAlert {
   business_id: string;
   log_type: string;
@@ -43,24 +168,31 @@ interface FraudAlert {
   notes?: string;
 }
 
+interface InventoryLog {
+  id: string;
+  ingredient_id: string;
+  variance: number;
+  variance_percentage: number;
+}
+
 async function checkVarianceTrap(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientType,
   businessId: string
 ): Promise<FraudAlert[]> {
   const alerts: FraudAlert[] = [];
 
   // Get recent inventory logs grouped by ingredient
-  const { data: recentLogs } = await supabase
+  const { data: recentLogs } = (await supabase
     .from("inventory_logs")
     .select("id, ingredient_id, variance, variance_percentage")
     .eq("business_id", businessId)
     .order("created_at", { ascending: false })
-    .limit(50);
+    .limit(50)) as { data: InventoryLog[] | null };
 
   if (!recentLogs) return alerts;
 
   // Group by ingredient
-  const byIngredient = new Map<string, typeof recentLogs>();
+  const byIngredient = new Map<string, InventoryLog[]>();
   for (const log of recentLogs) {
     const logs = byIngredient.get(log.ingredient_id) || [];
     logs.push(log);
@@ -96,7 +228,7 @@ async function checkVarianceTrap(
 }
 
 async function checkGhostTransfer(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientType,
   businessId: string
 ): Promise<FraudAlert[]> {
   const alerts: FraudAlert[] = [];
@@ -106,12 +238,12 @@ async function checkGhostTransfer(
   weekAgo.setDate(weekAgo.getDate() - 7);
 
   // Get import logs that went directly to SERVICE area
-  const { data: serviceArea } = await supabase
+  const { data: serviceArea } = (await supabase
     .from("storage_areas")
     .select("id")
     .eq("business_id", businessId)
     .eq("type", "SERVICE")
-    .single();
+    .single()) as { data: { id: string } | null };
 
   if (!serviceArea) return alerts;
 
@@ -148,23 +280,23 @@ async function checkGhostTransfer(
 }
 
 async function checkLowStock(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientType,
   businessId: string
 ): Promise<FraudAlert[]> {
   const alerts: FraudAlert[] = [];
 
   // Get SERVICE area (Bar)
-  const { data: serviceArea } = await supabase
+  const { data: serviceArea } = (await supabase
     .from("storage_areas")
     .select("id")
     .eq("business_id", businessId)
     .eq("type", "SERVICE")
-    .single();
+    .single()) as { data: { id: string } | null };
 
   if (!serviceArea) return alerts;
 
   // Check stock levels against min_threshold
-  const { data: lowStockItems } = await supabase
+  const { data: lowStockItems } = (await supabase
     .from("stock_levels")
     .select(
       `
@@ -173,12 +305,20 @@ async function checkLowStock(
       ingredient:ingredients(id, name, min_threshold)
     `
     )
-    .eq("area_id", serviceArea.id);
+    .eq("area_id", serviceArea.id)) as {
+    data:
+      | {
+          id: string;
+          quantity: number;
+          ingredient: { id: string; name: string; min_threshold: number };
+        }[]
+      | null;
+  };
 
   if (!lowStockItems) return alerts;
 
   for (const item of lowStockItems) {
-    const ing = item.ingredient as any;
+    const ing = item.ingredient;
     if (!ing) continue;
 
     if (item.quantity < ing.min_threshold) {
@@ -198,20 +338,28 @@ async function checkLowStock(
 }
 
 async function saveAlerts(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientType,
   alerts: FraudAlert[]
 ): Promise<void> {
   if (alerts.length === 0) return;
 
   // Insert alerts (ignore duplicates based on log_id)
   for (const alert of alerts) {
-    await supabase.from("fraud_alerts").upsert(
-      {
-        ...alert,
-        created_at: new Date().toISOString(),
-      },
-      { onConflict: "log_id" }
-    );
+    // Convert to the database insert type
+    const insertData: FraudAlertInsert = {
+      business_id: alert.business_id,
+      log_type: alert.log_type,
+      log_id: alert.log_id,
+      alert_type: alert.alert_type,
+      risk_level: alert.risk_level,
+      ingredient_id: alert.ingredient_id ?? null,
+      variance_percentage: alert.variance_percentage ?? null,
+      notes: alert.notes ?? null,
+      created_at: new Date().toISOString(),
+    };
+    await supabase
+      .from("fraud_alerts")
+      .upsert(insertData, { onConflict: "log_id" });
   }
 }
 
@@ -238,6 +386,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+    const typedSupabase = supabase as SupabaseClientType;
     const allAlerts: FraudAlert[] = [];
 
     // Run requested checks (or all by default)
@@ -248,22 +397,22 @@ Deno.serve(async (req: Request) => {
     ];
 
     if (checks.includes("variance_trap")) {
-      const alerts = await checkVarianceTrap(supabase, business_id);
+      const alerts = await checkVarianceTrap(typedSupabase, business_id);
       allAlerts.push(...alerts);
     }
 
     if (checks.includes("ghost_transfer")) {
-      const alerts = await checkGhostTransfer(supabase, business_id);
+      const alerts = await checkGhostTransfer(typedSupabase, business_id);
       allAlerts.push(...alerts);
     }
 
     if (checks.includes("low_stock")) {
-      const alerts = await checkLowStock(supabase, business_id);
+      const alerts = await checkLowStock(typedSupabase, business_id);
       allAlerts.push(...alerts);
     }
 
     // Save alerts to database
-    await saveAlerts(supabase, allAlerts);
+    await saveAlerts(typedSupabase, allAlerts);
 
     return new Response(
       JSON.stringify({

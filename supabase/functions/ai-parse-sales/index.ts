@@ -9,7 +9,13 @@
  */
 
 // deno-lint-ignore-file
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  createClient,
+  SupabaseClient,
+} from "https://esm.sh/@supabase/supabase-js@2";
+
+// Simple type alias to avoid complex generic type inference issues
+type SupabaseClientType = SupabaseClient<Record<string, unknown>>;
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -119,8 +125,20 @@ interface DeductedIngredient {
   unit_cost?: number;
 }
 
+interface IngredientData {
+  id: string;
+  name: string;
+  base_unit: string;
+  average_unit_cost: number | null;
+}
+
+interface RecipeIngredientWithJoin {
+  quantity_needed: number;
+  ingredient: IngredientData | null;
+}
+
 async function calculateDeductions(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientType,
   businessId: string,
   soldItems: (SoldItem & { recipe_id?: string })[]
 ): Promise<DeductedIngredient[]> {
@@ -130,7 +148,7 @@ async function calculateDeductions(
     if (!item.recipe_id) continue;
 
     // Get recipe ingredients
-    const { data: recipeIngredients } = await supabase
+    const { data: recipeIngredients } = (await supabase
       .from("recipe_ingredients")
       .select(
         `
@@ -138,12 +156,14 @@ async function calculateDeductions(
         ingredient:ingredients(id, name, base_unit, average_unit_cost)
       `
       )
-      .eq("recipe_id", item.recipe_id);
+      .eq("recipe_id", item.recipe_id)) as {
+      data: RecipeIngredientWithJoin[] | null;
+    };
 
     if (!recipeIngredients) continue;
 
     for (const ri of recipeIngredients) {
-      const ing = ri.ingredient as any;
+      const ing = ri.ingredient;
       if (!ing) continue;
 
       const deductedQty = ri.quantity_needed * item.quantity_sold;
@@ -157,7 +177,7 @@ async function calculateDeductions(
           ingredient_name: ing.name,
           deducted_qty: deductedQty,
           unit: ing.base_unit,
-          unit_cost: ing.average_unit_cost,
+          unit_cost: ing.average_unit_cost ?? undefined,
         });
       }
     }
@@ -166,16 +186,21 @@ async function calculateDeductions(
   return Array.from(deductions.values());
 }
 
+interface RecipeData {
+  id: string;
+  name: string;
+}
+
 async function matchRecipes(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientType,
   businessId: string,
   items: SoldItem[]
 ): Promise<(SoldItem & { recipe_id?: string })[]> {
   // Get existing recipes for this business
-  const { data: recipes } = await supabase
+  const { data: recipes } = (await supabase
     .from("recipes")
     .select("id, name")
-    .eq("business_id", businessId);
+    .eq("business_id", businessId)) as { data: RecipeData[] | null };
 
   if (!recipes) return items;
 

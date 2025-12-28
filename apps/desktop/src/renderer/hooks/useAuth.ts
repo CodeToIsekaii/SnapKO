@@ -202,6 +202,43 @@ export function useAuth() {
     [login]
   );
 
+  // Forgot Password function
+  const forgotPassword = useCallback(
+    async (email: string): Promise<LoginResult> => {
+      if (!supabase) {
+        return { success: false, error: "Supabase chưa được cấu hình" };
+      }
+
+      setState((s) => ({ ...s, loading: true, error: null }));
+
+      try {
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+          email,
+          {
+            redirectTo: `${window.location.origin}/auth/update-password`,
+          }
+        );
+
+        if (resetError) {
+          setState((s) => ({
+            ...s,
+            loading: false,
+            error: resetError.message,
+          }));
+          return { success: false, error: resetError.message };
+        }
+
+        setState((s) => ({ ...s, loading: false }));
+        return { success: true };
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : "Có lỗi xảy ra";
+        setState((s) => ({ ...s, loading: false, error: errorMsg }));
+        return { success: false, error: errorMsg };
+      }
+    },
+    []
+  );
+
   // Logout function
   const logout = useCallback(async () => {
     try {
@@ -223,6 +260,7 @@ export function useAuth() {
     error: state.error,
     login,
     register,
+    forgotPassword,
     logout,
     clearError,
     supabase, // Exposed for components that need it

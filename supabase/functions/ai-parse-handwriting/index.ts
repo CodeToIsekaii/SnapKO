@@ -13,7 +13,10 @@
  */
 
 // deno-lint-ignore-file
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  createClient,
+  SupabaseClient,
+} from "https://esm.sh/@supabase/supabase-js@2";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -142,16 +145,18 @@ async function callGemini(imageBase64: string): Promise<ParsedStockSheet> {
 }
 
 async function matchIngredients(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient<unknown>,
   businessId: string,
   items: StockItem[]
 ): Promise<(StockItem & { ingredient_id?: string })[]> {
   // Get existing ingredients for this business
-  const { data: ingredients } = await supabase
+  const { data: ingredients } = (await supabase
     .from("ingredients")
     .select("id, name, base_unit")
     .eq("business_id", businessId)
-    .eq("archived", false);
+    .eq("archived", false)) as {
+    data: { id: string; name: string; base_unit: string }[] | null;
+  };
 
   if (!ingredients) return items;
 
@@ -218,7 +223,7 @@ Deno.serve(async (req: Request) => {
     // Match items to existing ingredients
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
     const matchedItems = await matchIngredients(
-      supabase,
+      supabase as SupabaseClient<unknown>,
       business_id,
       parsed.items
     );

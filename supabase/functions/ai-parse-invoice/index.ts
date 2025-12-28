@@ -9,7 +9,13 @@
  */
 
 // deno-lint-ignore-file
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  createClient,
+  SupabaseClient,
+} from "https://esm.sh/@supabase/supabase-js@2";
+
+// Simple type alias to avoid complex generic type inference issues
+type SupabaseClientType = SupabaseClient<Record<string, unknown>>;
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -115,17 +121,22 @@ async function callGemini(imageBase64: string): Promise<ParsedInvoice> {
   }
 }
 
+interface IngredientData {
+  id: string;
+  name: string;
+}
+
 async function matchIngredients(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClientType,
   businessId: string,
   items: InvoiceItem[]
-): Promise<InvoiceItem & { ingredient_id?: string }[]> {
+): Promise<(InvoiceItem & { ingredient_id?: string })[]> {
   // Get existing ingredients for this business
-  const { data: ingredients } = await supabase
+  const { data: ingredients } = (await supabase
     .from("ingredients")
     .select("id, name")
     .eq("business_id", businessId)
-    .eq("archived", false);
+    .eq("archived", false)) as { data: IngredientData[] | null };
 
   if (!ingredients) return items;
 

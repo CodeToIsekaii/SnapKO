@@ -71,16 +71,21 @@ function extractShortCode(content: string): string | null {
   return match ? match[1].toUpperCase() : null;
 }
 
+// Extract user ID prefix from content like "SNAPKO PRO abc12345"
+function extractUserIdPrefix(content: string): string | null {
+  const match = content.match(/SNAPKO\s+PRO\s+([a-f0-9]{8})/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
 // Calculate subscription extension based on amount
 function getSubscriptionDays(amount: number): number {
   if (amount >= 990000) return 365; // Yearly
-  if (amount >= 99000) return 30; // Monthly
+  if (amount >= 100000) return 30; // Monthly (100k)
   return 0;
 }
 
 /**
  * Verify PayOS webhook signature using HMAC SHA256
- * Per PayOS docs: signature = HMAC_SHA256(checksumKey, sortedDataString)
  */
 async function verifyPayOSSignature(
   data: PayOSWebhookBody["data"],
@@ -88,13 +93,11 @@ async function verifyPayOSSignature(
   checksumKey: string
 ): Promise<boolean> {
   try {
-    // Sort data fields alphabetically and create query string
     const sortedKeys = Object.keys(data).sort();
     const dataString = sortedKeys
       .map((key) => `${key}=${data[key as keyof typeof data]}`)
       .join("&");
 
-    // Generate HMAC SHA256 using Web Crypto API (Deno native)
     const encoder = new TextEncoder();
     const keyData = encoder.encode(checksumKey);
     const msgData = encoder.encode(dataString);
@@ -127,7 +130,6 @@ async function verifyPayOSSignature(
 // ==================== MAIN HANDLER ====================
 
 Deno.serve(async (req: Request) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -224,40 +226,56 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Extract short code from content
+    console.log("Processing payment:", { content, amount, gateway });
+
+    // Try to find business or user
     const shortCode = extractShortCode(content);
+    const userIdPrefix = extractUserIdPrefix(content);
 
-    if (!shortCode) {
-      console.log("No short code found in content:", content);
-      await supabaseAdmin.from("payment_transactions").insert({
-        business_id: null,
-        amount,
-        status: "FAILED",
-        transaction_code: transactionCode,
-        gateway,
-      });
+    let businessId: string | null = null;
+    let userId: string | null = null;
+    let currentExpiration: string | null = null;
 
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "Short code not found in transfer content",
-        }),
-        {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
+    // Try business lookup first
+    if (shortCode) {
+      const { data: business } = await supabaseAdmin
+        .from("businesses")
+        .select("id, subscription_expires_at")
+        .eq("payment_short_code", shortCode)
+        .single();
+
+      if (business) {
+        businessId = business.id;
+        currentExpiration = business.subscription_expires_at;
+      }
     }
 
-    // Find business by short code
-    const { data: business, error: bizError } = await supabaseAdmin
-      .from("businesses")
-      .select("id, subscription_expires_at")
-      .eq("payment_short_code", shortCode)
-      .single();
+    // Try user lookup if no business found
+    if (!businessId && userIdPrefix) {
+      // Construct UUID range for the prefix (assuming 8 chars)
+      // UUID format: 8-4-4-4-12 digits
+      const startUuid = `${userIdPrefix}-0000-0000-0000-000000000000`;
+      const endUuid = `${userIdPrefix}-ffff-ffff-ffff-ffffffffffff`;
 
-    if (bizError || !business) {
-      console.log("Business not found for short code:", shortCode);
+      const { data: profiles } = await supabaseAdmin
+        .from("profiles")
+        .select("id, business_id, subscription_expires_at")
+        .gte("id", startUuid)
+        .lte("id", endUuid)
+        .limit(1);
+
+      if (profiles && profiles.length > 0) {
+        userId = profiles[0].id;
+        businessId = profiles[0].business_id;
+        currentExpiration = profiles[0].subscription_expires_at;
+      }
+    }
+
+    if (!businessId && !userId) {
+      console.log("No business or user found for:", {
+        shortCode,
+        userIdPrefix,
+      });
       await supabaseAdmin.from("payment_transactions").insert({
         business_id: null,
         amount,
@@ -267,10 +285,7 @@ Deno.serve(async (req: Request) => {
       });
 
       return new Response(
-        JSON.stringify({
-          success: false,
-          error: "Business not found for short code",
-        }),
+        JSON.stringify({ success: false, error: "Business/User not found" }),
         {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -283,7 +298,7 @@ Deno.serve(async (req: Request) => {
 
     if (extensionDays === 0) {
       await supabaseAdmin.from("payment_transactions").insert({
-        business_id: business.id,
+        business_id: businessId,
         amount,
         status: "FAILED",
         transaction_code: transactionCode,
@@ -291,10 +306,7 @@ Deno.serve(async (req: Request) => {
       });
 
       return new Response(
-        JSON.stringify({
-          success: false,
-          error: "Amount too low for any tier",
-        }),
+        JSON.stringify({ success: false, error: "Amount too low" }),
         {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -302,31 +314,38 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Calculate new expiration: from current expiration or now
-    const baseDate = business.subscription_expires_at
-      ? new Date(business.subscription_expires_at)
+    // Calculate new expiration
+    const baseDate = currentExpiration
+      ? new Date(currentExpiration)
       : new Date();
-
     const startDate = baseDate < new Date() ? new Date() : baseDate;
     const newExpiration = new Date(startDate);
     newExpiration.setDate(newExpiration.getDate() + extensionDays);
 
-    // Update subscription
-    const { error: updateError } = await supabaseAdmin
-      .from("businesses")
-      .update({
-        subscription_expires_at: newExpiration.toISOString(),
-        tier: "PERSONAL",
-      })
-      .eq("id", business.id);
+    // Update subscription - either business or profile
+    if (businessId) {
+      await supabaseAdmin
+        .from("businesses")
+        .update({
+          subscription_expires_at: newExpiration.toISOString(),
+          tier: "PRO",
+        })
+        .eq("id", businessId);
+    }
 
-    if (updateError) {
-      throw updateError;
+    if (userId) {
+      await supabaseAdmin
+        .from("profiles")
+        .update({
+          subscription_expires_at: newExpiration.toISOString(),
+          is_pro: true,
+        })
+        .eq("id", userId);
     }
 
     // Log successful transaction
     await supabaseAdmin.from("payment_transactions").insert({
-      business_id: business.id,
+      business_id: businessId,
       amount,
       status: "SUCCESS",
       transaction_code: transactionCode,
@@ -334,13 +353,14 @@ Deno.serve(async (req: Request) => {
     });
 
     console.log(
-      `Payment processed: ${shortCode} -> +${extensionDays} days, expires: ${newExpiration.toISOString()}`
+      `Payment success: +${extensionDays} days, expires: ${newExpiration.toISOString()}`
     );
 
     return new Response(
       JSON.stringify({
         success: true,
-        business_id: business.id,
+        business_id: businessId,
+        user_id: userId,
         extension_days: extensionDays,
         new_expiration: newExpiration.toISOString(),
       }),

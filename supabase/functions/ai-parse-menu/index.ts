@@ -5,6 +5,10 @@
 
 type Body = { imageBase64: string; mimeType: string };
 
+interface GeminiPart {
+  text?: string;
+}
+
 function json(res: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(res), {
     headers: { "Content-Type": "application/json" },
@@ -13,10 +17,12 @@ function json(res: unknown, init?: ResponseInit) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+  if (req.method !== "POST")
+    return new Response("Method Not Allowed", { status: 405 });
 
   const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-  if (!GEMINI_API_KEY) return new Response("Server misconfigured", { status: 500 });
+  if (!GEMINI_API_KEY)
+    return new Response("Server misconfigured", { status: 500 });
 
   let body: Body;
   try {
@@ -43,8 +49,9 @@ Rules:
 - unitCost is numeric in VND (if unknown, set 0 and lower confidence)
 - No personal data.`;
 
-  const geminiUrl =
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(
+    GEMINI_API_KEY
+  )}`;
 
   const geminiRes = await fetch(geminiUrl, {
     method: "POST",
@@ -71,11 +78,18 @@ Rules:
   }
 
   const payload = await geminiRes.json();
-  const text =
-    payload?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join("") ??
-    "";
+  const parts = (payload?.candidates?.[0]?.content?.parts ??
+    []) as GeminiPart[];
+  const text = parts
+    .map((p) => p?.text)
+    .filter(Boolean)
+    .join("");
 
-  const cleaned = String(text).trim().replace(/^```(json)?/i, "").replace(/```$/i, "").trim();
+  const cleaned = String(text)
+    .trim()
+    .replace(/^```(json)?/i, "")
+    .replace(/```$/i, "")
+    .trim();
   try {
     const parsed = JSON.parse(cleaned);
     return json({ ...parsed, rawJson: cleaned });
@@ -83,5 +97,3 @@ Rules:
     return json({ ingredients: [], rawJson: cleaned }, { status: 200 });
   }
 });
-
-
