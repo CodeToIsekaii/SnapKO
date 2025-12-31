@@ -239,30 +239,28 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    if (!business_id) {
-      return new Response(
-        JSON.stringify({ success: false, error: "business_id is required" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
     // Parse sales report with Gemini
     const parsed = await callGemini(image_base64);
 
-    // Match items to existing recipes
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    const matchedItems = await matchRecipes(
-      supabase,
-      business_id,
-      parsed.items_sold
-    );
+    // Match items to existing recipes if business_id provided
+    let matchedItems = parsed.items_sold.map((item: SoldItem) => ({ ...item }));
+    let deductions: DeductedIngredient[] = [];
 
-    // Calculate ingredient deductions based on recipes
-    const deductions = await calculateDeductions(
-      supabase,
-      business_id,
-      matchedItems
-    );
+    if (business_id) {
+      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      matchedItems = await matchRecipes(
+        supabase,
+        business_id,
+        parsed.items_sold
+      );
+
+      // Calculate ingredient deductions based on recipes
+      deductions = await calculateDeductions(
+        supabase,
+        business_id,
+        matchedItems
+      );
+    }
 
     return new Response(
       JSON.stringify({

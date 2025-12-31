@@ -247,12 +247,12 @@ export default function InventoryCaptureScreen({
       switch (snapMode) {
         case "IMPORT":
           endpoint = `${Env.SUPABASE_URL}/functions/v1/ai-parse-invoice`;
-          payload = { imageBase64: base64, mimeType };
+          payload = { image_base64: base64, business_id: "" };
           loadingMessage = "🤖 AI đang đọc hóa đơn...";
           break;
         case "SALES":
           endpoint = `${Env.SUPABASE_URL}/functions/v1/ai-parse-sales`;
-          payload = { imageBase64: base64, mimeType };
+          payload = { image_base64: base64, business_id: "" };
           loadingMessage = "🤖 AI đang đọc báo cáo bán hàng...";
           break;
         case "STOCK":
