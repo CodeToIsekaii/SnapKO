@@ -8,15 +8,16 @@ import { AuthProvider, useAuth } from "./hooks/AuthContext";
 import { LoginPage } from "./pages/LoginPage";
 import { Dashboard } from "./pages/Dashboard";
 import { ProfileSetupPage } from "./pages/ProfileSetupPage";
+import ModelSelectionPage from "./pages/ModelSelectionPage";
 import { COLORS } from "./styles/theme";
 import "./index.css";
 
 /**
  * App Root Component
- * Only handles: Check auth state → render LoginPage, ProfileSetup, or Dashboard
+ * Only handles: Check auth state → render LoginPage, ProfileSetup, ModelSelection, or Dashboard
  */
 function AppContent() {
-  const { user, profile, loading } = useAuth();
+  const { user, profile, loading, updateProfile } = useAuth();
 
   // Loading state
   if (loading) {
@@ -53,7 +54,26 @@ function AppContent() {
     );
   }
 
-  // Authenticated with business → Dashboard
+  // Owner has business but NO operational_model → Force Model Selection
+  if (
+    profile?.role === "OWNER" &&
+    profile?.business_id &&
+    !profile?.inventory_model
+  ) {
+    return (
+      <ModelSelectionPage
+        businessName={profile?.business_name || "Quán của bạn"}
+        onSave={async (model) => {
+          // Update profile with selected model
+          if (updateProfile) {
+            await updateProfile({ inventory_model: model });
+          }
+        }}
+      />
+    );
+  }
+
+  // Authenticated with business and model → Dashboard
   return <Dashboard user={user} />;
 }
 

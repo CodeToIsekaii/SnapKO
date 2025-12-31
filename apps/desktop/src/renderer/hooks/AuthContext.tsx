@@ -17,9 +17,11 @@ import { User } from "../types";
 interface Profile {
   id: string;
   business_id: string | null;
+  business_name?: string | null;
   role: string;
   status: string;
   full_name: string | null;
+  inventory_model: string | null; // MODEL_A or MODEL_B
 }
 
 interface AuthState {
@@ -49,6 +51,7 @@ interface AuthContextType extends AuthState {
   logout: () => Promise<void>;
   clearError: () => void;
   refreshProfile: () => Promise<void>;
+  updateProfile: (data: Partial<Profile>) => Promise<boolean>;
   supabase: SupabaseClient | null;
 }
 
@@ -313,6 +316,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, error: null }));
   }, []);
 
+  // Update profile (for model selection, etc.)
+  const updateProfile = useCallback(
+    async (data: Partial<Profile>): Promise<boolean> => {
+      try {
+        if (!supabase || !state.user) {
+          throw new Error("Not authenticated");
+        }
+
+        // Update profile in Supabase
+        const { error } = await supabase
+          .from("profiles")
+          .update(data)
+          .eq("id", state.user.id);
+
+        if (error) throw error;
+
+        // Update local state
+        setState((s) => ({
+          ...s,
+          profile: s.profile ? { ...s.profile, ...data } : null,
+        }));
+
+        console.log("[AuthContext] Profile updated:", data);
+        return true;
+      } catch (err) {
+        console.error("[AuthContext] Update profile error:", err);
+        return false;
+      }
+    },
+    [state.user]
+  );
+
   const value: AuthContextType = {
     user: state.user,
     profile: state.profile,
@@ -325,6 +360,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     logout,
     clearError,
     refreshProfile,
+    updateProfile,
     supabase,
   };
 
