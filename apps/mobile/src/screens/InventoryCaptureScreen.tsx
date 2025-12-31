@@ -17,6 +17,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  ToastAndroid,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -25,6 +26,11 @@ import * as SQLite from "expo-sqlite";
 import * as Haptics from "expo-haptics";
 import { Env } from "../env";
 import { calculateNetVolume } from "@snapko/shared";
+import {
+  VarianceModal,
+  SurplusBottomSheet,
+  VarianceReason,
+} from "../components";
 
 const CONFIDENCE_THRESHOLD = 85;
 
@@ -109,6 +115,17 @@ export default function InventoryCaptureScreen({
   // Dropdown state
   const [activeDropdown, setActiveDropdown] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Variance/Surplus modal state
+  const [showVarianceModal, setShowVarianceModal] = useState(false);
+  const [varianceItems, setVarianceItems] = useState<
+    { name: string; counted: number; expected: number; percent: number }[]
+  >([]);
+  const [showSurplusSheet, setShowSurplusSheet] = useState(false);
+  const [surplusItems, setSurplusItems] = useState<
+    { name: string; surplus: number; unit: string }[]
+  >([]);
+  const [isFlagged, setIsFlagged] = useState(false); // Perfect Score Trap
 
   // Load ingredients from local DB
   useEffect(() => {
@@ -1048,48 +1065,74 @@ export default function InventoryCaptureScreen({
 
                 // Check for critical variances (>15%)
                 const criticalVariances = variances.filter(
-                  (v) => v.percent > 15
+                  (v) => v.percent > 15 && v.counted < v.expected // Loss
                 );
                 const warningVariances = variances.filter(
                   (v) => v.percent >= 2 && v.percent <= 15
                 );
 
-                // 🚨 LEVEL 3: Critical Variance (>15%) - Heavy Haptic + Block
+                // Check for surplus (counted > expected)
+                const surplusDetected = variances.filter(
+                  (v) => v.counted > v.expected && v.percent > 5
+                );
+
+                // Check for Perfect Score Trap (liquid/powder items at 100% match)
+                const liquidItems = items.filter((item) => {
+                  const ing = ingredients.find(
+                    (i) => i.id === item.linkedIngredientId
+                  );
+                  return (
+                    ing &&
+                    (ing.base_unit === "ml" ||
+                      ing.base_unit === "g" ||
+                      ing.base_unit === "l")
+                  );
+                });
+                const perfectMatches = variances.filter((v) => v.percent < 0.5);
+                if (liquidItems.length >= 5 && perfectMatches.length >= 5) {
+                  // Perfect Score Trap - show toast warning
+                  setIsFlagged(true);
+                  if (Platform.OS === "android") {
+                    ToastAndroid.show(
+                      "🧐 Số liệu quá hoàn hảo (100% khớp). Bạn có chắc đã cân đo kỹ không?",
+                      ToastAndroid.LONG
+                    );
+                  } else {
+                    Alert.alert(
+                      "🧐 Perfect Score",
+                      "Số liệu quá hoàn hảo. Bạn có chắc đã cân đo kỹ không?"
+                    );
+                  }
+                }
+
+                // 🚨 LEVEL 3: Critical Variance (>15%) - Show VarianceModal
                 if (criticalVariances.length > 0) {
                   await Haptics.notificationAsync(
                     Haptics.NotificationFeedbackType.Error
                   );
+                  setVarianceItems(criticalVariances);
+                  setShowVarianceModal(true);
+                  return; // Block save until reason provided
+                }
 
-                  const varNames = criticalVariances
-                    .map(
-                      (v) =>
-                        `• ${v.name}: ${v.counted} vs ${
-                          v.expected
-                        } (${v.percent.toFixed(1)}%)`
-                    )
-                    .join("\n");
-
-                  Alert.alert(
-                    "⚠️ CẢNH BÁO CHÊNH LỆCH LỚN",
-                    `Các mục sau có sai số >15%:\n\n${varNames}\n\nBạn PHẢI giải trình trước khi lưu.`,
-                    [
-                      { text: "Hủy", style: "cancel" },
-                      {
-                        text: "Giải trình & Lưu",
-                        style: "destructive",
-                        onPress: () => {
-                          // In production: show text input modal for explanation
-                          // For now: allow save with flag
-                          Alert.prompt?.(
-                            "Giải trình",
-                            "Nhập lý do chênh lệch:",
-                            [{ text: "OK" }]
-                          );
-                        },
-                      },
-                    ]
+                // 📦 Surplus Detection - Show Bottom Sheet
+                if (surplusDetected.length > 0) {
+                  setSurplusItems(
+                    surplusDetected.map((v) => ({
+                      name: v.name,
+                      surplus: v.counted - v.expected,
+                      unit:
+                        items.find(
+                          (i) =>
+                            i.linkedIngredientId &&
+                            ingredients.find(
+                              (ing) => ing.id === i.linkedIngredientId
+                            )?.name === v.name
+                        )?.unit || "đơn vị",
+                    }))
                   );
-                  return; // Block save
+                  setShowSurplusSheet(true);
+                  return; // Wait for user response
                 }
 
                 // ⚠️ LEVEL 2: Warning Variance (2-15%) - Light Haptic
@@ -1156,6 +1199,84 @@ export default function InventoryCaptureScreen({
           </Pressable>
         )}
       </ScrollView>
+
+      {/* Variance Modal - >15% Loss */}
+      <VarianceModal
+        visible={showVarianceModal}
+        items={varianceItems}
+        onSubmit={async (reason: VarianceReason, note?: string) => {
+          setShowVarianceModal(false);
+          // Save with reason attached
+          try {
+            const db = await SQLite.openDatabaseAsync("snapko.db");
+            const id = crypto.randomUUID();
+            await db.runAsync(
+              `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
+               VALUES (?, ?, ?, ?, ?)`,
+              [
+                id,
+                snapMode,
+                JSON.stringify({
+                  items,
+                  variance_reason: reason,
+                  variance_note: note,
+                  is_flagged: isFlagged,
+                }),
+                new Date().toISOString(),
+                0,
+              ]
+            );
+            await Haptics.notificationAsync(
+              Haptics.NotificationFeedbackType.Success
+            );
+            Alert.alert("Đã lưu", "Phiếu kiểm kê đã lưu với giải trình.");
+            onBack();
+          } catch (err) {
+            console.error("Save failed:", err);
+            Alert.alert("Lỗi", "Không thể lưu dữ liệu");
+          }
+        }}
+        onCancel={() => setShowVarianceModal(false)}
+      />
+
+      {/* Surplus Bottom Sheet */}
+      <SurplusBottomSheet
+        visible={showSurplusSheet}
+        items={surplusItems}
+        onConfirm={async () => {
+          setShowSurplusSheet(false);
+          // Create transfer log automatically
+          try {
+            const db = await SQLite.openDatabaseAsync("snapko.db");
+            const id = crypto.randomUUID();
+            await db.runAsync(
+              `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
+               VALUES (?, ?, ?, ?, ?)`,
+              [
+                id,
+                "TRANSFER_AUTO",
+                JSON.stringify({
+                  surplus_items: surplusItems,
+                  auto_created: true,
+                }),
+                new Date().toISOString(),
+                0,
+              ]
+            );
+            await Haptics.notificationAsync(
+              Haptics.NotificationFeedbackType.Success
+            );
+            Alert.alert(
+              "Đã tạo",
+              "Phiếu nhập bù từ Kho Tổng đã được tạo tự động."
+            );
+            // Continue to save the stock check
+          } catch (err) {
+            console.error("Auto transfer failed:", err);
+          }
+        }}
+        onDismiss={() => setShowSurplusSheet(false)}
+      />
     </View>
   );
 }
