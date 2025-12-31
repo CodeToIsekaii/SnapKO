@@ -19,6 +19,12 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import {
+  AreaSelectorModal,
+  FreezeAlertModal,
+  StorageArea as AreaType,
+  CheckMode,
+} from "../../../components";
 
 const COLORS = {
   background: "#121212",
@@ -56,6 +62,13 @@ export default function InventoryScreen() {
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Stock flow modals state
+  const [showAreaSelector, setShowAreaSelector] = useState(false);
+  const [showFreezeAlert, setShowFreezeAlert] = useState(false);
+  const [pendingCheckMode, setPendingCheckMode] = useState<CheckMode | null>(
+    null
+  );
+
   useEffect(() => {
     loadData();
   }, []);
@@ -84,6 +97,48 @@ export default function InventoryScreen() {
   const handleAreaChange = (area: StorageArea) => {
     setSelectedArea(area);
     // TODO: Reload stock items for this area
+  };
+
+  // Stock check flow: AreaSelector -> (FreezeAlert for Full) -> Camera
+  const handleStockCheckPress = () => {
+    setShowAreaSelector(true);
+  };
+
+  const handleAreaSelected = (area: AreaType, mode?: CheckMode) => {
+    setShowAreaSelector(false);
+
+    if (area === "BAR") {
+      // Bar: Direct to camera in BAR mode
+      router.push({ pathname: "/camera/stock", params: { area: "BAR" } });
+    } else if (area === "WAREHOUSE") {
+      if (mode === "FULL") {
+        // Warehouse Full Count: Show Freeze Alert first
+        setPendingCheckMode("FULL");
+        setShowFreezeAlert(true);
+      } else {
+        // Warehouse Spot Check: Direct to camera
+        router.push({
+          pathname: "/camera/stock",
+          params: { area: "WAREHOUSE", mode: "SPOT" },
+        });
+      }
+    }
+  };
+
+  const handleFreezeConfirm = () => {
+    setShowFreezeAlert(false);
+    // User confirmed freeze -> navigate to camera for full count
+    router.push({
+      pathname: "/camera/stock",
+      params: { area: "WAREHOUSE", mode: "FULL" },
+    });
+    setPendingCheckMode(null);
+  };
+
+  const handleFreezeCancel = () => {
+    setShowFreezeAlert(false);
+    setPendingCheckMode(null);
+    // User wants to transfer first -> go back to inventory
   };
 
   const isLowStock = (item: StockItem) => item.quantity < item.min_threshold;
@@ -132,7 +187,7 @@ export default function InventoryScreen() {
         <Text style={styles.title}>Tồn kho</Text>
         <TouchableOpacity
           style={styles.snapButton}
-          onPress={() => router.push("/camera/stock")}
+          onPress={handleStockCheckPress}
         >
           <Ionicons name="camera" size={20} color="#FFF" />
           <Text style={styles.snapButtonText}>Kiểm kho</Text>
@@ -197,6 +252,18 @@ export default function InventoryScreen() {
             </TouchableOpacity>
           </View>
         }
+      />
+
+      {/* Stock Check Flow Modals */}
+      <AreaSelectorModal
+        visible={showAreaSelector}
+        onClose={() => setShowAreaSelector(false)}
+        onSelect={handleAreaSelected}
+      />
+      <FreezeAlertModal
+        visible={showFreezeAlert}
+        onConfirm={handleFreezeConfirm}
+        onCancel={handleFreezeCancel}
       />
     </View>
   );
