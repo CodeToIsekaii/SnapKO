@@ -839,33 +839,55 @@ export default function InventoryCaptureScreen({
                 </View>
               )}
 
-              {/* Quantity + Unit */}
-              <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
-                <TextInput
-                  value={String(item.quantity)}
-                  onChangeText={(t) =>
-                    updateItem(index, "quantity", parseFloat(t) || 0)
-                  }
-                  keyboardType="numeric"
-                  style={{
-                    backgroundColor: "#121212",
-                    borderRadius: 8,
-                    padding: 12,
-                    color: "white",
-                    flex: 1,
-                  }}
-                />
-                <TextInput
-                  value={item.unit}
-                  onChangeText={(t) => updateItem(index, "unit", t)}
-                  style={{
-                    backgroundColor: "#121212",
-                    borderRadius: 8,
-                    padding: 12,
-                    color: "white",
-                    flex: 1,
-                  }}
-                />
+              {/* Quantity + Unit with Labels */}
+              <View style={{ marginBottom: 12 }}>
+                <View style={{ flexDirection: "row", marginBottom: 4, gap: 8 }}>
+                  <Text style={{ color: "#94A3B8", fontSize: 12, flex: 1 }}>
+                    {snapMode === "STOCK"
+                      ? "Tồn cuối"
+                      : snapMode === "SALES"
+                      ? "Số lượng bán"
+                      : "Số lượng"}
+                  </Text>
+                  <Text style={{ color: "#94A3B8", fontSize: 12, flex: 1 }}>
+                    Đơn vị
+                  </Text>
+                </View>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <TextInput
+                    value={String(item.quantity)}
+                    onChangeText={(t) =>
+                      updateItem(index, "quantity", parseFloat(t) || 0)
+                    }
+                    keyboardType="numeric"
+                    placeholder="0"
+                    placeholderTextColor="#475569"
+                    style={{
+                      backgroundColor: "#121212",
+                      borderRadius: 8,
+                      padding: 12,
+                      color: "white",
+                      flex: 1,
+                      borderWidth: 1,
+                      borderColor: "#2A2A2A",
+                    }}
+                  />
+                  <TextInput
+                    value={item.unit}
+                    onChangeText={(t) => updateItem(index, "unit", t)}
+                    placeholder="đơn vị"
+                    placeholderTextColor="#475569"
+                    style={{
+                      backgroundColor: "#121212",
+                      borderRadius: 8,
+                      padding: 12,
+                      color: "white",
+                      flex: 1,
+                      borderWidth: 1,
+                      borderColor: "#2A2A2A",
+                    }}
+                  />
+                </View>
               </View>
 
               {/* 🧮 LIVE FEEDBACK - TARE & DENSITY */}
@@ -902,80 +924,80 @@ export default function InventoryCaptureScreen({
                           marginBottom: 8,
                         }}
                       >
-                        <Text
-                          style={{
-                            color: "#EF4444",
-                            fontSize: 12,
-                            fontWeight: "600",
-                          }}
-                        >
-                          ⚠️ Trọng lượng ({item.quantity}
-                          {item.unit}) nhỏ hơn vỏ chai ({matched.tare_weight}g)!
+                        <Text style={{ color: "#DC2626", fontSize: 12 }}>
+                          ⚠️ Trọng lượng không hợp lệ (nhỏ hơn tare)
                         </Text>
                       </View>
                     );
                   }
 
-                  if (netMl !== null) {
-                    return (
-                      <View
-                        style={{
-                          backgroundColor: "#F0F9FF",
-                          padding: 8,
-                          borderRadius: 8,
-                          marginBottom: 8,
-                        }}
-                      >
-                        <Text style={{ color: "#0369A1", fontSize: 12 }}>
-                          ℹ️ Trừ vỏ {matched.tare_weight}g, tỷ trọng{" "}
-                          {matched.density} → Thực tế:{" "}
-                          <Text style={{ fontWeight: "700" }}>
-                            {netMl >= 1000
-                              ? `${(netMl / 1000).toFixed(2)}L`
-                              : `${netMl}ml`}
-                          </Text>
-                        </Text>
-                      </View>
-                    );
-                  }
+                  return (
+                    <View
+                      style={{
+                        backgroundColor: "#1A1A1A",
+                        padding: 8,
+                        borderRadius: 8,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <Text style={{ color: "#94A3B8", fontSize: 12 }}>
+                        📊 Quy đổi: {netMl.toFixed(0)}ml (trừ bình{" "}
+                        {matched.tare_weight}g, tỷ trọng {matched.density})
+                      </Text>
+                    </View>
+                  );
                 }
                 return null;
               })()}
 
-              {/* Unit cost */}
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 8,
-                  marginBottom: 8,
-                }}
-              >
-                <Text style={{ color: "#64748B", fontSize: 12 }}>Đơn giá:</Text>
-                <TextInput
-                  value={item.unitCost ? String(item.unitCost) : ""}
-                  onChangeText={(t) =>
-                    updateItem(index, "unitCost", parseFloat(t) || null)
-                  }
-                  keyboardType="numeric"
-                  placeholder="VND"
-                  placeholderTextColor="#475569"
+              {/* Unit cost - Only for IMPORT mode */}
+              {snapMode === "IMPORT" && (
+                <View
                   style={{
-                    backgroundColor: "#121212",
-                    borderRadius: 8,
-                    padding: 8,
-                    color: "white",
-                    flex: 1,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 8,
+                    marginBottom: 8,
                   }}
-                />
-              </View>
+                >
+                  <Text style={{ color: "#94A3B8", fontSize: 12 }}>
+                    Đơn giá:
+                  </Text>
+                  <TextInput
+                    value={item.unitCost ? String(item.unitCost) : ""}
+                    onChangeText={(t) =>
+                      updateItem(index, "unitCost", parseFloat(t) || null)
+                    }
+                    keyboardType="numeric"
+                    placeholder="VND"
+                    placeholderTextColor="#475569"
+                    style={{
+                      backgroundColor: "#121212",
+                      borderRadius: 8,
+                      padding: 8,
+                      color: "white",
+                      flex: 1,
+                      borderWidth: 1,
+                      borderColor: "#2A2A2A",
+                    }}
+                  />
+                </View>
+              )}
 
               {/* Remove */}
-              <Pressable onPress={() => removeItem(index)}>
+              <Pressable
+                onPress={() => removeItem(index)}
+                style={{ paddingVertical: 8 }}
+              >
                 <Text
-                  style={{ color: "#EF4444", textAlign: "right", fontSize: 12 }}
+                  style={{
+                    color: "#EF4444",
+                    textAlign: "center",
+                    fontSize: 13,
+                    fontWeight: "500",
+                  }}
                 >
-                  Xóa mục này
+                  ✕ Xóa mục này
                 </Text>
               </Pressable>
             </View>
