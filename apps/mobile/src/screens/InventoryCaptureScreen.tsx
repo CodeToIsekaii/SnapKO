@@ -224,7 +224,7 @@ export default function InventoryCaptureScreen({
     });
   };
 
-  // Parse image with AI - Multi-step loading
+  // Parse image with AI - Route to different functions based on snapMode
   const handleParseImage = async () => {
     if (!imageUri) return;
 
@@ -239,32 +239,52 @@ export default function InventoryCaptureScreen({
       );
       setLocalImagePath(savedPath);
 
-      // Step 2: Upload to AI (with 30 second timeout)
+      // Step 2: Determine endpoint and payload based on snapMode
+      let endpoint: string;
+      let payload: Record<string, unknown>;
+      let loadingMessage: string;
+
+      switch (snapMode) {
+        case "IMPORT":
+          endpoint = `${Env.SUPABASE_URL}/functions/v1/ai-parse-invoice`;
+          payload = { imageBase64: base64, mimeType };
+          loadingMessage = "🤖 AI đang đọc hóa đơn...";
+          break;
+        case "SALES":
+          endpoint = `${Env.SUPABASE_URL}/functions/v1/ai-parse-sales`;
+          payload = { imageBase64: base64, mimeType };
+          loadingMessage = "🤖 AI đang đọc báo cáo bán hàng...";
+          break;
+        case "STOCK":
+        default:
+          endpoint = `${Env.SUPABASE_URL}/functions/v1/ai-parse-handwriting`;
+          payload = { image_base64: base64, business_id: "" };
+          loadingMessage = "🤖 AI đang đọc phiếu kiểm kho...";
+          break;
+      }
+
+      // Step 3: Call AI with timeout
       setLoadingStep("☁️ Đang gửi lên AI...");
-      console.log("[Capture] Calling AI parse API...");
+      console.log(`[Capture] Calling ${snapMode} parse API...`);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-      const response = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/ai-parse-handwriting`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: Env.SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify({ image_base64: base64, business_id: "" }),
-          signal: controller.signal,
-        }
-      );
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: Env.SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
       clearTimeout(timeoutId);
 
-      // Step 3: AI Processing
-      setLoadingStep("🤖 AI đang đọc nhãn...");
+      // Step 4: AI Processing
+      setLoadingStep(loadingMessage);
       const data = await response.json();
 
-      // DEBUG: Log response for troubleshooting
       console.log("[Capture] AI Response status:", response.status);
       console.log(
         "[Capture] AI Response data:",
@@ -276,23 +296,55 @@ export default function InventoryCaptureScreen({
         throw new Error(data.error || "AI parse failed");
       }
 
-      // Step 4: Mapping data
+      // Step 5: Transform response to common format based on snapMode
       setLoadingStep("📊 Đang chuẩn hóa dữ liệu...");
-      if (data.items && data.items.length > 0) {
-        const mapped = autoMapItems(data.items);
+      let rawItems: AiRawItem[] = [];
+
+      if (snapMode === "STOCK") {
+        // ai-parse-handwriting returns { items: StockItem[] }
+        rawItems = (data.items || []).map((item: any) => ({
+          ingredient_name: item.ingredient_name || item.name || "",
+          stock_qty: item.stock_qty || item.quantity || 0,
+          import_qty: item.import_qty || 0,
+          unit: item.unit || "",
+          confidence: item.confidence || 80,
+          needs_review: item.needs_review || false,
+        }));
+      } else if (snapMode === "IMPORT") {
+        // ai-parse-invoice returns { items: InvoiceItem[] }
+        rawItems = (data.items || []).map((item: any) => ({
+          ingredient_name: item.name || item.item_name || "",
+          stock_qty: item.quantity || item.qty || 0,
+          import_qty: 0,
+          unit: item.unit || "",
+          confidence: item.confidence || 80,
+          needs_review: false,
+        }));
+      } else if (snapMode === "SALES") {
+        // ai-parse-sales returns { menu_items: SalesItem[] }
+        rawItems = (data.menu_items || data.items || []).map((item: any) => ({
+          ingredient_name: item.name || item.menu_item || "",
+          stock_qty: item.quantity_sold || item.quantity || 0,
+          import_qty: 0,
+          unit: item.unit || "phần",
+          confidence: item.confidence || 80,
+          needs_review: false,
+        }));
+      }
+
+      if (rawItems.length > 0) {
+        const mapped = autoMapItems(rawItems);
         setItems(mapped);
 
-        // If 2-screen mode enabled, navigate to ConfirmScreen
         if (onNavigateToConfirm && savedPath) {
           onNavigateToConfirm(mapped, savedPath);
         }
       } else {
         console.warn("[Capture] No items found in response");
-        setError("Không tìm thấy nguyên liệu. Thử chụp lại?");
+        setError("Không tìm thấy dữ liệu. Thử chụp lại?");
       }
     } catch (err: any) {
       console.error("[Capture] Parse error:", err);
-      // Handle timeout specifically
       if (err.name === "AbortError") {
         setError("Quá thời gian chờ (30s). Kiểm tra kết nối mạng và thử lại.");
       } else {
@@ -421,8 +473,10 @@ export default function InventoryCaptureScreen({
           borderBottomColor: "#2A2A2A",
         }}
       >
-        <Pressable onPress={onBack}>
-          <Text style={{ color: "#94A3B8", fontSize: 16 }}>← Quay lại</Text>
+        <Pressable onPress={onBack} style={{ padding: 8, marginLeft: -8 }}>
+          <Text style={{ color: "#E07A2F", fontSize: 16, fontWeight: "600" }}>
+            ← Quay lại
+          </Text>
         </Pressable>
         <Text
           style={{
@@ -1063,16 +1117,16 @@ export default function InventoryCaptureScreen({
             }}
             disabled={!canSave}
             style={{
-              backgroundColor: canSave ? "#55A630" : "#334155",
+              backgroundColor: canSave ? "#E07A2F" : "#334155",
               padding: 16,
               borderRadius: 12,
               alignItems: "center",
-              marginTop: 12,
-              marginBottom: 40,
+              marginTop: 16,
+              marginBottom: 100,
             }}
           >
-            <Text style={{ color: "white", fontWeight: "700" }}>
-              {canSave ? "💾 Lưu và Kết thúc" : "⚠️ Cần chọn nguyên liệu"}
+            <Text style={{ color: "white", fontWeight: "700", fontSize: 16 }}>
+              {canSave ? "✓ Xác nhận & Lưu" : "⚠️ Chọn nguyên liệu"}
             </Text>
           </Pressable>
         )}
