@@ -65,19 +65,21 @@ export async function inviteApprove(
 }
 
 // AI Parse APIs
-export async function aiParseInventory(input: {
-  imageBase64: string;
-  mimeType: string;
+export async function aiParseHandwriting(input: {
+  image_base64: string;
+  business_id: string;
 }): Promise<{
   items: Array<{
-    name: string;
-    quantity: number;
-    unit: string;
+    ingredient_name: string;
+    stock_qty: number;
+    import_qty: number;
+    unit?: string;
     confidence: number;
+    needs_review?: boolean;
   }>;
-  rawJson: string;
+  confidence: number;
 }> {
-  return callEdgeFunction("ai-parse-inventory", { body: input });
+  return callEdgeFunction("ai-parse-handwriting", { body: input });
 }
 
 export async function aiParseMenu(input: {

@@ -28,11 +28,12 @@ const CONFIDENCE_THRESHOLD = 85;
 
 // Types
 interface AiRawItem {
-  name: string;
-  quantity: number;
-  unit: string;
+  ingredient_name: string;
+  stock_qty: number;
+  import_qty: number;
+  unit?: string;
   confidence: number;
-  unitCost?: number | null;
+  needs_review?: boolean;
 }
 
 interface AiMappedItem {
@@ -189,7 +190,7 @@ export default function InventoryCaptureScreen({
 
       for (const ing of ingredients) {
         const aliases = ing.aliases ? JSON.parse(ing.aliases) : [];
-        const score = getMatchScore(raw.name, ing.name, aliases);
+        const score = getMatchScore(raw.ingredient_name, ing.name, aliases);
         if (score > bestScore) {
           bestScore = score;
           bestMatch = ing;
@@ -199,11 +200,11 @@ export default function InventoryCaptureScreen({
       // Auto-link if score >= 80
       if (bestMatch && bestScore >= 80) {
         return {
-          rawName: raw.name,
-          quantity: raw.quantity,
-          unit: raw.unit,
+          rawName: raw.ingredient_name,
+          quantity: raw.stock_qty,
+          unit: raw.unit || bestMatch.base_unit,
           confidence: raw.confidence,
-          unitCost: raw.unitCost ?? bestMatch.unit_cost,
+          unitCost: bestMatch.unit_cost,
           linkedIngredientId: bestMatch.id,
           linkedIngredientName: bestMatch.name,
           isNewIngredient: false,
@@ -211,11 +212,11 @@ export default function InventoryCaptureScreen({
       }
 
       return {
-        rawName: raw.name,
-        quantity: raw.quantity,
-        unit: raw.unit,
+        rawName: raw.ingredient_name,
+        quantity: raw.stock_qty,
+        unit: raw.unit || "",
         confidence: raw.confidence,
-        unitCost: raw.unitCost ?? null,
+        unitCost: null,
         linkedIngredientId: null,
         linkedIngredientName: null,
         isNewIngredient: false,
@@ -246,14 +247,14 @@ export default function InventoryCaptureScreen({
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
       const response = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/ai-parse-inventory`,
+        `${Env.SUPABASE_URL}/functions/v1/ai-parse-handwriting`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             apikey: Env.SUPABASE_ANON_KEY,
           },
-          body: JSON.stringify({ imageBase64: base64, mimeType }),
+          body: JSON.stringify({ image_base64: base64, business_id: "" }),
           signal: controller.signal,
         }
       );
