@@ -41,10 +41,12 @@ const COLORS = {
 interface AuthState {
   isLoggedIn: boolean;
   hasBusinessId: boolean;
+  hasOperationalModel: boolean; // Shop has configured Model A/B
   isLoading: boolean;
   userId: string | null;
   businessId: string | null;
   role: string | null;
+  operationalModel: string | null; // 'MODEL_A' | 'MODEL_B' | null
 }
 
 export default function RootLayout() {
@@ -54,10 +56,12 @@ export default function RootLayout() {
   const [authState, setAuthState] = useState<AuthState>({
     isLoggedIn: false,
     hasBusinessId: false,
+    hasOperationalModel: false,
     isLoading: true,
     userId: null,
     businessId: null,
     role: null,
+    operationalModel: null,
   });
 
   // Initialize database and check auth on mount
@@ -78,16 +82,19 @@ export default function RootLayout() {
             business_id: string | null;
             role: string;
             status: string;
+            inventory_model: string | null;
           }>("SELECT * FROM local_profiles LIMIT 1");
 
           if (profile) {
             setAuthState({
               isLoggedIn: true,
               hasBusinessId: !!profile.business_id,
+              hasOperationalModel: !!profile.inventory_model,
               isLoading: false,
               userId: profile.id,
               businessId: profile.business_id,
               role: profile.role,
+              operationalModel: profile.inventory_model,
             });
           } else {
             setAuthState((prev) => ({ ...prev, isLoading: false }));
@@ -143,7 +150,7 @@ export default function RootLayout() {
 
     const inAuthGroup = segments[0] === "(auth)";
     const inTabsGroup = segments[0] === "(tabs)";
-
+    const inSetupPending = segments.includes("setup-pending");
     const inJoinStaff = segments.includes("join-staff");
 
     if (!authState.isLoggedIn && !inAuthGroup) {
@@ -156,8 +163,21 @@ export default function RootLayout() {
     ) {
       // Logged in but no business (new staff) -> redirect to join
       router.replace("/(auth)/join-staff");
-    } else if (authState.isLoggedIn && authState.hasBusinessId && inAuthGroup) {
-      // Logged in with business and still on auth screen -> redirect to main app
+    } else if (
+      authState.isLoggedIn &&
+      authState.hasBusinessId &&
+      !authState.hasOperationalModel &&
+      !inSetupPending
+    ) {
+      // Logged in with business but shop hasn't configured model -> waiting room
+      router.replace("/(auth)/setup-pending");
+    } else if (
+      authState.isLoggedIn &&
+      authState.hasBusinessId &&
+      authState.hasOperationalModel &&
+      (inAuthGroup || inSetupPending)
+    ) {
+      // Logged in with business and model configured -> redirect to main app
       router.replace("/(tabs)/dashboard");
     }
   }, [authState, segments]);

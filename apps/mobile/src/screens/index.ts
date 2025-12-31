@@ -17,3 +17,4 @@ export { default as ProfileEditScreen } from "./ProfileEditScreen";
 export { default as SettingsScreen } from "./SettingsScreen";
 export { default as OwnerPendingListScreen } from "./OwnerPendingListScreen";
 export { default as DashboardScreen } from "./DashboardScreen";
+export { default as SetupPendingScreen } from "./SetupPendingScreen";
