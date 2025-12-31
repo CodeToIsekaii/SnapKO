@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { Env } from "../env";
+import InviteCodeGeneratorModal from "../components/InviteCodeGeneratorModal";
 
 const PRIVACY_URL = "https://snapko.vn/privacy";
 const TERMS_URL = "https://snapko.vn/terms";
@@ -26,6 +27,7 @@ interface SettingsScreenProps {
   onLogout: () => void;
   userName?: string;
   userRole?: string;
+  onEditProfile?: () => void;
 }
 
 export default function SettingsScreen({
@@ -33,8 +35,13 @@ export default function SettingsScreen({
   onLogout,
   userName,
   userRole,
+  onEditProfile,
 }: SettingsScreenProps) {
   const [deleting, setDeleting] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+
+  // Check if user is Owner
+  const isOwner = userRole === "OWNER";
 
   const handleDeleteAccount = () => {
     Alert.alert(
@@ -103,7 +110,7 @@ export default function SettingsScreen({
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#0F172A" }}>
+    <View style={{ flex: 1, backgroundColor: "#121212" }}>
       {/* Header */}
       <View
         style={{
@@ -112,7 +119,7 @@ export default function SettingsScreen({
           padding: 16,
           paddingTop: 60,
           borderBottomWidth: 1,
-          borderBottomColor: "#1E293B",
+          borderBottomColor: "#2A2A2A",
         }}
       >
         <Pressable onPress={onBack}>
@@ -137,7 +144,7 @@ export default function SettingsScreen({
         <View style={{ padding: 16 }}>
           <View
             style={{
-              backgroundColor: "#1E293B",
+              backgroundColor: "#1A1A1A",
               borderRadius: 12,
               padding: 16,
             }}
@@ -148,15 +155,92 @@ export default function SettingsScreen({
             <Text style={{ color: "#64748B", fontSize: 14, marginTop: 4 }}>
               {userRole === "OWNER" ? "Chủ quán" : "Nhân viên"}
             </Text>
+
+            {/* Edit Profile Button - Owner only */}
+            {onEditProfile && (
+              <Pressable
+                onPress={onEditProfile}
+                style={{
+                  marginTop: 12,
+                  paddingVertical: 8,
+                }}
+              >
+                <Text style={{ color: "#E07A2F", fontSize: 14 }}>
+                  ✏️ Chỉnh sửa hồ sơ
+                </Text>
+              </Pressable>
+            )}
           </View>
         </View>
+
+        {/* Staff Management - OWNER only */}
+        {isOwner && (
+          <View style={{ padding: 16, paddingTop: 0 }}>
+            <Text
+              style={{
+                color: "#64748B",
+                fontSize: 12,
+                marginBottom: 8,
+                textTransform: "uppercase",
+              }}
+            >
+              Quản lý nhân sự
+            </Text>
+
+            <View
+              style={{
+                backgroundColor: "#1A1A1A",
+                borderRadius: 12,
+                padding: 16,
+                borderWidth: 1,
+                borderColor: "#2A2A2A",
+              }}
+            >
+              <Text
+                style={{ color: "#94A3B8", fontSize: 14, marginBottom: 12 }}
+              >
+                Bạn đang là Chủ quán. Tạo mã mời để nhân viên tham gia quản lý
+                kho.
+              </Text>
+
+              <Pressable
+                onPress={() => setShowInviteModal(true)}
+                style={{
+                  backgroundColor: "#6B8E23",
+                  borderRadius: 10,
+                  padding: 14,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text
+                  style={{ color: "white", fontWeight: "600", fontSize: 15 }}
+                >
+                  + Tạo mã mời nhân viên
+                </Text>
+              </Pressable>
+
+              <Text
+                style={{
+                  color: "#64748B",
+                  fontSize: 11,
+                  marginTop: 8,
+                  textAlign: "center",
+                }}
+              >
+                Mã mời có hiệu lực trong 48 giờ
+              </Text>
+            </View>
+          </View>
+        )}
 
         {/* Account Management - Opens web (Apple compliant - no payment keywords) */}
         <View style={{ padding: 16, paddingTop: 0 }}>
           <Pressable
             onPress={() => openLink(ACCOUNT_URL)}
             style={{
-              backgroundColor: "#3B82F6",
+              backgroundColor: "#E07A2F",
               borderRadius: 12,
               padding: 16,
               flexDirection: "row",
@@ -196,7 +280,7 @@ export default function SettingsScreen({
           <Pressable
             onPress={() => openLink(PRIVACY_URL)}
             style={{
-              backgroundColor: "#1E293B",
+              backgroundColor: "#1A1A1A",
               borderRadius: 12,
               padding: 16,
               marginBottom: 8,
@@ -211,7 +295,7 @@ export default function SettingsScreen({
           <Pressable
             onPress={() => openLink(TERMS_URL)}
             style={{
-              backgroundColor: "#1E293B",
+              backgroundColor: "#1A1A1A",
               borderRadius: 12,
               padding: 16,
               flexDirection: "row",
@@ -239,7 +323,7 @@ export default function SettingsScreen({
           <Pressable
             onPress={onLogout}
             style={{
-              backgroundColor: "#1E293B",
+              backgroundColor: "#1A1A1A",
               borderRadius: 12,
               padding: 16,
               marginBottom: 8,
@@ -252,7 +336,7 @@ export default function SettingsScreen({
             onPress={handleDeleteAccount}
             disabled={deleting}
             style={{
-              backgroundColor: "#1E293B",
+              backgroundColor: "#1A1A1A",
               borderRadius: 12,
               padding: 16,
               flexDirection: "row",
@@ -279,6 +363,12 @@ export default function SettingsScreen({
           </Text>
         </View>
       </ScrollView>
+
+      {/* Invite Code Modal */}
+      <InviteCodeGeneratorModal
+        visible={showInviteModal}
+        onClose={() => setShowInviteModal(false)}
+      />
     </View>
   );
 }

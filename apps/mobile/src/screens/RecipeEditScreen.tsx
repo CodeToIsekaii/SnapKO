@@ -300,7 +300,7 @@ export default function RecipeEditScreen({
           placeholder="VD: Trà Đào"
           placeholderTextColor="#475569"
           style={{
-            backgroundColor: "#1E293B",
+            backgroundColor: "#1A1A1A",
             borderRadius: 8,
             padding: 12,
             color: "white",
@@ -317,7 +317,7 @@ export default function RecipeEditScreen({
           placeholder="35000"
           placeholderTextColor="#475569"
           style={{
-            backgroundColor: "#1E293B",
+            backgroundColor: "#1A1A1A",
             borderRadius: 8,
             padding: 12,
             color: "white",
@@ -333,7 +333,7 @@ export default function RecipeEditScreen({
           placeholder="VD: Trà"
           placeholderTextColor="#475569"
           style={{
-            backgroundColor: "#1E293B",
+            backgroundColor: "#1A1A1A",
             borderRadius: 8,
             padding: 12,
             color: "white",
@@ -351,7 +351,7 @@ export default function RecipeEditScreen({
         >
           <Text style={{ color: "white", fontWeight: "600" }}>Nguyên liệu</Text>
           <Pressable onPress={() => setShowPicker(true)}>
-            <Text style={{ color: "#3B82F6" }}>+ Thêm</Text>
+            <Text style={{ color: "#E07A2F" }}>+ Thêm</Text>
           </Pressable>
         </View>
 
@@ -461,7 +461,7 @@ export default function RecipeEditScreen({
         {/* COGS Summary */}
         <View
           style={{
-            backgroundColor: "#1E293B",
+            backgroundColor: "#1A1A1A",
             borderRadius: 12,
             padding: 16,
             marginTop: 16,
@@ -489,7 +489,7 @@ export default function RecipeEditScreen({
             <Text style={{ color: "#94A3B8" }}>Lãi gộp</Text>
             <Text
               style={{
-                color: profit >= 0 ? "#22C55E" : "#EF4444",
+                color: profit >= 0 ? "#55A630" : "#EF4444",
                 fontWeight: "600",
               }}
             >
@@ -504,7 +504,7 @@ export default function RecipeEditScreen({
               style={{
                 color:
                   margin >= 50
-                    ? "#22C55E"
+                    ? "#55A630"
                     : margin >= 30
                     ? "#F59E0B"
                     : "#EF4444",
@@ -530,7 +530,7 @@ export default function RecipeEditScreen({
         >
           <View
             style={{
-              backgroundColor: "#1E293B",
+              backgroundColor: "#1A1A1A",
               borderRadius: 12,
               maxHeight: 400,
             }}
@@ -549,7 +549,7 @@ export default function RecipeEditScreen({
                   style={{
                     padding: 16,
                     borderTopWidth: 1,
-                    borderTopColor: "#334155",
+                    borderTopColor: "#2A2A2A",
                   }}
                 >
                   <Text style={{ color: "white" }}>{item.name}</Text>

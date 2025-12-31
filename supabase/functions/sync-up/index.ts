@@ -1,7 +1,7 @@
 // Sync-up Edge Function: Receive array of inventory logs and bulk upsert
 // Uses native Deno.serve() API per project rules
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "supabase";
 
 interface InventoryLogInput {
   id: string;

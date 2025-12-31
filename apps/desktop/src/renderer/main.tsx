@@ -4,17 +4,19 @@
 
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { useAuth } from "./hooks/useAuth";
+import { AuthProvider, useAuth } from "./hooks/AuthContext";
 import { LoginPage } from "./pages/LoginPage";
 import { Dashboard } from "./pages/Dashboard";
+import { ProfileSetupPage } from "./pages/ProfileSetupPage";
+import { COLORS } from "./styles/theme";
 import "./index.css";
 
 /**
  * App Root Component
- * Only handles: Check auth state → render LoginPage or Dashboard
+ * Only handles: Check auth state → render LoginPage, ProfileSetup, or Dashboard
  */
-function App() {
-  const { user, loading } = useAuth();
+function AppContent() {
+  const { user, profile, loading } = useAuth();
 
   // Loading state
   if (loading) {
@@ -33,7 +35,25 @@ function App() {
     return <LoginPage />;
   }
 
-  // Authenticated → Dashboard
+  // Authenticated but no business (first-time OWNER) → Profile Setup
+  // Note: Staff are invited via code and already have business_id
+  if (profile?.role === "OWNER" && !profile?.business_id) {
+    return <ProfileSetupPage />;
+  }
+
+  // Profile still loading (race condition) - show loading briefly
+  if (!profile) {
+    return (
+      <div style={styles.loadingContainer}>
+        <div style={styles.loadingContent}>
+          <span style={styles.logo}>SnapKO</span>
+          <p style={styles.loadingText}>Đang tải hồ sơ...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Authenticated with business → Dashboard
   return <Dashboard user={user} />;
 }
 
@@ -44,7 +64,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     alignItems: "center",
     minHeight: "100vh",
-    backgroundColor: "#0F172A",
+    backgroundColor: COLORS.background,
   },
   loadingContent: {
     textAlign: "center",
@@ -60,9 +80,11 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-// Mount app
+// Mount app with AuthProvider
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   </React.StrictMode>
 );

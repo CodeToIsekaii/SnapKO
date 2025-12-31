@@ -65,7 +65,7 @@ Rules:
 - Do NOT include personal data or faces
 - If no items found, return empty items array`;
 
-  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-001:generateContent?key=${encodeURIComponent(
     GEMINI_API_KEY
   )}`;
 

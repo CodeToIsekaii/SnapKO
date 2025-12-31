@@ -7,10 +7,11 @@
 
 import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import { BrowserWindow } from "electron";
+import { Env } from "../env";
 
-// Environment variables
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || "";
+// Environment variables (validated via Zod in env.ts)
+const SUPABASE_URL = Env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = Env.VITE_SUPABASE_ANON_KEY;
 
 // Realtime subscription
 let realtimeChannel: RealtimeChannel | null = null;

@@ -6,38 +6,30 @@
  * - Storing captured images locally
  * - Compressing images before upload
  * - Cleaning up after successful sync
+ *
+ * MIGRATED to new expo-file-system API (File/Directory classes) in SDK 54
  */
 
-import * as FileSystem from "expo-file-system";
+import { File, Directory, Paths } from "expo-file-system";
 import * as ImageManipulator from "expo-image-manipulator";
 
-/**
- * Get document directory path
- * Using a function to avoid type issues with documentDirectory
- */
-function getDocumentDirectory(): string {
-  // Cast to any to avoid TypeScript issues with expo-file-system types
-  const fs = FileSystem as unknown as { documentDirectory: string | null };
-  return fs.documentDirectory ?? "";
-}
+// Pending images directory name
+const PENDING_IMAGES_DIR = "pending_images";
 
 /**
- * Get pending images directory path
+ * Get pending images directory
  */
-function getPendingImagesDir(): string {
-  return `${getDocumentDirectory()}pending_images/`;
+function getPendingImagesDirectory(): Directory {
+  return new Directory(Paths.document, PENDING_IMAGES_DIR);
 }
 
 /**
  * Ensure the pending images directory exists
  */
 export async function ensurePendingImagesDir(): Promise<void> {
-  const pendingDir = getPendingImagesDir();
-  const dirInfo = await FileSystem.getInfoAsync(pendingDir);
-  if (!dirInfo.exists) {
-    await FileSystem.makeDirectoryAsync(pendingDir, {
-      intermediates: true,
-    });
+  const pendingDir = getPendingImagesDirectory();
+  if (!pendingDir.exists) {
+    pendingDir.create();
   }
 }
 
@@ -55,14 +47,15 @@ export async function saveImageLocally(
 
   const timestamp = Date.now();
   const filename = `${prefix}_${timestamp}.jpg`;
-  const localPath = `${getPendingImagesDir()}${filename}`;
 
-  await FileSystem.copyAsync({
-    from: uri,
-    to: localPath,
-  });
+  // Create source file from URI and copy to pending directory
+  const sourceFile = new File(uri);
+  const destDir = getPendingImagesDirectory();
+  const destFile = new File(destDir, filename);
 
-  return localPath;
+  sourceFile.copy(destFile);
+
+  return destFile.uri;
 }
 
 /**
@@ -97,9 +90,8 @@ export async function compressImage(
  * @returns Base64 encoded string
  */
 export async function getImageBase64(uri: string): Promise<string> {
-  const base64 = await FileSystem.readAsStringAsync(uri, {
-    encoding: "base64",
-  });
+  const file = new File(uri);
+  const base64 = await file.base64();
   return base64;
 }
 
@@ -109,9 +101,9 @@ export async function getImageBase64(uri: string): Promise<string> {
  */
 export async function deleteLocalImage(localPath: string): Promise<void> {
   try {
-    const fileInfo = await FileSystem.getInfoAsync(localPath);
-    if (fileInfo.exists) {
-      await FileSystem.deleteAsync(localPath);
+    const file = new File(localPath);
+    if (file.exists) {
+      file.delete();
     }
   } catch (error) {
     console.warn("Failed to delete local image:", error);
@@ -123,9 +115,11 @@ export async function deleteLocalImage(localPath: string): Promise<void> {
  */
 export async function getPendingImages(): Promise<string[]> {
   await ensurePendingImagesDir();
-  const pendingDir = getPendingImagesDir();
-  const files = await FileSystem.readDirectoryAsync(pendingDir);
-  return files.map((f) => `${pendingDir}${f}`);
+  const pendingDir = getPendingImagesDirectory();
+  const items = pendingDir.list();
+  return items
+    .filter((item): item is File => item instanceof File)
+    .map((file) => file.uri);
 }
 
 /**
@@ -140,7 +134,6 @@ export async function cleanupAllPendingImages(): Promise<void> {
  * Get file size in bytes
  */
 export async function getFileSize(uri: string): Promise<number> {
-  const fileInfo = await FileSystem.getInfoAsync(uri);
-  // expo-file-system types don't include size directly, cast as needed
-  return (fileInfo as { size?: number }).size ?? 0;
+  const file = new File(uri);
+  return file.size ?? 0;
 }

@@ -15,7 +15,7 @@ interface LoadingSpinnerProps {
 export default function LoadingSpinner({
   message,
   size = "large",
-  color = "#3B82F6",
+  color = "#E07A2F",
   fullScreen = false,
 }: LoadingSpinnerProps) {
   if (fullScreen) {
@@ -43,7 +43,7 @@ const styles = StyleSheet.create({
   },
   fullScreen: {
     flex: 1,
-    backgroundColor: "#0F172A",
+    backgroundColor: "#121212",
     alignItems: "center",
     justifyContent: "center",
   },

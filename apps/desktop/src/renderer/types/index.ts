@@ -38,7 +38,7 @@ export interface StaffProfile {
   full_name: string;
   phone_number: string;
   role: string;
-  status: "PENDING" | "ACTIVE" | "INACTIVE";
+  status: "PENDING" | "ACTIVE" | "INACTIVE" | "REJECTED";
   created_at: string;
 }
 

@@ -825,7 +825,7 @@ export default function LandingPage() {
               href="#"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
-              className="flex items-center gap-3 bg-white text-[#1E1E1E] rounded-xl px-5 py-3 hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-3 bg-white text-[#1E1E1E] rounded-xl px-5 py-3 hover:bg-[#FAF9F7] transition-colors"
             >
               <Apple className="w-5 h-5" />
               <div className="text-left">
@@ -837,7 +837,7 @@ export default function LandingPage() {
               href="#"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
-              className="flex items-center gap-3 bg-white text-[#1E1E1E] rounded-xl px-5 py-3 hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-3 bg-white text-[#1E1E1E] rounded-xl px-5 py-3 hover:bg-[#FAF9F7] transition-colors"
             >
               <Smartphone className="w-5 h-5" />
               <div className="text-left">

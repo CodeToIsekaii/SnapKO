@@ -305,7 +305,7 @@ export default function ConfirmLogScreen({
           onPress={handleSave}
           disabled={saving || items.length === 0}
           className={`p-4 rounded-xl items-center ${
-            saving || items.length === 0 ? "bg-gray-600" : "bg-[#E07A2F]"
+            saving || items.length === 0 ? "bg-[#1A1A1A]" : "bg-[#E07A2F]"
           }`}
         >
           {saving ? (

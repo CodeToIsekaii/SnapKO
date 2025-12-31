@@ -7,7 +7,7 @@
  * - AuthContext for state-driven navigation
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -21,6 +21,7 @@ import {
 } from "react-native";
 import { loginSchema, registerSchema, getFirstError } from "@snapko/shared";
 import { useAuth } from "../contexts/AuthContext";
+import { useGoogleAuth } from "../features/auth/hooks/useGoogleAuth";
 
 type Mode = "login" | "register";
 
@@ -34,7 +35,7 @@ const colors = {
   textPrimary: "#F5F3EF",
   textSecondary: "#B8B3A8",
   textMuted: "#64748B",
-  border: "#334155",
+  border: "#2A2A2A",
   error: "#E63946",
 };
 
@@ -44,12 +45,35 @@ interface LoginScreenProps {
 
 export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
   const { signIn, signUp } = useAuth();
+  const { state: googleState, signInWithGoogle } = useGoogleAuth();
+
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Handle Google auth state changes
+  useEffect(() => {
+    if (googleState.error) {
+      setError(googleState.error);
+    }
+  }, [googleState.error]);
+
+  // Show loading if Google or email auth is processing
+  const isAnyLoading = loading || googleState.isLoading;
+
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Google đăng nhập thất bại"
+      );
+    }
+  };
 
   const handleSubmit = async () => {
     setError(null);
@@ -286,6 +310,43 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
                 : "Đăng ký"}
             </Text>
           </Pressable>
+
+          {/* Google Login Button */}
+          {mode === "login" && (
+            <Pressable
+              onPress={handleGoogleSignIn}
+              disabled={isAnyLoading}
+              style={({ pressed }) => ({
+                backgroundColor: colors.surface,
+                borderRadius: 12,
+                padding: 16,
+                alignItems: "center",
+                flexDirection: "row",
+                justifyContent: "center",
+                gap: 10,
+                borderWidth: 2,
+                borderColor: colors.border,
+                opacity: pressed || isAnyLoading ? 0.7 : 1,
+              })}
+            >
+              {googleState.isLoading ? (
+                <ActivityIndicator color={colors.textPrimary} />
+              ) : (
+                <>
+                  <Text style={{ fontSize: 20 }}>🔵</Text>
+                  <Text
+                    style={{
+                      color: colors.textPrimary,
+                      fontSize: 16,
+                      fontWeight: "500",
+                    }}
+                  >
+                    Đăng nhập với Google
+                  </Text>
+                </>
+              )}
+            </Pressable>
+          )}
 
           {/* Toggle mode */}
           <Pressable onPress={toggleMode}>

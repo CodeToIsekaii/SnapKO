@@ -11,21 +11,16 @@
  */
 
 import * as ImageManipulator from "expo-image-manipulator";
-import * as FileSystem from "expo-file-system";
-import Constants from "expo-constants";
+import { File } from "expo-file-system";
+import { Env } from "../env";
 
 // =============================================
 // CONFIGURATION
 // =============================================
 
-const SUPABASE_URL =
-  Constants.expoConfig?.extra?.supabaseUrl ||
-  process.env.EXPO_PUBLIC_SUPABASE_URL ||
-  "";
-const SUPABASE_ANON_KEY =
-  Constants.expoConfig?.extra?.supabaseAnonKey ||
-  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
-  "";
+// Use centralized env.ts per .antigravityrules Section 2
+const SUPABASE_URL = Env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = Env.SUPABASE_ANON_KEY;
 
 // Image compression settings
 const IMAGE_CONFIG = {
@@ -144,9 +139,8 @@ class AIService {
    * Convert image to base64 for Edge Function
    */
   async imageToBase64(uri: string): Promise<string> {
-    const base64 = await FileSystem.readAsStringAsync(uri, {
-      encoding: "base64" as const,
-    });
+    const file = new File(uri);
+    const base64 = await file.base64();
     return base64;
   }
 

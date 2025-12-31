@@ -39,6 +39,10 @@ export const createIngredientSchema = z.object({
     .number()
     .min(0, "Giá vốn không được âm")
     .max(999999999, "Giá vốn quá lớn"),
+  // Density: g/ml (Default 1 for water-like liquids)
+  density: z.number().min(0.1, "Tỷ trọng tối thiểu 0.1").default(1),
+  // Tare Weight (g): weight of the empty container
+  tareWeight: z.number().min(0, "Trọng lượng vỏ không được âm").default(0),
   // Aliases for AI recognition, comma-separated or array
   aliases: z.array(z.string()).optional().default([]),
 });
@@ -56,6 +60,8 @@ export const updateIngredientSchema = z.object({
     .optional(),
   baseUnit: z.string().min(1).optional(),
   unitCost: z.number().min(0, "Giá vốn không được âm").optional(),
+  density: z.number().min(0.1).optional(),
+  tareWeight: z.number().min(0).optional(),
   aliases: z.array(z.string()).optional(),
   warehouseQty: z.number().min(0).optional(),
   barQty: z.number().min(0).optional(),

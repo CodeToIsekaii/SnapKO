@@ -7,7 +7,7 @@
  */
 
 import * as SQLite from "expo-sqlite";
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system";
 import * as TaskManager from "expo-task-manager";
 import * as BackgroundFetch from "expo-background-fetch";
 import NetInfo, { NetInfoState } from "@react-native-community/netinfo";
@@ -182,10 +182,9 @@ export async function uploadImageToStorage(
   businessId?: string
 ): Promise<string | null> {
   try {
-    // Read image as base64
-    const base64 = await FileSystem.readAsStringAsync(localUri, {
-      encoding: "base64",
-    });
+    // Read image as base64 using new File API
+    const file = new File(localUri);
+    const base64 = await file.base64();
 
     // Generate path with business_id for RLS
     const timestamp = Date.now();
@@ -248,9 +247,9 @@ export async function cleanupLocalImage(logId: string): Promise<void> {
   const localPath = pendingCleanupPaths.get(logId);
   if (localPath) {
     try {
-      const fileInfo = await FileSystem.getInfoAsync(localPath);
-      if (fileInfo.exists) {
-        await FileSystem.deleteAsync(localPath, { idempotent: true });
+      const file = new File(localPath);
+      if (file.exists) {
+        file.delete();
         console.log(`[SyncEngine] Cleaned up local image: ${localPath}`);
       }
       pendingCleanupPaths.delete(logId);
@@ -490,7 +489,8 @@ export async function registerBackgroundSync(): Promise<void> {
       console.log("[SyncEngine] Background fetch not available:", status);
     }
   } catch (err) {
-    console.error("[SyncEngine] Failed to register background sync:", err);
+    // This is expected in Expo Go - background fetch only works in dev clients
+    console.log("[SyncEngine] Background sync not available (Expo Go mode)");
   }
 }
 

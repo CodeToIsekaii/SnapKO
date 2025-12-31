@@ -23,7 +23,7 @@ import { Env } from "../env";
 
 export interface UserProfile {
   id: string;
-  businessId: string;
+  businessId: string | null; // Can be null for first-time owners
   role: ProfileRoleEnum;
   status: ProfileStatusEnum;
   fullName: string | null;
@@ -34,6 +34,7 @@ export type AuthState =
   | { status: "loading" }
   | { status: "unauthenticated" }
   | { status: "pending"; profileId: string } // Staff waiting for approval
+  | { status: "needs_setup"; user: User; profile: UserProfile } // Owner without business
   | { status: "authenticated"; user: User; profile: UserProfile };
 
 interface AuthContextValue {
@@ -46,6 +47,7 @@ interface AuthContextValue {
   ) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  createBusiness: (name: string) => Promise<void>; // For Profile Setup
   // Staff flow
   setStaffPending: (profileId: string) => void;
   clearStaffPending: () => void;
@@ -111,7 +113,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Initialize auth state on mount
   useEffect(() => {
     const initAuth = async () => {
-      // Check for pending staff first
+      // Check for pending staff first (from SecureStore)
       const pendingId = await SecureStore.getItemAsync("pending_profile_id");
       if (pendingId) {
         setAuthState({ status: "pending", profileId: pendingId });
@@ -126,11 +128,41 @@ export function AuthProvider({ children }: AuthProviderProps) {
       if (session?.user) {
         const profile = await fetchProfile(session.user.id);
         if (profile) {
-          setAuthState({
-            status: "authenticated",
-            user: session.user,
-            profile,
-          });
+          // CHECK PROFILE STATUS BEFORE ALLOWING ACCESS
+          if (profile.status === "REJECTED" || profile.status === "INACTIVE") {
+            // User was rejected/deactivated - sign them out
+            console.log(
+              "[AuthContext] Profile is REJECTED/INACTIVE, signing out"
+            );
+            await supabase.auth.signOut();
+            setAuthState({ status: "unauthenticated" });
+            return;
+          }
+
+          if (profile.status === "PENDING") {
+            // Staff still pending - show pending screen
+            console.log(
+              "[AuthContext] Profile is PENDING, showing pending screen"
+            );
+            await SecureStore.setItemAsync("pending_profile_id", profile.id);
+            setAuthState({ status: "pending", profileId: profile.id });
+            return;
+          }
+
+          // Profile is ACTIVE - allow access
+          if (profile.role === "OWNER" && !profile.businessId) {
+            setAuthState({
+              status: "needs_setup",
+              user: session.user,
+              profile,
+            });
+          } else {
+            setAuthState({
+              status: "authenticated",
+              user: session.user,
+              profile,
+            });
+          }
         } else {
           setAuthState({ status: "unauthenticated" });
         }
@@ -149,11 +181,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
         } else if (session?.user && event === "SIGNED_IN") {
           const profile = await fetchProfile(session.user.id);
           if (profile) {
-            setAuthState({
-              status: "authenticated",
-              user: session.user,
-              profile,
-            });
+            // Check if OWNER needs to set up business
+            if (profile.role === "OWNER" && !profile.businessId) {
+              setAuthState({
+                status: "needs_setup",
+                user: session.user,
+                profile,
+              });
+            } else {
+              setAuthState({
+                status: "authenticated",
+                user: session.user,
+                profile,
+              });
+            }
           }
         }
       }
@@ -163,6 +204,57 @@ export function AuthProvider({ children }: AuthProviderProps) {
       authListener.subscription.unsubscribe();
     };
   }, [fetchProfile]);
+
+  // 📡 GLOBAL REALTIME LISTENER: Detect if user gets deactivated while in app
+  useEffect(() => {
+    if (
+      authState.status !== "authenticated" &&
+      authState.status !== "needs_setup"
+    ) {
+      return; // Only listen when user is actually in the app
+    }
+
+    const userId = authState.user.id;
+    console.log("[AuthContext] Starting profile status listener for:", userId);
+
+    const channel = supabase
+      .channel(`profile-deactivation-${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "profiles",
+          filter: `id=eq.${userId}`,
+        },
+        async (payload) => {
+          const newStatus = (payload.new as { status: string }).status;
+          console.log("[AuthContext] Profile status changed:", newStatus);
+
+          if (newStatus === "INACTIVE" || newStatus === "REJECTED") {
+            // User was deactivated/rejected while in app!
+            console.log("[AuthContext] User deactivated, signing out...");
+            await SecureStore.deleteItemAsync("pending_profile_id");
+            await supabase.auth.signOut();
+            setAuthState({ status: "unauthenticated" });
+            // Alert will be shown after redirect to login
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("[AuthContext] Deactivation listener status:", status);
+      });
+
+    return () => {
+      console.log("[AuthContext] Cleaning up deactivation listener");
+      supabase.removeChannel(channel);
+    };
+  }, [
+    authState.status,
+    authState.status === "authenticated" || authState.status === "needs_setup"
+      ? authState.user?.id
+      : null,
+  ]);
 
   // Sign in with email/password
   const signIn = useCallback(
@@ -233,17 +325,90 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setAuthState({ status: "unauthenticated" });
   }, []);
 
-  // Refresh profile data
+  // Refresh profile data (works for authenticated, needs_setup, AND pending states)
   const refreshProfile = useCallback(async () => {
-    if (authState.status === "authenticated") {
+    // Handle authenticated / needs_setup states
+    if (
+      authState.status === "authenticated" ||
+      authState.status === "needs_setup"
+    ) {
       const profile = await fetchProfile(authState.user.id);
       if (profile) {
-        setAuthState((prev) =>
-          prev.status === "authenticated" ? { ...prev, profile } : prev
-        );
+        // Check if still needs setup
+        if (profile.role === "OWNER" && !profile.businessId) {
+          setAuthState((prev) =>
+            prev.status === "authenticated" || prev.status === "needs_setup"
+              ? { status: "needs_setup", user: prev.user, profile }
+              : prev
+          );
+        } else {
+          setAuthState((prev) =>
+            prev.status === "authenticated" || prev.status === "needs_setup"
+              ? { status: "authenticated", user: prev.user, profile }
+              : prev
+          );
+        }
+      }
+    }
+
+    // Handle pending state - staff waiting for approval
+    // They have a session from auth-join-staff Edge Function
+    if (authState.status === "pending") {
+      // Get current session - staff should have one from shadow account
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        const profile = await fetchProfile(user.id);
+
+        if (profile && profile.status === "ACTIVE") {
+          // Staff has been approved! Transition to authenticated
+          console.log(
+            "[AuthContext] Staff approved! Transitioning to authenticated"
+          );
+          await SecureStore.deleteItemAsync("pending_profile_id");
+          setAuthState({
+            status: "authenticated",
+            user,
+            profile,
+          });
+        } else if (
+          profile &&
+          (profile.status === "REJECTED" || profile.status === "INACTIVE")
+        ) {
+          // Staff was rejected
+          console.log("[AuthContext] Staff rejected, clearing pending state");
+          await SecureStore.deleteItemAsync("pending_profile_id");
+          await supabase.auth.signOut();
+          setAuthState({ status: "unauthenticated" });
+        }
+        // If still PENDING, do nothing - stay in pending state
       }
     }
   }, [authState, fetchProfile]);
+
+  // Create business for first-time OWNER (calls RPC)
+  const createBusiness = useCallback(
+    async (name: string) => {
+      if (authState.status !== "needs_setup") {
+        throw new Error("Not in setup mode");
+      }
+
+      // Call RPC function (atomic transaction)
+      const { data, error } = await supabase.rpc("create_business_for_owner", {
+        business_name: name,
+      });
+
+      if (error) throw new Error(error.message);
+      if (!data?.success)
+        throw new Error(data?.error || "Không thể tạo cửa hàng");
+
+      // Refresh profile to update state to authenticated
+      await refreshProfile();
+    },
+    [authState.status, refreshProfile]
+  );
 
   // Staff pending flow
   const setStaffPending = useCallback(async (profileId: string) => {
@@ -264,6 +429,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         signUp,
         signOut,
         refreshProfile,
+        createBusiness,
         setStaffPending,
         clearStaffPending,
       }}

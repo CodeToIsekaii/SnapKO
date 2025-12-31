@@ -283,7 +283,7 @@ export default function OwnerPendingListScreen({
                 disabled={actionLoading === item.id}
                 style={{
                   flex: 1,
-                  backgroundColor: "#22C55E",
+                  backgroundColor: "#6B8E23",
                   padding: 12,
                   borderRadius: 8,
                   alignItems: "center",

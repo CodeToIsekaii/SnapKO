@@ -20,11 +20,17 @@ import {
   LoginScreen,
   InviteJoinScreen,
   PendingScreen,
+  ProfileSetupScreen,
   InventoryCaptureScreen,
   ConfirmLogScreen,
   SettingsScreen,
   OwnerPendingListScreen,
   DashboardScreen,
+  RecipeListScreen,
+  RecipeEditScreen,
+  RecipeScanScreen,
+  IngredientsListScreen,
+  ProfileEditScreen,
 } from "./src/screens";
 import type { ConfirmItem } from "./src/screens/ConfirmLogScreen";
 
@@ -67,11 +73,17 @@ type Screen =
   | "LOGIN"
   | "STAFF_JOIN"
   | "STAFF_PENDING"
+  | "PROFILE_SETUP"
   | "DASHBOARD"
   | "INVENTORY_CAPTURE"
   | "CONFIRM_LOG"
   | "SETTINGS"
-  | "OWNER_PENDING_LIST";
+  | "OWNER_PENDING_LIST"
+  | "RECIPE_LIST"
+  | "RECIPE_EDIT"
+  | "RECIPE_SCAN"
+  | "INGREDIENTS_LIST"
+  | "PROFILE_EDIT";
 
 // State for ConfirmLog screen
 interface ConfirmLogParams {
@@ -80,11 +92,20 @@ interface ConfirmLogParams {
 }
 
 function AppNavigator() {
-  const { authState, setStaffPending, clearStaffPending, signOut } = useAuth();
+  const {
+    authState,
+    setStaffPending,
+    clearStaffPending,
+    signOut,
+    refreshProfile,
+  } = useAuth();
   const [currentScreen, setCurrentScreen] = React.useState<Screen>("LOGIN");
   const [dbReady, setDbReady] = React.useState(false);
   const [confirmLogParams, setConfirmLogParams] =
     React.useState<ConfirmLogParams | null>(null);
+  const [editingRecipeId, setEditingRecipeId] = React.useState<string | null>(
+    null
+  );
 
   // Initialize DB and sync engine
   useEffect(() => {
@@ -115,6 +136,9 @@ function AppNavigator() {
       } else {
         setCurrentScreen("INVENTORY_CAPTURE");
       }
+    } else if (authState.status === "needs_setup") {
+      // Owner without business -> Profile Setup
+      setCurrentScreen("PROFILE_SETUP");
     } else if (authState.status === "pending") {
       setCurrentScreen("STAFF_PENDING");
     } else if (authState.status === "unauthenticated") {
@@ -157,21 +181,30 @@ function AppNavigator() {
     return <LoginScreen onStaffJoin={() => setCurrentScreen("STAFF_JOIN")} />;
   }
 
-  // ============ PENDING STACK (Staff waiting) ============
+  // ============ PENDING STACK (Staff waiting for approval) ============
+  // Note: Staff already has session from auth-join-staff Edge Function
+  // When approved, refreshProfile will detect ACTIVE status and transition to authenticated
   if (authState.status === "pending") {
     return (
       <PendingScreen
         profileId={authState.profileId}
-        onApproved={() => {
-          // After approval, they need to actually log in
-          // This will be handled by the backend activating their profile
-          setCurrentScreen("LOGIN");
+        onApproved={async () => {
+          // Staff is approved and already logged in (shadow account)
+          // Just refresh profile - it will detect ACTIVE status
+          // AuthContext will transition to 'authenticated' state automatically
+          await refreshProfile();
+          // The useEffect watching authState will navigate to appropriate screen
         }}
         onCancel={() => {
           clearStaffPending();
         }}
       />
     );
+  }
+
+  // ============ PROFILE SETUP (Owner without business) ============
+  if (authState.status === "needs_setup") {
+    return <ProfileSetupScreen />;
   }
 
   // ============ APP STACK (Authenticated) ============
@@ -188,6 +221,25 @@ function AppNavigator() {
           onLogout={signOut}
           userName={profile.fullName || undefined}
           userRole={profile.role}
+          onEditProfile={
+            isOwner ? () => setCurrentScreen("PROFILE_EDIT") : undefined
+          }
+        />
+      );
+
+    case "PROFILE_EDIT":
+      return (
+        <ProfileEditScreen
+          onBack={() => setCurrentScreen("SETTINGS")}
+          onSave={() => {
+            refreshProfile();
+            setCurrentScreen("SETTINGS");
+          }}
+          initialData={{
+            fullName: profile.fullName || undefined,
+            businessName: (profile as any).businessName || undefined,
+            phoneNumber: profile.phoneNumber || undefined,
+          }}
         />
       );
 
@@ -232,6 +284,51 @@ function AppNavigator() {
         />
       );
 
+    case "RECIPE_LIST":
+      return (
+        <RecipeListScreen
+          onBack={() => setCurrentScreen("DASHBOARD")}
+          onEditRecipe={(id) => {
+            setEditingRecipeId(id);
+            setCurrentScreen("RECIPE_EDIT");
+          }}
+          onAddRecipe={() => {
+            setEditingRecipeId(null);
+            setCurrentScreen("RECIPE_EDIT");
+          }}
+          onScanRecipe={() => setCurrentScreen("RECIPE_SCAN")}
+        />
+      );
+
+    case "RECIPE_EDIT":
+      return (
+        <RecipeEditScreen
+          recipeId={editingRecipeId ?? undefined}
+          onBack={() => setCurrentScreen("RECIPE_LIST")}
+          onSave={() => {
+            setEditingRecipeId(null);
+            setCurrentScreen("RECIPE_LIST");
+          }}
+        />
+      );
+
+    case "RECIPE_SCAN":
+      return (
+        <RecipeScanScreen
+          onBack={() => setCurrentScreen("RECIPE_LIST")}
+          onCreateRecipe={(recipeData) => {
+            // In production: Save recipe and navigate to edit
+            console.log("Creating recipe from AI:", recipeData);
+            setCurrentScreen("RECIPE_LIST");
+          }}
+        />
+      );
+
+    case "INGREDIENTS_LIST":
+      return (
+        <IngredientsListScreen onBack={() => setCurrentScreen("DASHBOARD")} />
+      );
+
     case "DASHBOARD":
     default:
       return (
@@ -239,6 +336,8 @@ function AppNavigator() {
           onOpenSettings={() => setCurrentScreen("SETTINGS")}
           onOpenInventory={() => setCurrentScreen("INVENTORY_CAPTURE")}
           onOpenPendingList={() => setCurrentScreen("OWNER_PENDING_LIST")}
+          onOpenRecipes={() => setCurrentScreen("RECIPE_LIST")}
+          onOpenIngredients={() => setCurrentScreen("INGREDIENTS_LIST")}
         />
       );
   }

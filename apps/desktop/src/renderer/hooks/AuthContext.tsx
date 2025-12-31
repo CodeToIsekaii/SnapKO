@@ -1,0 +1,341 @@
+// src/hooks/AuthContext.tsx - Shared Auth Context
+// Fixes: Multiple useAuth() calls creating separate state instances
+// Now all components share the same auth state via Context
+
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  ReactNode,
+} from "react";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { User } from "../types";
+
+// ============ Types ============
+interface Profile {
+  id: string;
+  business_id: string | null;
+  role: string;
+  status: string;
+  full_name: string | null;
+}
+
+interface AuthState {
+  user: User | null;
+  profile: Profile | null;
+  loading: boolean;
+  error: string | null;
+}
+
+interface LoginResult {
+  success: boolean;
+  error?: string;
+}
+
+interface RegisterData {
+  email: string;
+  password: string;
+  businessName: string;
+  fullName: string;
+}
+
+interface AuthContextType extends AuthState {
+  login: (email: string, password: string) => Promise<LoginResult>;
+  googleLogin: () => Promise<LoginResult>;
+  register: (data: RegisterData) => Promise<LoginResult>;
+  forgotPassword: (email: string) => Promise<LoginResult>;
+  logout: () => Promise<void>;
+  clearError: () => void;
+  refreshProfile: () => Promise<void>;
+  supabase: SupabaseClient | null;
+}
+
+// ============ Supabase Client Singleton ============
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+
+const supabase: SupabaseClient | null =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : null;
+
+// ============ Context ============
+const AuthContext = createContext<AuthContextType | null>(null);
+
+// ============ Provider ============
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<AuthState>({
+    user: null,
+    profile: null,
+    loading: true,
+    error: null,
+  });
+
+  // Helper: Fetch profile from Cloud
+  const fetchProfile = useCallback(async () => {
+    try {
+      const result = await window.electronAPI.getProfile?.();
+      console.log("[AuthContext] Profile fetched:", result);
+      if (result?.profile) {
+        setState((s) => ({ ...s, profile: result.profile }));
+      }
+    } catch (err) {
+      console.error("[AuthContext] Fetch profile error:", err);
+    }
+  }, []);
+
+  // Refresh profile (called after business creation)
+  const refreshProfile = useCallback(async () => {
+    console.log("[AuthContext] Refreshing profile...");
+    await fetchProfile();
+  }, [fetchProfile]);
+
+  // Check session on mount
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const result = await window.electronAPI.getSession?.();
+        console.log("[AuthContext] Initial session check:", result);
+        if (result?.session?.user) {
+          setState({
+            user: {
+              id: result.session.user.id,
+              email: result.session.user.email || "",
+            },
+            profile: null,
+            loading: false,
+            error: null,
+          });
+          // Fetch profile after setting user
+          await fetchProfile();
+        } else {
+          console.log("[AuthContext] No existing session");
+          setState({ user: null, profile: null, loading: false, error: null });
+        }
+      } catch (err) {
+        console.error("[AuthContext] Session check error:", err);
+        setState({ user: null, profile: null, loading: false, error: null });
+      }
+    };
+
+    console.log("[AuthContext] Auth state changed: INITIAL_SESSION");
+    checkSession();
+  }, [fetchProfile]);
+
+  // Login function
+  const login = useCallback(
+    async (email: string, password: string): Promise<LoginResult> => {
+      setState((s) => ({ ...s, loading: true, error: null }));
+
+      try {
+        const result = await window.electronAPI.login(email, password);
+
+        if (result.success && result.session) {
+          setState({
+            user: {
+              id: result.session.user.id,
+              email: result.session.user.email || "",
+            },
+            profile: null,
+            loading: false,
+            error: null,
+          });
+          // Fetch profile after login
+          await fetchProfile();
+          return { success: true };
+        } else {
+          setState((s) => ({
+            ...s,
+            loading: false,
+            error: result.error || "Đăng nhập thất bại",
+          }));
+          return { success: false, error: result.error };
+        }
+      } catch (err: any) {
+        const errorMsg = err.message || "Có lỗi xảy ra";
+        setState((s) => ({ ...s, loading: false, error: errorMsg }));
+        return { success: false, error: errorMsg };
+      }
+    },
+    [fetchProfile]
+  );
+
+  // Google Login function
+  const googleLogin = useCallback(async (): Promise<LoginResult> => {
+    setState((s) => ({ ...s, loading: true, error: null }));
+
+    try {
+      console.log("[AuthContext] Calling window.electronAPI.googleLogin()...");
+      const result = await window.electronAPI.googleLogin();
+      console.log("[AuthContext] Google login result:", result);
+
+      if (result.success && result.session) {
+        console.log("[AuthContext] Setting user state:", result.session.user);
+        setState({
+          user: {
+            id: result.session.user.id,
+            email: result.session.user.email || "",
+          },
+          profile: null,
+          loading: false,
+          error: null,
+        });
+        // Fetch profile after Google login
+        await fetchProfile();
+        return { success: true };
+      } else {
+        console.log("[AuthContext] Google login failed:", result.error);
+        setState((s) => ({
+          ...s,
+          loading: false,
+          error: result.error || "Đăng nhập Google thất bại",
+        }));
+        return { success: false, error: result.error };
+      }
+    } catch (err: any) {
+      console.error("[AuthContext] Google login exception:", err);
+      const errorMsg = err.message || "Có lỗi xảy ra";
+      setState((s) => ({ ...s, loading: false, error: errorMsg }));
+      return { success: false, error: errorMsg };
+    }
+  }, [fetchProfile]);
+
+  // Register function
+  const register = useCallback(
+    async (data: RegisterData): Promise<LoginResult> => {
+      setState((s) => ({ ...s, loading: true, error: null }));
+
+      try {
+        if (!supabase) {
+          throw new Error("Supabase not available");
+        }
+
+        const { data: authData, error: signUpError } =
+          await supabase.auth.signUp({
+            email: data.email,
+            password: data.password,
+            options: {
+              data: {
+                full_name: data.fullName,
+                business_name: data.businessName,
+              },
+            },
+          });
+
+        if (signUpError) {
+          throw new Error(signUpError.message);
+        }
+
+        if (authData.user) {
+          if (authData.session) {
+            await window.electronAPI.setAuthToken(
+              authData.session.access_token
+            );
+          }
+
+          setState({
+            user: {
+              id: authData.user.id,
+              email: authData.user.email || "",
+            },
+            profile: null,
+            loading: false,
+            error: null,
+          });
+          // Note: Profile will be auto-created by trigger, then we fetch it
+          await fetchProfile();
+          return { success: true };
+        } else {
+          setState((s) => ({
+            ...s,
+            loading: false,
+            error: null,
+          }));
+          return {
+            success: true,
+            error: "Vui lòng kiểm tra email để xác nhận",
+          };
+        }
+      } catch (err: any) {
+        const errorMsg = err.message || "Đăng ký thất bại";
+        setState((s) => ({ ...s, loading: false, error: errorMsg }));
+        return { success: false, error: errorMsg };
+      }
+    },
+    [fetchProfile]
+  );
+
+  // Forgot Password function
+  const forgotPassword = useCallback(
+    async (email: string): Promise<LoginResult> => {
+      setState((s) => ({ ...s, loading: true, error: null }));
+
+      try {
+        if (!supabase) {
+          throw new Error("Supabase not available");
+        }
+
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+
+        setState((s) => ({ ...s, loading: false }));
+
+        if (error) {
+          throw new Error(error.message);
+        }
+
+        return { success: true };
+      } catch (err: any) {
+        const errorMsg = err.message || "Gửi email thất bại";
+        setState((s) => ({ ...s, loading: false, error: errorMsg }));
+        return { success: false, error: errorMsg };
+      }
+    },
+    []
+  );
+
+  // Logout function
+  const logout = useCallback(async () => {
+    try {
+      await window.electronAPI.logout?.();
+      setState({ user: null, profile: null, loading: false, error: null });
+    } catch (err) {
+      console.error("[AuthContext] Logout error:", err);
+      setState({ user: null, profile: null, loading: false, error: null });
+    }
+  }, []);
+
+  // Clear error
+  const clearError = useCallback(() => {
+    setState((s) => ({ ...s, error: null }));
+  }, []);
+
+  const value: AuthContextType = {
+    user: state.user,
+    profile: state.profile,
+    loading: state.loading,
+    error: state.error,
+    login,
+    googleLogin,
+    register,
+    forgotPassword,
+    logout,
+    clearError,
+    refreshProfile,
+    supabase,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+// ============ Hook ============
+export function useAuth(): AuthContextType {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
+}

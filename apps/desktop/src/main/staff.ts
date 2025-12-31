@@ -80,7 +80,7 @@ export function registerStaffIPC(): void {
             newStatus = "ACTIVE";
             break;
           case "reject":
-            newStatus = "REJECTED";
+            newStatus = "REJECTED"; // Proper enum value for rejected applicants
             break;
           case "deactivate":
             newStatus = "INACTIVE";

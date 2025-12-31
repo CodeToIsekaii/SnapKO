@@ -7,7 +7,7 @@
 
 export type TierEnum = "FREE" | "PERSONAL" | "CHAIN";
 export type ProfileRoleEnum = "OWNER" | "STAFF";
-export type ProfileStatusEnum = "PENDING" | "ACTIVE" | "INACTIVE";
+export type ProfileStatusEnum = "PENDING" | "ACTIVE" | "INACTIVE" | "REJECTED";
 export type InventoryLocationEnum = "WAREHOUSE" | "BAR";
 export type InventoryTypeEnum =
   | "IMPORT"

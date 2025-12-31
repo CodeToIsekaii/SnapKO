@@ -26,6 +26,7 @@ import {
   type InviteJoinInput,
 } from "@snapko/shared";
 import { Env } from "../env";
+import { supabase } from "../lib/supabase";
 
 interface InviteJoinScreenProps {
   onSuccess: (profileId: string) => void;
@@ -41,7 +42,7 @@ const colors = {
   textPrimary: "#F5F3EF", // Cream white
   textSecondary: "#B8B3A8", // Warm gray
   textMuted: "#64748B", // Slate
-  border: "#334155",
+  border: "#2A2A2A",
   borderFocused: "#E07A2F",
   error: "#E63946", // Tomato red
 };
@@ -77,7 +78,7 @@ export default function InviteJoinScreen({
     setStep("info");
   };
 
-  // Submit join request
+  // Submit join request - calls new auth-join-staff Edge Function
   const handleSubmit = async () => {
     // Validate with Zod
     const data: InviteJoinInput = {
@@ -96,13 +97,15 @@ export default function InviteJoinScreen({
     setError(null);
 
     try {
+      // Call the new auth-join-staff Edge Function (creates shadow account + returns session)
       const response = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/invite-join`,
+        `${Env.SUPABASE_URL}/functions/v1/auth-join-staff`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             apikey: Env.SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${Env.SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify(data),
         }
@@ -110,18 +113,40 @@ export default function InviteJoinScreen({
 
       const result = await response.json();
 
+      console.log("[InviteJoin] Response status:", response.status);
+      console.log("[InviteJoin] Response body:", result);
+
       if (!response.ok) {
         if (response.status === 429) {
           setError("Bạn đã thử quá nhiều lần. Vui lòng đợi 1 giờ.");
         } else {
+          console.error("[InviteJoin] Error:", result.error);
           setError(result.error || "Có lỗi xảy ra");
         }
         return;
       }
 
-      // Success - navigate to pending screen
+      // AUTO-LOGIN: Set the session returned from Edge Function
+      if (result.session) {
+        console.log("[InviteJoin] Setting session for auto-login...");
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: result.session.access_token,
+          refresh_token: result.session.refresh_token,
+        });
+
+        if (sessionError) {
+          console.error("[InviteJoin] Session error:", sessionError);
+          setError("Không thể đăng nhập tự động. Vui lòng thử lại.");
+          return;
+        }
+
+        console.log("[InviteJoin] Auto-login successful!");
+      }
+
+      // Success - navigate to pending screen (now authenticated!)
       onSuccess(result.profileId);
     } catch (err) {
+      console.error("[InviteJoin] Network error:", err);
       setError("Không thể kết nối. Kiểm tra mạng và thử lại.");
     } finally {
       setLoading(false);

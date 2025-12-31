@@ -1,7 +1,7 @@
 // User Delete Edge Function - Soft delete account for App Store compliance
 // Marks profile as DELETED, schedules data purge after 30 days
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "supabase";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

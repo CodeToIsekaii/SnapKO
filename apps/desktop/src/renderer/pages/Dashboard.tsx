@@ -2,17 +2,24 @@
 // SOLID: This is a "Dumb Container" - handles layout/tabs, logic via hooks
 
 import React, { useState, useEffect } from "react";
-import { useAuth } from "../hooks/useAuth";
+import { useAuth } from "../hooks/AuthContext";
 import { useInventory } from "../hooks/useInventory";
 import { useStaff } from "../hooks/useStaff";
 import { Header } from "../components/Header";
 import { InventoryTab } from "./tabs/InventoryTab";
 import { DashboardTab } from "./tabs/DashboardTab";
 import { EmployeesTab } from "./tabs/EmployeesTab";
+import IngredientsPage from "./IngredientsPage";
+import RecipesPage from "./Recipes";
 import { dashboardStyles, COLORS } from "../styles/theme";
 import { User } from "../types";
 
-type TabId = "dashboard" | "employees" | "inventory";
+type TabId =
+  | "dashboard"
+  | "employees"
+  | "inventory"
+  | "ingredients"
+  | "recipes";
 
 interface DashboardProps {
   user: User;
@@ -31,11 +38,13 @@ export function Dashboard({ user }: DashboardProps) {
     staff.loadStaff();
   }, []);
 
-  // Tab definitions
+  // Tab definitions - Updated with new pages
   const tabs: { id: TabId; label: string; icon: string }[] = [
     { id: "dashboard", label: "Dashboard", icon: "📊" },
     { id: "employees", label: "Nhân viên", icon: "👥" },
     { id: "inventory", label: "Tồn kho", icon: "📦" },
+    { id: "ingredients", label: "Nguyên liệu", icon: "🥬" },
+    { id: "recipes", label: "Công thức", icon: "🍳" },
   ];
 
   return (
@@ -97,6 +106,10 @@ export function Dashboard({ user }: DashboardProps) {
             onRefresh={inventory.loadData}
           />
         )}
+
+        {activeTab === "ingredients" && <IngredientsPage />}
+
+        {activeTab === "recipes" && <RecipesPage />}
       </main>
     </div>
   );

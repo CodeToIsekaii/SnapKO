@@ -93,9 +93,9 @@ export function useSubscription(
  */
 export function getExpirationWarning(daysRemaining: number): string | null {
   if (daysRemaining <= 0)
-    return "Gói của bạn đã hết hạn. Nâng cấp để tiếp tục sử dụng tính năng nâng cao.";
+    return "Gói của bạn đã hết hạn. Xem chi tiết tài khoản để tiếp tục sử dụng tính năng nâng cao.";
   if (daysRemaining <= 3)
-    return `Gói của bạn sẽ hết hạn trong ${daysRemaining} ngày. Gia hạn ngay!`;
+    return `Gói của bạn sẽ hết hạn trong ${daysRemaining} ngày. Xem chi tiết tài khoản.`;
   if (daysRemaining <= 7) return `Gói của bạn còn ${daysRemaining} ngày.`;
   return null;
 }
@@ -128,6 +128,6 @@ export function getUpgradePrompt(feature: string): {
 } {
   return {
     title: "Tính năng trả phí",
-    message: `Tính năng "${feature}" chỉ có ở gói PERSONAL trở lên. Nâng cấp để sử dụng.`,
+    message: `Tính năng "${feature}" chỉ có ở gói PERSONAL trở lên. Xem chi tiết gói dịch vụ để biết thêm.`,
   };
 }

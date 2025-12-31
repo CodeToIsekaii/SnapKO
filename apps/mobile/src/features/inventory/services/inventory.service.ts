@@ -11,6 +11,8 @@ export interface IngredientData {
   warehouse_qty: number;
   bar_qty: number;
   unit_cost: number;
+  density: number;
+  tare_weight: number;
   business_id?: string;
 }
 
@@ -41,6 +43,7 @@ async function getDB(): Promise<SQLite.SQLiteDatabase> {
 async function initTables(): Promise<void> {
   if (!db) return;
 
+  // Create tables for new users
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS local_ingredients (
       id TEXT PRIMARY KEY NOT NULL,
@@ -66,6 +69,62 @@ async function initTables(): Promise<void> {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // ✅ MIGRATION: Add missing columns for users who installed app before these columns existed
+  // Using try-catch because ALTER TABLE will fail if column already exists (which is OK)
+  try {
+    await db.execAsync(
+      "ALTER TABLE local_ingredients ADD COLUMN warehouse_qty REAL DEFAULT 0;"
+    );
+    console.log("✅ Migration: Added warehouse_qty column");
+  } catch {
+    // Column already exists - this is expected for new installs
+  }
+
+  try {
+    await db.execAsync(
+      "ALTER TABLE local_ingredients ADD COLUMN bar_qty REAL DEFAULT 0;"
+    );
+    console.log("✅ Migration: Added bar_qty column");
+  } catch {
+    // Column already exists
+  }
+
+  try {
+    await db.execAsync(
+      "ALTER TABLE local_ingredients ADD COLUMN unit_cost REAL DEFAULT 0;"
+    );
+    console.log("✅ Migration: Added unit_cost column");
+  } catch {
+    // Column already exists
+  }
+
+  try {
+    await db.execAsync(
+      "ALTER TABLE local_ingredients ADD COLUMN business_id TEXT;"
+    );
+    console.log("✅ Migration: Added business_id column");
+  } catch {
+    // Column already exists
+  }
+
+  try {
+    await db.execAsync(
+      "ALTER TABLE local_ingredients ADD COLUMN density REAL DEFAULT 1;"
+    );
+    console.log("✅ Migration: Added density column");
+  } catch {
+    // Column already exists
+  }
+
+  try {
+    await db.execAsync(
+      "ALTER TABLE local_ingredients ADD COLUMN tare_weight REAL DEFAULT 0;"
+    );
+    console.log("✅ Migration: Added tare_weight column");
+  } catch {
+    // Column already exists
+  }
 }
 
 // ==================== INVENTORY SERVICE ====================
@@ -108,8 +167,8 @@ export const InventoryService = {
     const database = await getDB();
     await database.runAsync(
       `INSERT OR REPLACE INTO local_ingredients 
-       (id, name, base_unit, warehouse_qty, bar_qty, unit_cost, business_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, business_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         ingredient.id,
         ingredient.name,
@@ -117,6 +176,8 @@ export const InventoryService = {
         ingredient.warehouse_qty,
         ingredient.bar_qty,
         ingredient.unit_cost,
+        ingredient.density || 1,
+        ingredient.tare_weight || 0,
         ingredient.business_id || "",
       ]
     );
@@ -132,8 +193,8 @@ export const InventoryService = {
     for (const item of ingredients) {
       await database.runAsync(
         `INSERT OR REPLACE INTO local_ingredients 
-         (id, name, base_unit, warehouse_qty, bar_qty, unit_cost, business_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, business_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           item.id,
           item.name,
@@ -141,6 +202,8 @@ export const InventoryService = {
           item.warehouse_qty || 0,
           item.bar_qty || 0,
           item.unit_cost || 0,
+          item.density || 1,
+          item.tare_weight || 0,
           item.business_id || "",
         ]
       );

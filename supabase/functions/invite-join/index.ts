@@ -4,7 +4,7 @@
 // Body: { inviteCode: string, fullName: string, phoneNumber: string }
 // Response: { success: true, status: "pending" }
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "supabase";
 import {
   corsHeaders,
   handleCors,
@@ -126,33 +126,36 @@ Deno.serve(async (req) => {
     return errorResponse("Invalid phone number", 400);
   }
 
-  // === CHECK INVITE CODE ===
-  const { data: biz, error: bizErr } = await admin
-    .from("businesses")
-    .select("id, invite_code_expires_at")
-    .eq("invite_code", inviteCode)
+  // === CHECK INVITE CODE in staff_invite_codes table ===
+  const { data: inviteRecord, error: inviteErr } = await admin
+    .from("staff_invite_codes")
+    .select("id, business_id, expires_at, status")
+    .eq("code", inviteCode)
+    .eq("status", "ACTIVE")
     .maybeSingle();
 
-  if (bizErr) {
-    return errorResponse(`DB error: ${bizErr.message}`, 500);
+  if (inviteErr) {
+    return errorResponse(`DB error: ${inviteErr.message}`, 500);
   }
-  if (!biz?.id) {
+  if (!inviteRecord?.business_id) {
     return errorResponse("Invalid invite code", 400);
   }
 
   // Check expiration
-  if (biz.invite_code_expires_at) {
-    const expiresAt = new Date(biz.invite_code_expires_at);
+  if (inviteRecord.expires_at) {
+    const expiresAt = new Date(inviteRecord.expires_at);
     if (expiresAt < now) {
       return errorResponse("Invite code has expired", 400);
     }
   }
 
+  const businessId = inviteRecord.business_id;
+
   // === CHECK DUPLICATE PHONE ===
   const { data: existingProfile } = await admin
     .from("profiles")
     .select("id, status")
-    .eq("business_id", biz.id)
+    .eq("business_id", businessId)
     .eq("phone_number", phoneNumber)
     .maybeSingle();
 
@@ -174,7 +177,7 @@ Deno.serve(async (req) => {
     .from("profiles")
     .insert({
       id: crypto.randomUUID(),
-      business_id: biz.id,
+      business_id: businessId,
       role: "STAFF",
       status: "PENDING",
       full_name: fullName,
@@ -193,7 +196,7 @@ Deno.serve(async (req) => {
     const { data: owners } = await admin
       .from("profiles")
       .select("expo_push_token, full_name")
-      .eq("business_id", biz.id)
+      .eq("business_id", businessId)
       .eq("role", "OWNER")
       .eq("status", "ACTIVE")
       .not("expo_push_token", "is", null);

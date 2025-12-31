@@ -8,6 +8,12 @@ import { app, ipcMain } from "electron";
 import { join } from "node:path";
 
 let db: Database.Database | null = null;
+let authClient: any = null;
+
+// Set Supabase client for Cloud queries (staff profiles)
+export function setDatabaseSupabaseClient(client: any) {
+  authClient = client;
+}
 
 // Get database path in user data directory
 function getDatabasePath(): string {
@@ -197,13 +203,16 @@ export function registerDatabaseIPC(): void {
         warehouse_qty?: number;
         bar_qty?: number;
         unit_cost?: number;
+        density?: number;
+        tare_weight?: number;
+        min_threshold?: number;
       }
     ) => {
       const database = getDatabase();
       const stmt = database.prepare(`
       INSERT OR REPLACE INTO local_ingredients 
-      (id, business_id, name, base_unit, warehouse_qty, bar_qty, unit_cost, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      (id, business_id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, min_threshold, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `);
       stmt.run(
         ingredient.id,
@@ -212,7 +221,10 @@ export function registerDatabaseIPC(): void {
         ingredient.base_unit ?? null,
         ingredient.warehouse_qty ?? 0,
         ingredient.bar_qty ?? 0,
-        ingredient.unit_cost ?? 0
+        ingredient.unit_cost ?? 0,
+        ingredient.density ?? 1,
+        ingredient.tare_weight ?? 0,
+        ingredient.min_threshold ?? 0
       );
       return { success: true };
     }
@@ -374,17 +386,65 @@ export function registerDatabaseIPC(): void {
   });
 
   // ==================== WEEK 2: STAFF MANAGEMENT ====================
-  ipcMain.handle("db:getStaffProfiles", () => {
-    const database = getDatabase();
-    return database
-      .prepare(
-        `
-        SELECT * FROM local_profiles 
-        WHERE role = 'STAFF' OR role = 'staff'
-        ORDER BY created_at DESC
-      `
-      )
-      .all();
+  // FIXED: Fetch from Supabase Cloud (staff profiles created via invite-join Edge Function)
+  ipcMain.handle("db:getStaffProfiles", async () => {
+    try {
+      if (!authClient) {
+        console.error("[Database] No Supabase client for staff profiles");
+        return [];
+      }
+
+      // Get current user from auth
+      const {
+        data: { user },
+        error: authError,
+      } = await authClient.auth.getUser();
+      if (authError || !user) {
+        console.error("[Database] No authenticated user:", authError?.message);
+        return [];
+      }
+
+      // Get current user's business_id
+      const { data: currentProfile, error: profileError } = await authClient
+        .from("profiles")
+        .select("business_id")
+        .eq("id", user.id)
+        .single();
+
+      if (profileError) {
+        console.error("[Database] Profile query error:", profileError);
+        return [];
+      }
+
+      if (!currentProfile?.business_id) {
+        console.error("[Database] No business_id found for current user");
+        return [];
+      }
+
+      // Fetch all staff profiles for this business from Cloud
+      const { data: staffProfiles, error } = await authClient
+        .from("profiles")
+        .select(
+          "id, business_id, role, status, full_name, phone_number, created_at"
+        )
+        .eq("business_id", currentProfile.business_id)
+        .neq("role", "OWNER") // Exclude owner, get STAFF only
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("[Database] Fetch staff profiles error:", error);
+        return [];
+      }
+
+      console.log(
+        "[Database] Fetched staff profiles from Cloud:",
+        staffProfiles?.length
+      );
+      return staffProfiles || [];
+    } catch (err: any) {
+      console.error("[Database] getStaffProfiles error:", err);
+      return [];
+    }
   });
 
   console.log("[Database] IPC handlers registered");

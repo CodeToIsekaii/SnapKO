@@ -249,6 +249,43 @@ export function useAuth() {
     }
   }, []);
 
+  // Google Login function
+  const googleLogin = useCallback(async (): Promise<LoginResult> => {
+    setState((s) => ({ ...s, loading: true, error: null }));
+
+    try {
+      console.log("[useAuth] Calling window.electronAPI.googleLogin()...");
+      const result = await window.electronAPI.googleLogin();
+      console.log("[useAuth] Google login result:", result);
+
+      if (result.success && result.session) {
+        console.log("[useAuth] Setting user state:", result.session.user);
+        setState({
+          user: {
+            id: result.session.user.id,
+            email: result.session.user.email || "",
+          },
+          loading: false,
+          error: null,
+        });
+        return { success: true };
+      } else {
+        console.log("[useAuth] Google login failed:", result.error);
+        setState((s) => ({
+          ...s,
+          loading: false,
+          error: result.error || "Đăng nhập Google thất bại",
+        }));
+        return { success: false, error: result.error };
+      }
+    } catch (err: any) {
+      console.error("[useAuth] Google login exception:", err);
+      const errorMsg = err.message || "Có lỗi xảy ra";
+      setState((s) => ({ ...s, loading: false, error: errorMsg }));
+      return { success: false, error: errorMsg };
+    }
+  }, []);
+
   // Clear error
   const clearError = useCallback(() => {
     setState((s) => ({ ...s, error: null }));
@@ -259,6 +296,7 @@ export function useAuth() {
     loading: state.loading,
     error: state.error,
     login,
+    googleLogin,
     register,
     forgotPassword,
     logout,

@@ -18,9 +18,11 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system";
 import * as SQLite from "expo-sqlite";
+import * as Haptics from "expo-haptics";
 import { Env } from "../env";
+import { calculateNetVolume } from "@snapko/shared";
 
 const CONFIDENCE_THRESHOLD = 85;
 
@@ -50,6 +52,10 @@ interface LocalIngredient {
   aliases: string;
   base_unit: string;
   unit_cost: number;
+  density: number;
+  tare_weight: number;
+  warehouse_qty: number;
+  bar_qty: number;
 }
 
 interface InventoryCaptureScreenProps {
@@ -90,6 +96,9 @@ export default function InventoryCaptureScreen({
   const [loadingStep, setLoadingStep] = useState<string>(""); // Multi-step loading
   const [items, setItems] = useState<AiMappedItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [snapMode, setSnapMode] = useState<"STOCK" | "IMPORT" | "SALES">(
+    "STOCK"
+  );
 
   // Local ingredients for autocomplete
   const [ingredients, setIngredients] = useState<LocalIngredient[]>([]);
@@ -107,7 +116,7 @@ export default function InventoryCaptureScreen({
     try {
       const db = await SQLite.openDatabaseAsync("snapko.db");
       const rows = await db.getAllAsync<LocalIngredient>(
-        "SELECT id, name, aliases, base_unit, unit_cost FROM local_ingredients WHERE archived = 0"
+        "SELECT id, name, aliases, base_unit, unit_cost, density, tare_weight, warehouse_qty, bar_qty FROM local_ingredients WHERE archived = 0"
       );
       setIngredients(rows);
     } catch (err) {
@@ -127,10 +136,9 @@ export default function InventoryCaptureScreen({
       { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
     );
 
-    // Read as base64 for AI
-    const base64 = await FileSystem.readAsStringAsync(manipulated.uri, {
-      encoding: "base64" as const,
-    });
+    // Read as base64 for AI using new File API
+    const file = new File(manipulated.uri);
+    const base64 = await file.base64();
 
     // Use manipulated URI as local path (already saved by ImageManipulator)
     const savedPath = manipulated.uri;
@@ -148,7 +156,7 @@ export default function InventoryCaptureScreen({
     }
 
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       quality: 0.8,
     });
 
@@ -162,7 +170,7 @@ export default function InventoryCaptureScreen({
   // Pick from gallery
   const handlePickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       quality: 0.8,
     });
 
@@ -230,8 +238,13 @@ export default function InventoryCaptureScreen({
       );
       setLocalImagePath(savedPath);
 
-      // Step 2: Upload to AI
+      // Step 2: Upload to AI (with 30 second timeout)
       setLoadingStep("☁️ Đang gửi lên AI...");
+      console.log("[Capture] Calling AI parse API...");
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
       const response = await fetch(
         `${Env.SUPABASE_URL}/functions/v1/ai-parse-inventory`,
         {
@@ -241,14 +254,24 @@ export default function InventoryCaptureScreen({
             apikey: Env.SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({ imageBase64: base64, mimeType }),
+          signal: controller.signal,
         }
       );
+      clearTimeout(timeoutId);
 
       // Step 3: AI Processing
       setLoadingStep("🤖 AI đang đọc nhãn...");
       const data = await response.json();
 
+      // DEBUG: Log response for troubleshooting
+      console.log("[Capture] AI Response status:", response.status);
+      console.log(
+        "[Capture] AI Response data:",
+        JSON.stringify(data).slice(0, 500)
+      );
+
       if (!response.ok) {
+        console.error("[Capture] API Error:", data.error);
         throw new Error(data.error || "AI parse failed");
       }
 
@@ -263,10 +286,17 @@ export default function InventoryCaptureScreen({
           onNavigateToConfirm(mapped, savedPath);
         }
       } else {
+        console.warn("[Capture] No items found in response");
         setError("Không tìm thấy nguyên liệu. Thử chụp lại?");
       }
     } catch (err: any) {
-      setError(err.message || "Có lỗi xảy ra");
+      console.error("[Capture] Parse error:", err);
+      // Handle timeout specifically
+      if (err.name === "AbortError") {
+        setError("Quá thời gian chờ (30s). Kiểm tra kết nối mạng và thử lại.");
+      } else {
+        setError(err.message || "Có lỗi xảy ra");
+      }
     } finally {
       setParsing(false);
       setLoadingStep("");
@@ -355,9 +385,27 @@ export default function InventoryCaptureScreen({
   const unmappedCount = items.filter(
     (i) => !i.linkedIngredientId && !i.isNewIngredient
   ).length;
+  // Check for invalid weights (gross < tare)
+  const hasInvalidWeights = items.some((item) => {
+    const matched = ingredients.find(
+      (ing) => ing.id === item.linkedIngredientId
+    );
+    if (!matched) return false;
+    const isVolumeBased =
+      matched.base_unit === "ml" ||
+      matched.base_unit === "l" ||
+      matched.base_unit === "lít";
+    const isWeightInput = item.unit === "g" || item.unit === "kg";
+    if (isVolumeBased && isWeightInput) {
+      const grossGram =
+        item.unit === "kg" ? item.quantity * 1000 : item.quantity;
+      return grossGram < (matched.tare_weight || 0);
+    }
+    return false;
+  });
 
   // Can save?
-  const canSave = items.length > 0 && unmappedCount === 0;
+  const canSave = items.length > 0 && unmappedCount === 0 && !hasInvalidWeights;
 
   return (
     <View style={{ flex: 1, backgroundColor: "#121212" }}>
@@ -369,7 +417,7 @@ export default function InventoryCaptureScreen({
           padding: 16,
           paddingTop: 60,
           borderBottomWidth: 1,
-          borderBottomColor: "#1E293B",
+          borderBottomColor: "#2A2A2A",
         }}
       >
         <Pressable onPress={onBack}>
@@ -383,8 +431,84 @@ export default function InventoryCaptureScreen({
             marginLeft: 16,
           }}
         >
-          Kiểm kê kho
+          {snapMode === "STOCK"
+            ? "Kiểm kê kho"
+            : snapMode === "IMPORT"
+            ? "Nhập hàng"
+            : "Bán hàng"}
         </Text>
+      </View>
+
+      {/* 📸 3 SNAPS SELECTOR */}
+      <View
+        style={{
+          flexDirection: "row",
+          backgroundColor: "#1A1A1A",
+          padding: 4,
+          margin: 16,
+          borderRadius: 12,
+        }}
+      >
+        <Pressable
+          onPress={() => setSnapMode("IMPORT")}
+          style={{
+            flex: 1,
+            paddingVertical: 10,
+            alignItems: "center",
+            borderRadius: 8,
+            backgroundColor: snapMode === "IMPORT" ? "#2A2A2A" : "transparent",
+          }}
+        >
+          <Text
+            style={{
+              color: snapMode === "IMPORT" ? "#E07A2F" : "#64748B",
+              fontWeight: "600",
+              fontSize: 13,
+            }}
+          >
+            Nhập Hàng
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setSnapMode("SALES")}
+          style={{
+            flex: 1,
+            paddingVertical: 10,
+            alignItems: "center",
+            borderRadius: 8,
+            backgroundColor: snapMode === "SALES" ? "#2A2A2A" : "transparent",
+          }}
+        >
+          <Text
+            style={{
+              color: snapMode === "SALES" ? "#6B8E23" : "#64748B",
+              fontWeight: "600",
+              fontSize: 13,
+            }}
+          >
+            Bán Hàng
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setSnapMode("STOCK")}
+          style={{
+            flex: 1,
+            paddingVertical: 10,
+            alignItems: "center",
+            borderRadius: 8,
+            backgroundColor: snapMode === "STOCK" ? "#E07A2F" : "transparent",
+          }}
+        >
+          <Text
+            style={{
+              color: snapMode === "STOCK" ? "white" : "#64748B",
+              fontWeight: "600",
+              fontSize: 13,
+            }}
+          >
+            Kiểm Kho
+          </Text>
+        </Pressable>
       </View>
 
       <ScrollView style={{ flex: 1, padding: 16 }}>
@@ -578,7 +702,7 @@ export default function InventoryCaptureScreen({
                   setActiveDropdown(activeDropdown === index ? null : index)
                 }
                 style={{
-                  backgroundColor: "#0F172A",
+                  backgroundColor: "#121212",
                   borderRadius: 8,
                   padding: 12,
                   marginBottom: 8,
@@ -589,9 +713,9 @@ export default function InventoryCaptureScreen({
                 <Text
                   style={{
                     color: item.linkedIngredientName
-                      ? "#22C55E"
+                      ? "#55A630"
                       : item.isNewIngredient
-                      ? "#3B82F6"
+                      ? "#E07A2F"
                       : "#94A3B8",
                   }}
                 >
@@ -607,7 +731,7 @@ export default function InventoryCaptureScreen({
               {activeDropdown === index && (
                 <View
                   style={{
-                    backgroundColor: "#1E293B",
+                    backgroundColor: "#1A1A1A",
                     borderRadius: 8,
                     marginBottom: 8,
                     maxHeight: 200,
@@ -619,7 +743,7 @@ export default function InventoryCaptureScreen({
                     placeholder="Tìm nguyên liệu..."
                     placeholderTextColor="#475569"
                     style={{
-                      backgroundColor: "#0F172A",
+                      backgroundColor: "#121212",
                       padding: 12,
                       color: "white",
                       borderTopLeftRadius: 8,
@@ -635,7 +759,7 @@ export default function InventoryCaptureScreen({
                         style={{
                           padding: 12,
                           borderBottomWidth: 1,
-                          borderBottomColor: "#334155",
+                          borderBottomColor: "#2A2A2A",
                         }}
                       >
                         <Text style={{ color: "white" }}>{ing.name}</Text>
@@ -647,9 +771,9 @@ export default function InventoryCaptureScreen({
                     ListFooterComponent={
                       <Pressable
                         onPress={() => markAsNew(index)}
-                        style={{ padding: 12, backgroundColor: "#172554" }}
+                        style={{ padding: 12, backgroundColor: "#1A1A1A" }}
                       >
-                        <Text style={{ color: "#3B82F6" }}>
+                        <Text style={{ color: "#E07A2F" }}>
                           ➕ Tạo nguyên liệu mới "{item.rawName}"
                         </Text>
                       </Pressable>
@@ -668,7 +792,7 @@ export default function InventoryCaptureScreen({
                   }
                   keyboardType="numeric"
                   style={{
-                    backgroundColor: "#0F172A",
+                    backgroundColor: "#121212",
                     borderRadius: 8,
                     padding: 12,
                     color: "white",
@@ -679,7 +803,7 @@ export default function InventoryCaptureScreen({
                   value={item.unit}
                   onChangeText={(t) => updateItem(index, "unit", t)}
                   style={{
-                    backgroundColor: "#0F172A",
+                    backgroundColor: "#121212",
                     borderRadius: 8,
                     padding: 12,
                     color: "white",
@@ -687,6 +811,80 @@ export default function InventoryCaptureScreen({
                   }}
                 />
               </View>
+
+              {/* 🧮 LIVE FEEDBACK - TARE & DENSITY */}
+              {(() => {
+                const matched = ingredients.find(
+                  (ing) => ing.id === item.linkedIngredientId
+                );
+                const isVolumeBased =
+                  matched &&
+                  (matched.base_unit === "ml" ||
+                    matched.base_unit === "l" ||
+                    matched.base_unit === "lít");
+                const isWeightInput = item.unit === "g" || item.unit === "kg";
+
+                if (isVolumeBased && isWeightInput) {
+                  const netMl = calculateNetVolume(
+                    item.quantity,
+                    item.unit,
+                    matched.tare_weight || 0,
+                    matched.density || 1
+                  );
+
+                  if (netMl === -1) {
+                    // 🔔 Haptic feedback for invalid weight
+                    Haptics.notificationAsync(
+                      Haptics.NotificationFeedbackType.Error
+                    );
+                    return (
+                      <View
+                        style={{
+                          backgroundColor: "#FEF2F2",
+                          padding: 8,
+                          borderRadius: 8,
+                          marginBottom: 8,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: "#EF4444",
+                            fontSize: 12,
+                            fontWeight: "600",
+                          }}
+                        >
+                          ⚠️ Trọng lượng ({item.quantity}
+                          {item.unit}) nhỏ hơn vỏ chai ({matched.tare_weight}g)!
+                        </Text>
+                      </View>
+                    );
+                  }
+
+                  if (netMl !== null) {
+                    return (
+                      <View
+                        style={{
+                          backgroundColor: "#F0F9FF",
+                          padding: 8,
+                          borderRadius: 8,
+                          marginBottom: 8,
+                        }}
+                      >
+                        <Text style={{ color: "#0369A1", fontSize: 12 }}>
+                          ℹ️ Trừ vỏ {matched.tare_weight}g, tỷ trọng{" "}
+                          {matched.density} → Thực tế:{" "}
+                          <Text style={{ fontWeight: "700" }}>
+                            {netMl >= 1000
+                              ? `${(netMl / 1000).toFixed(2)}L`
+                              : `${netMl}ml`}
+                          </Text>
+                        </Text>
+                      </View>
+                    );
+                  }
+                }
+                return null;
+              })()}
 
               {/* Unit cost */}
               <View
@@ -707,7 +905,7 @@ export default function InventoryCaptureScreen({
                   placeholder="VND"
                   placeholderTextColor="#475569"
                   style={{
-                    backgroundColor: "#0F172A",
+                    backgroundColor: "#121212",
                     borderRadius: 8,
                     padding: 8,
                     color: "white",
@@ -733,7 +931,96 @@ export default function InventoryCaptureScreen({
           <Pressable
             onPress={async () => {
               if (!canSave) return;
-              // Save to local SQLite
+
+              // === VARIANCE GATEKEEPER (STOCK Mode Only) ===
+              if (snapMode === "STOCK") {
+                const variances: {
+                  name: string;
+                  counted: number;
+                  expected: number;
+                  percent: number;
+                }[] = [];
+
+                for (const item of items) {
+                  if (!item.linkedIngredientId) continue;
+                  const ing = ingredients.find(
+                    (i) => i.id === item.linkedIngredientId
+                  );
+                  if (!ing) continue;
+
+                  // Expected stock = warehouse + bar (simplified for demo)
+                  const expected =
+                    (ing.warehouse_qty || 0) + (ing.bar_qty || 0);
+                  const counted = item.quantity;
+
+                  if (expected > 0) {
+                    const variancePercent = Math.abs(
+                      ((counted - expected) / expected) * 100
+                    );
+                    variances.push({
+                      name: ing.name,
+                      counted,
+                      expected,
+                      percent: variancePercent,
+                    });
+                  }
+                }
+
+                // Check for critical variances (>15%)
+                const criticalVariances = variances.filter(
+                  (v) => v.percent > 15
+                );
+                const warningVariances = variances.filter(
+                  (v) => v.percent >= 2 && v.percent <= 15
+                );
+
+                // 🚨 LEVEL 3: Critical Variance (>15%) - Heavy Haptic + Block
+                if (criticalVariances.length > 0) {
+                  await Haptics.notificationAsync(
+                    Haptics.NotificationFeedbackType.Error
+                  );
+
+                  const varNames = criticalVariances
+                    .map(
+                      (v) =>
+                        `• ${v.name}: ${v.counted} vs ${
+                          v.expected
+                        } (${v.percent.toFixed(1)}%)`
+                    )
+                    .join("\n");
+
+                  Alert.alert(
+                    "⚠️ CẢNH BÁO CHÊNH LỆCH LỚN",
+                    `Các mục sau có sai số >15%:\n\n${varNames}\n\nBạn PHẢI giải trình trước khi lưu.`,
+                    [
+                      { text: "Hủy", style: "cancel" },
+                      {
+                        text: "Giải trình & Lưu",
+                        style: "destructive",
+                        onPress: () => {
+                          // In production: show text input modal for explanation
+                          // For now: allow save with flag
+                          Alert.prompt?.(
+                            "Giải trình",
+                            "Nhập lý do chênh lệch:",
+                            [{ text: "OK" }]
+                          );
+                        },
+                      },
+                    ]
+                  );
+                  return; // Block save
+                }
+
+                // ⚠️ LEVEL 2: Warning Variance (2-15%) - Light Haptic
+                if (warningVariances.length > 0) {
+                  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                }
+
+                // ✅ LEVEL 1: <2% - Silent (no haptic, auto-approve)
+              }
+
+              // === SAVE TO DB ===
               try {
                 const db = await SQLite.openDatabaseAsync("snapko.db");
                 const id = crypto.randomUUID();
@@ -742,36 +1029,49 @@ export default function InventoryCaptureScreen({
                    VALUES (?, ?, ?, ?, ?)`,
                   [
                     id,
-                    "IMPORT",
+                    snapMode,
                     JSON.stringify({ items }),
                     new Date().toISOString(),
                     0,
                   ]
                 );
-                Alert.alert(
-                  "✅ Đã lưu!",
-                  "Dữ liệu sẽ được đồng bộ khi có mạng."
+
+                // Success haptic
+                await Haptics.notificationAsync(
+                  Haptics.NotificationFeedbackType.Success
                 );
-                setItems([]);
-                setImageUri(null);
+
+                Alert.alert(
+                  "Thành công",
+                  `Đã lưu phiếu ${
+                    snapMode === "IMPORT"
+                      ? "nhập hàng"
+                      : snapMode === "SALES"
+                      ? "bán hàng"
+                      : "kiểm kho"
+                  }`
+                );
+                onBack();
               } catch (err) {
+                console.error("Save failed:", err);
+                await Haptics.notificationAsync(
+                  Haptics.NotificationFeedbackType.Error
+                );
                 Alert.alert("Lỗi", "Không thể lưu dữ liệu");
               }
             }}
             disabled={!canSave}
             style={{
-              backgroundColor: canSave ? "#22C55E" : "#64748B",
+              backgroundColor: canSave ? "#55A630" : "#334155",
               padding: 16,
               borderRadius: 12,
               alignItems: "center",
-              marginTop: 8,
+              marginTop: 12,
               marginBottom: 40,
             }}
           >
-            <Text style={{ color: "white", fontWeight: "700", fontSize: 16 }}>
-              {canSave
-                ? `✓ Xác nhận & Lưu (${items.length} mục)`
-                : `Cần liên kết ${unmappedCount} mục`}
+            <Text style={{ color: "white", fontWeight: "700" }}>
+              {canSave ? "💾 Lưu và Kết thúc" : "⚠️ Cần chọn nguyên liệu"}
             </Text>
           </Pressable>
         )}

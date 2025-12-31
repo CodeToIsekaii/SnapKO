@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { COLORS } from "../styles/theme";
+import { UNIT_TYPES, getUnitGroup, convertUnit } from "@snapko/shared/logic";
 
 interface Ingredient {
   id: string;
@@ -21,10 +23,19 @@ interface Recipe {
   }>;
 }
 
+// Helper to get available units for a given unit type
+function getAvailableUnits(unit: string): readonly string[] {
+  const group = getUnitGroup(unit);
+  if (group === "WEIGHT") return UNIT_TYPES.WEIGHT;
+  if (group === "VOLUME") return UNIT_TYPES.VOLUME;
+  return [unit];
+}
+
 export default function RecipesPage() {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [editing, setEditing] = useState<Recipe | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [newRecipe, setNewRecipe] = useState({
     name: "",
     price: 0,
@@ -40,6 +51,86 @@ export default function RecipesPage() {
     const ings = (await (window as any).electronAPI?.getIngredients?.()) ?? [];
     setIngredients(ings);
     // TODO: Load recipes from IPC
+  }
+
+  // AI Scan Logic
+  async function handleAIScan() {
+    // Create hidden file input
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+
+    input.onchange = async (e: any) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      setScanning(true);
+      try {
+        // Convert to base64
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = async () => {
+          const base64 = (reader.result as string).split(",")[1];
+
+          // Call Edge Function
+          const response = await fetch(
+            "https://kxeervlkzyitlbksbfvp.supabase.co/functions/v1/ai-parse-recipe",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                // Note: In a real app, we'd use the user's session token
+                apikey: (window as any).electronAPI?.getSupabaseKey?.() || "",
+              },
+              body: JSON.stringify({ imageBase64: base64 }),
+            }
+          );
+
+          if (!response.ok) throw new Error("AI Scan failed");
+          const data = await response.json();
+
+          // Map AI results to the form
+          if (data && data.name) {
+            // Find ingredient IDs for the names returned by AI
+            const mappedIngredients = (data.ingredients || []).map(
+              (aiIng: any) => {
+                const matched = ingredients.find((i) =>
+                  i.name.toLowerCase().includes(aiIng.name.toLowerCase())
+                );
+
+                const unit = aiIng.unit || matched?.base_unit || "g";
+                const qty = aiIng.quantity || 0;
+                const baseQty = matched
+                  ? convertUnit(qty, unit, matched.base_unit)
+                  : qty;
+
+                return {
+                  ingredient_id: matched?.id || "",
+                  name: matched?.name || aiIng.name + " (Chưa có)",
+                  quantity: qty,
+                  unit: unit,
+                  cost: baseQty * (matched?.unit_cost || 0),
+                };
+              }
+            );
+
+            setNewRecipe({
+              name: data.name,
+              price: data.price || 0,
+              category: data.category || "",
+              ingredients: mappedIngredients,
+            });
+            alert(`✨ AI đã trích xuất: ${data.name} (${data.confidence}%)`);
+          }
+        };
+      } catch (err: any) {
+        alert("Lỗi quét AI: " + err.message);
+      } finally {
+        setScanning(false);
+      }
+    };
+
+    input.click();
   }
 
   function calculateCOGS(items: Recipe["ingredients"]) {
@@ -63,21 +154,28 @@ export default function RecipesPage() {
     }));
   }
 
-  function updateQuantity(ingredientId: string, qty: number) {
+  function updateIngredient(
+    ingredientId: string,
+    updates: Partial<Recipe["ingredients"][0]>
+  ) {
     setNewRecipe((prev) => ({
       ...prev,
-      ingredients: prev.ingredients.map((i) =>
-        i.ingredient_id === ingredientId
-          ? {
-              ...i,
-              quantity: qty,
-              cost:
-                qty *
-                (ingredients.find((ing) => ing.id === ingredientId)
-                  ?.unit_cost ?? 0),
-            }
-          : i
-      ),
+      ingredients: prev.ingredients.map((i) => {
+        if (i.ingredient_id !== ingredientId) return i;
+
+        const matched = ingredients.find((ing) => ing.id === ingredientId);
+        const newUnit = updates.unit || i.unit;
+        const newQty =
+          updates.quantity !== undefined ? updates.quantity : i.quantity;
+
+        let newCost = i.cost;
+        if (matched) {
+          const baseQty = convertUnit(newQty, newUnit, matched.base_unit);
+          newCost = baseQty * matched.unit_cost;
+        }
+
+        return { ...i, ...updates, cost: newCost };
+      }),
     }));
   }
 
@@ -108,7 +206,16 @@ export default function RecipesPage() {
       <div style={styles.grid}>
         {/* Form */}
         <div style={styles.card}>
-          <h3 style={styles.cardTitle}>Thêm món mới</h3>
+          <div style={styles.cardTitle}>
+            <span>Tạo món mới</span>
+            <button
+              onClick={handleAIScan}
+              disabled={scanning}
+              style={{ ...styles.aiButton, opacity: scanning ? 0.6 : 1 }}
+            >
+              {scanning ? "⌛ Đang quét..." : "📷 Tự tạo bằng AI"}
+            </button>
+          </div>
 
           <div style={styles.field}>
             <label style={styles.label}>Tên món</label>
@@ -152,18 +259,42 @@ export default function RecipesPage() {
             <label style={styles.label}>Nguyên liệu</label>
             {newRecipe.ingredients.map((ing) => (
               <div key={ing.ingredient_id} style={styles.ingRow}>
-                <span style={{ flex: 1 }}>{ing.name}</span>
+                <span style={{ flex: 1, fontWeight: 500 }}>{ing.name}</span>
                 <input
                   type="number"
                   value={ing.quantity}
                   onChange={(e) =>
-                    updateQuantity(ing.ingredient_id, Number(e.target.value))
+                    updateIngredient(ing.ingredient_id, {
+                      quantity: Number(e.target.value),
+                    })
                   }
                   style={{ ...styles.input, width: 80 }}
                 />
-                <span style={{ color: "#64748B", width: 40 }}>{ing.unit}</span>
+
+                {/* Unit Selector */}
+                <select
+                  value={ing.unit}
+                  onChange={(e) =>
+                    updateIngredient(ing.ingredient_id, {
+                      unit: e.target.value,
+                    })
+                  }
+                  style={{ ...styles.input, width: 80, padding: "8px 4px" }}
+                >
+                  {getAvailableUnits(ing.unit).map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+
                 <span
-                  style={{ color: "#22C55E", width: 100, textAlign: "right" }}
+                  style={{
+                    color: "#55A630",
+                    width: 100,
+                    textAlign: "right",
+                    fontWeight: 600,
+                  }}
                 >
                   = {ing.cost.toLocaleString("vi-VN")} đ
                 </span>
@@ -208,7 +339,7 @@ export default function RecipesPage() {
             </div>
             <div style={styles.summaryRow}>
               <span>Lãi gộp</span>
-              <span style={{ color: profit >= 0 ? "#22C55E" : "#EF4444" }}>
+              <span style={{ color: profit >= 0 ? "#55A630" : "#EF4444" }}>
                 {profit.toLocaleString("vi-VN")} đ
               </span>
             </div>
@@ -218,7 +349,7 @@ export default function RecipesPage() {
                 style={{
                   color:
                     margin >= 50
-                      ? "#22C55E"
+                      ? "#55A630"
                       : margin >= 30
                       ? "#F59E0B"
                       : "#EF4444",
@@ -243,7 +374,7 @@ export default function RecipesPage() {
             recipes.map((r) => (
               <div key={r.id} style={styles.recipeItem}>
                 <span>{r.name}</span>
-                <span style={{ color: "#22C55E" }}>
+                <span style={{ color: "#55A630" }}>
                   {r.price.toLocaleString("vi-VN")} đ
                 </span>
               </div>
@@ -256,21 +387,42 @@ export default function RecipesPage() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: { padding: 24 },
-  title: { margin: 0, fontSize: 20, color: "white" },
-  subtitle: { color: "#64748B", marginTop: 4, marginBottom: 24 },
+  container: {
+    padding: 24,
+    backgroundColor: COLORS.background,
+    minHeight: "100vh",
+  },
+  title: { margin: 0, fontSize: 20, color: COLORS.textPrimary },
+  subtitle: { color: COLORS.textSecondary, marginTop: 4, marginBottom: 24 },
   grid: { display: "grid", gridTemplateColumns: "2fr 1fr", gap: 24 },
-  card: { backgroundColor: "#1E293B", borderRadius: 12, padding: 20 },
-  cardTitle: { margin: "0 0 16px", fontSize: 16, color: "white" },
+  card: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    padding: 20,
+    border: `1px solid ${COLORS.border}`,
+  },
+  cardTitle: {
+    margin: "0 0 16px",
+    fontSize: 16,
+    color: COLORS.textPrimary,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   field: { marginBottom: 12 },
-  label: { display: "block", color: "#94A3B8", fontSize: 12, marginBottom: 4 },
+  label: {
+    display: "block",
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    marginBottom: 4,
+  },
   input: {
     width: "100%",
     padding: "10px 12px",
-    backgroundColor: "#0F172A",
-    border: "none",
+    backgroundColor: "#F5F5F5",
+    border: `1px solid ${COLORS.border}`,
     borderRadius: 6,
-    color: "white",
+    color: COLORS.textPrimary,
     fontSize: 14,
   },
   row: { display: "flex", gap: 12 },
@@ -278,33 +430,37 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    padding: "8px 0",
-    borderBottom: "1px solid #334155",
-    color: "white",
+    padding: "10px 12px",
+    backgroundColor: "#F9F9F9",
+    borderRadius: 8,
+    border: `1px solid ${COLORS.border}`,
+    marginBottom: 8,
+    color: COLORS.textPrimary,
   },
   removeBtn: {
     background: "none",
     border: "none",
-    color: "#EF4444",
+    color: COLORS.error,
     cursor: "pointer",
     fontSize: 14,
   },
   summary: {
-    backgroundColor: "#0F172A",
+    backgroundColor: "#F9F9F9",
     borderRadius: 8,
-    padding: 12,
+    padding: 16,
     marginBottom: 16,
+    border: `1px solid ${COLORS.border}`,
   },
   summaryRow: {
     display: "flex",
     justifyContent: "space-between",
-    color: "white",
+    color: COLORS.textPrimary,
     marginBottom: 8,
   },
   saveBtn: {
     width: "100%",
     padding: 12,
-    backgroundColor: "#22C55E",
+    backgroundColor: COLORS.positive,
     border: "none",
     borderRadius: 8,
     color: "white",
@@ -315,7 +471,20 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     padding: "12px 0",
-    borderBottom: "1px solid #334155",
-    color: "white",
+    borderBottom: `1px solid ${COLORS.border}`,
+    color: COLORS.textPrimary,
+  },
+  aiButton: {
+    padding: "6px 12px",
+    backgroundColor: "transparent",
+    color: COLORS.primary,
+    border: `1px solid ${COLORS.primary}`,
+    borderRadius: 6,
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
   },
 };

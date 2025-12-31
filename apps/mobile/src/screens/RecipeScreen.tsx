@@ -260,7 +260,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#0F172A" }}>
+    <View style={{ flex: 1, backgroundColor: "#121212" }}>
       {/* Header */}
       <View
         style={{
@@ -270,7 +270,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
           padding: 16,
           paddingTop: 60,
           borderBottomWidth: 1,
-          borderBottomColor: "#1E293B",
+          borderBottomColor: "#2A2A2A",
         }}
       >
         <Pressable onPress={onBack}>
@@ -280,7 +280,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
           Công thức
         </Text>
         <Pressable onPress={openAddModal}>
-          <Text style={{ color: "#3B82F6", fontSize: 16 }}>+ Thêm</Text>
+          <Text style={{ color: "#E07A2F", fontSize: 16 }}>+ Thêm</Text>
         </Pressable>
       </View>
 
@@ -307,7 +307,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
               onPress={() => openEditModal(item)}
               onLongPress={() => deleteRecipe(item.id)}
               style={{
-                backgroundColor: "#1E293B",
+                backgroundColor: "#1A1A1A",
                 borderRadius: 12,
                 padding: 16,
                 marginBottom: 12,
@@ -324,7 +324,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                 >
                   {item.name}
                 </Text>
-                <Text style={{ color: "#22C55E", fontWeight: "600" }}>
+                <Text style={{ color: "#55A630", fontWeight: "600" }}>
                   {item.price.toLocaleString("vi-VN")} đ
                 </Text>
               </View>
@@ -340,7 +340,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                   style={{
                     color:
                       margin >= 50
-                        ? "#22C55E"
+                        ? "#55A630"
                         : margin >= 30
                         ? "#F59E0B"
                         : "#EF4444",
@@ -371,7 +371,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
         >
           <View
             style={{
-              backgroundColor: "#1E293B",
+              backgroundColor: "#1A1A1A",
               borderTopLeftRadius: 20,
               borderTopRightRadius: 20,
               padding: 20,
@@ -398,7 +398,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                 placeholder="VD: Cà phê sữa"
                 placeholderTextColor="#475569"
                 style={{
-                  backgroundColor: "#0F172A",
+                  backgroundColor: "#121212",
                   borderRadius: 8,
                   padding: 12,
                   color: "white",
@@ -417,7 +417,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                 placeholder="25000"
                 placeholderTextColor="#475569"
                 style={{
-                  backgroundColor: "#0F172A",
+                  backgroundColor: "#121212",
                   borderRadius: 8,
                   padding: 12,
                   color: "white",
@@ -435,7 +435,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                 placeholder="VD: Đồ uống"
                 placeholderTextColor="#475569"
                 style={{
-                  backgroundColor: "#0F172A",
+                  backgroundColor: "#121212",
                   borderRadius: 8,
                   padding: 12,
                   color: "white",
@@ -453,7 +453,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
               >
                 <Text style={{ color: "#94A3B8" }}>Nguyên liệu</Text>
                 <Pressable onPress={() => setShowIngredientPicker(true)}>
-                  <Text style={{ color: "#3B82F6" }}>+ Thêm</Text>
+                  <Text style={{ color: "#E07A2F" }}>+ Thêm</Text>
                 </Pressable>
               </View>
 
@@ -461,7 +461,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                 <View
                   key={ing.ingredient_id}
                   style={{
-                    backgroundColor: "#0F172A",
+                    backgroundColor: "#121212",
                     borderRadius: 8,
                     padding: 12,
                     marginBottom: 8,
@@ -478,7 +478,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                     }
                     keyboardType="numeric"
                     style={{
-                      backgroundColor: "#1E293B",
+                      backgroundColor: "#1A1A1A",
                       padding: 8,
                       borderRadius: 4,
                       color: "white",
@@ -499,7 +499,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
               {selectedIngredients.length > 0 && (
                 <View
                   style={{
-                    backgroundColor: "#0F172A",
+                    backgroundColor: "#121212",
                     borderRadius: 8,
                     padding: 12,
                     marginTop: 8,
@@ -522,7 +522,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                   flex: 1,
                   padding: 14,
                   borderRadius: 12,
-                  backgroundColor: "#334155",
+                  backgroundColor: "#2A2A2A",
                   alignItems: "center",
                 }}
               >
@@ -534,7 +534,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                   flex: 1,
                   padding: 14,
                   borderRadius: 12,
-                  backgroundColor: "#22C55E",
+                  backgroundColor: "#6B8E23",
                   alignItems: "center",
                 }}
               >
@@ -558,7 +558,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
         >
           <View
             style={{
-              backgroundColor: "#1E293B",
+              backgroundColor: "#1A1A1A",
               borderRadius: 12,
               maxHeight: 400,
             }}
@@ -578,7 +578,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                   style={{
                     padding: 16,
                     borderTopWidth: 1,
-                    borderTopColor: "#334155",
+                    borderTopColor: "#2A2A2A",
                   }}
                 >
                   <Text style={{ color: "white" }}>{item.name}</Text>

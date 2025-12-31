@@ -14,9 +14,21 @@ export interface ElectronAPI {
     email: string,
     password: string
   ) => Promise<{ success: boolean; session?: any; error?: string }>;
+  googleLogin: () => Promise<{
+    success: boolean;
+    session?: any;
+    error?: string;
+  }>;
   logout: () => Promise<{ success: boolean }>;
   setAuthToken: (token: string | null) => Promise<{ success: boolean }>;
   getSession: () => Promise<{ session: any | null }>;
+
+  // Profile & Business (Cloud-first for Edge Function compatibility)
+  getProfile: () => Promise<{ profile: any | null; error?: string }>;
+  createBusiness: (data: {
+    name: string;
+    userId: string;
+  }) => Promise<{ success: boolean; business?: any; error?: string }>;
 
   // Sync
   syncFromServer: () => Promise<{
@@ -80,12 +92,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
   login: (email: string, password: string) =>
     ipcRenderer.invoke("auth:login", email, password),
 
+  googleLogin: () => ipcRenderer.invoke("auth:google-login"),
+
   logout: () => ipcRenderer.invoke("auth:logout"),
 
   setAuthToken: (token: string | null) =>
     ipcRenderer.invoke("auth:set-token", token),
 
   getSession: () => ipcRenderer.invoke("auth:get-session"),
+
+  // ==================== PROFILE & BUSINESS ====================
+  getProfile: () => ipcRenderer.invoke("auth:get-profile"),
+
+  createBusiness: (data: { name: string; userId: string }) =>
+    ipcRenderer.invoke("auth:create-business", data),
 
   // ==================== SYNC ====================
   syncFromServer: () => ipcRenderer.invoke("sync:pull"),

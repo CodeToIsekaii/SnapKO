@@ -11,11 +11,11 @@ const COLORS = {
   positive: "#6B8E23",
   warning: "#FFC857",
   error: "#E63946",
-  surface: "#1E293B",
-  background: "#0F172A",
+  surface: "#1A1A1A",
+  background: "#FAF9F7", // Light Mode
   textPrimary: "#F5F3EF",
   textSecondary: "#94A3B8",
-  border: "#334155",
+  border: "#2A2A2A",
 };
 
 interface StaffProfile {

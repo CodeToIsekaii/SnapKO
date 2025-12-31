@@ -1,7 +1,7 @@
 // Data Purge Edge Function - Self-service data deletion for Owner/Staff
 // Compliant with Nghị định 13 - allows users to request complete data deletion
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "supabase";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

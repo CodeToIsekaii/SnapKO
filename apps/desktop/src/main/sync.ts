@@ -7,14 +7,15 @@
 
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { getDatabase } from "./database";
+import { Env } from "../env";
 
 // Sync client instance (initialized when auth token is set)
 let syncClient: SupabaseClient | null = null;
 let currentToken: string | null = null;
 
-// Environment variables (from .env)
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || "";
+// Environment variables (validated via Zod in env.ts)
+const SUPABASE_URL = Env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = Env.VITE_SUPABASE_ANON_KEY;
 
 /**
  * Set auth token and initialize sync client

@@ -9,10 +9,11 @@ import {
   User,
 } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
+import { Env } from "../../../env";
 
-// Environment variables (should import from env.ts in production)
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
+// Use centralized env.ts per .antigravityrules Section 2
+const SUPABASE_URL = Env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = Env.SUPABASE_ANON_KEY;
 
 // Supabase client singleton with SecureStore
 const supabase: SupabaseClient | null =

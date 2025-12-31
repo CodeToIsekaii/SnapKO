@@ -13,7 +13,7 @@
  */
 
 import * as Network from "expo-network";
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system";
 import { getDb } from "../db";
 
 // =============================================
@@ -206,16 +206,14 @@ class SyncQueueService {
    * Upload local image to Supabase Storage
    */
   private async uploadImage(localPath: string): Promise<string> {
-    // Check if file exists
-    const fileInfo = await FileSystem.getInfoAsync(localPath);
-    if (!fileInfo.exists) {
+    // Check if file exists using new File API
+    const file = new File(localPath);
+    if (!file.exists) {
       throw new Error(`Image not found: ${localPath}`);
     }
 
-    // Read file as base64
-    const base64 = await FileSystem.readAsStringAsync(localPath, {
-      encoding: "base64" as const,
-    });
+    // Read file as base64 using new File API
+    const base64 = await file.base64();
 
     // TODO: Upload to Supabase Storage
     // For now, return a placeholder
@@ -235,7 +233,10 @@ class SyncQueueService {
    */
   private async deleteLocalImage(localPath: string): Promise<void> {
     try {
-      await FileSystem.deleteAsync(localPath, { idempotent: true });
+      const file = new File(localPath);
+      if (file.exists) {
+        file.delete();
+      }
       console.log(`[SyncQueue] Deleted local image: ${localPath}`);
     } catch (error) {
       console.warn(`[SyncQueue] Failed to delete local image:`, error);

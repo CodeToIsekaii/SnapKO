@@ -72,7 +72,7 @@ export default class ErrorBoundary extends Component<Props, State> {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0F172A",
+    backgroundColor: "#121212",
     justifyContent: "center",
     alignItems: "center",
     padding: 24,
@@ -95,7 +95,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   errorBox: {
-    backgroundColor: "#1E293B",
+    backgroundColor: "#1A1A1A",
     borderRadius: 8,
     padding: 12,
     marginBottom: 24,
@@ -107,7 +107,7 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
   },
   button: {
-    backgroundColor: "#3B82F6",
+    backgroundColor: "#E07A2F",
     paddingHorizontal: 32,
     paddingVertical: 14,
     borderRadius: 12,

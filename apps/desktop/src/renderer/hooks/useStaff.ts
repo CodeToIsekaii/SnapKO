@@ -72,28 +72,53 @@ export function useStaff() {
       }
     }, []);
 
-  // Staff action (approve/reject/deactivate)
+  // Staff action (approve/reject/deactivate) with OPTIMISTIC UI UPDATE
   const staffAction = useCallback(
     async (
       profileId: string,
       action: "approve" | "reject" | "deactivate"
     ): Promise<boolean> => {
+      // 1. OPTIMISTIC UPDATE: Update UI immediately (don't wait for server)
+      const previousProfiles = [...state.profiles];
+      const newStatus =
+        action === "approve"
+          ? "ACTIVE"
+          : action === "reject"
+          ? "REJECTED"
+          : "INACTIVE";
+
+      setState((s) => ({
+        ...s,
+        profiles: s.profiles.map((p) =>
+          p.id === profileId ? { ...p, status: newStatus } : p
+        ),
+      }));
+
       try {
+        // 2. Call server in background
         const result = await window.electronAPI.staffAction?.(
           profileId,
           action
         );
-        if (result?.success) {
-          await loadStaff(); // Refresh list
-          return true;
+
+        if (!result?.success) {
+          // 3. REVERT on error
+          console.error("[useStaff] Action failed, reverting...");
+          setState((s) => ({ ...s, profiles: previousProfiles }));
+          return false;
         }
-        return false;
+
+        // Success - optionally refetch to ensure sync
+        await loadStaff();
+        return true;
       } catch (err) {
-        console.error("[useStaff] Action error:", err);
+        // 3. REVERT on error
+        console.error("[useStaff] Action error, reverting:", err);
+        setState((s) => ({ ...s, profiles: previousProfiles }));
         return false;
       }
     },
-    [loadStaff]
+    [state.profiles, loadStaff]
   );
 
   return {

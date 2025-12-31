@@ -9,7 +9,8 @@
  * - Cannot submit log without completing both
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import * as Haptics from "expo-haptics";
 import {
   View,
   Text,
@@ -87,6 +88,15 @@ export function VarianceAlertModal({
 
   const variance = actualQty - theoreticalQty;
   const isNegative = variance < 0;
+
+  // ✅ Haptic Feedback per .antigravityrules
+  // Rung mạnh khi variance > 15% để cảnh báo vật lý
+  useEffect(() => {
+    if (visible && Math.abs(variancePercentage) > 15) {
+      // Rung mạnh kiểu "Error" (3 nhịp rung)
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, [visible, variancePercentage]);
 
   const handleCaptureEvidence = async () => {
     // TODO: Open camera to capture evidence photo

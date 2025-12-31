@@ -1,9 +1,9 @@
 // create-payos-link Edge Function
 // Generates a PayOS checkout link securely with proper signature
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { crypto } from "https://deno.land/std@0.177.0/crypto/mod.ts";
-import { encode } from "https://deno.land/std@0.177.0/encoding/hex.ts";
+import { createClient } from "supabase";
+import { crypto } from "std/crypto/mod.ts";
+import { encode } from "std/encoding/hex.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

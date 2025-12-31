@@ -12,9 +12,24 @@ import { useEffect, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { View, ActivityIndicator } from "react-native";
+import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import { initLocalDb } from "../db";
 
-// Colors from .UXUIrules
+// F&B "Organic Tech" Theme - Per .UXUIrules
+const SnapKoTheme = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    primary: "#E07A2F", // Burnt Orange - CTAs
+    background: "#121212", // Charcoal - Main background
+    card: "#1A1A1A", // Dark Coffee - Headers/Tabs
+    text: "#F5F3EF", // Cream White
+    border: "#2A2A2A", // Subtle borders
+    notification: "#E63946", // Tomato Red
+  },
+};
+
+// Colors from .UXUIrules (for inline styles)
 const COLORS = {
   background: "#121212", // Dark mode base
   primary: "#E07A2F", // Burnt Orange
@@ -129,7 +144,7 @@ export default function RootLayout() {
   }
 
   return (
-    <>
+    <ThemeProvider value={SnapKoTheme}>
       <StatusBar style="light" />
       <Stack
         screenOptions={{
@@ -138,7 +153,7 @@ export default function RootLayout() {
           animation: "slide_from_right",
         }}
       >
-        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+        {/* Note: Auth is handled by App.tsx, not Expo Router */}
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen
           name="camera/[snapType]"
@@ -148,6 +163,6 @@ export default function RootLayout() {
           }}
         />
       </Stack>
-    </>
+    </ThemeProvider>
   );
 }

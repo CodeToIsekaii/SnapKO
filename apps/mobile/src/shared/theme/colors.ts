@@ -11,12 +11,12 @@ export const COLORS = {
   positive: "#6B8E23", // Olive Green - Good state
   warning: "#FFC857", // Mustard Yellow - Warning
   error: "#E63946", // Tomato Red - Danger
-  info: "#3B82F6", // Blue - Info
+  info: "#E07A2F", // Burnt Orange - Info (F&B theme)
 
   // Backgrounds
-  background: "#0F172A", // Dark Navy
-  surface: "#1E293B", // Card background
-  surfaceLight: "#2D3A4F",
+  background: "#121212", // Charcoal - F&B theme
+  surface: "#1A1A1A", // Dark Coffee - F&B theme
+  surfaceLight: "#2A2A2A",
 
   // Text
   textPrimary: "#F5F3EF", // Cream White
@@ -24,11 +24,11 @@ export const COLORS = {
   textMuted: "#64748B",
 
   // Borders
-  border: "#334155",
-  borderLight: "#475569",
+  border: "#2A2A2A",
+  borderLight: "#3A3A3A",
 
   // Semantic
-  success: "#22C55E",
+  success: "#55A630", // Fresh Green - F&B theme
   pending: "#F59E0B",
   inactive: "#6B7280",
 

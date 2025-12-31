@@ -2,11 +2,7 @@
   "compilerOptions": {
     "target": "ES2022",
     "useDefineForClassFields": true,
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "Bundler",
@@ -15,13 +11,14 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "strict": true,
-    "types": [
-      "node"
-    ]
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@renderer/*": ["src/renderer/*"],
+      "@snapko/shared": ["../../packages/shared/src"],
+      "@snapko/shared/*": ["../../packages/shared/src/*"]
+    }
   },
-  "include": [
-    "src",
-    "electron.vite.config.ts"
-  ],
+  "include": ["src", "electron.vite.config.ts"],
   "extends": "expo/tsconfig.base"
 }

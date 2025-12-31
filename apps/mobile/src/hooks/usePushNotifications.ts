@@ -127,7 +127,7 @@ export function usePushNotifications() {
           name: "Default",
           importance: Notifications.AndroidImportance.MAX,
           vibrationPattern: [0, 250, 250, 250],
-          lightColor: "#3B82F6",
+          lightColor: "#E07A2F",
         });
       }
 

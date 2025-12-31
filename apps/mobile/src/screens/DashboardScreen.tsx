@@ -11,7 +11,7 @@ import {
   RefreshControl,
   Pressable,
 } from "react-native";
-import * as SQLite from "expo-sqlite";
+import { InventoryService } from "../features/inventory/services/inventory.service";
 
 interface DailySummary {
   date: string;
@@ -31,12 +31,16 @@ interface DashboardScreenProps {
   onOpenSettings: () => void;
   onOpenInventory: () => void;
   onOpenPendingList: () => void;
+  onOpenRecipes?: () => void;
+  onOpenIngredients?: () => void;
 }
 
 export default function DashboardScreen({
   onOpenSettings,
   onOpenInventory,
   onOpenPendingList,
+  onOpenRecipes,
+  onOpenIngredients,
 }: DashboardScreenProps) {
   const [totalValue, setTotalValue] = useState(0);
   const [ingredientCount, setIngredientCount] = useState(0);
@@ -47,42 +51,30 @@ export default function DashboardScreen({
 
   const loadData = useCallback(async () => {
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      // Initialize InventoryService if needed
+      await InventoryService.init();
 
-      // Load ingredients
-      const ings = await db.getAllAsync<{
-        warehouse_qty: number;
-        bar_qty: number;
-        unit_cost: number;
-      }>(
-        "SELECT warehouse_qty, bar_qty, unit_cost FROM local_ingredients WHERE archived = 0"
-      );
-
+      // Load ingredients using InventoryService (uses correct database)
+      const ings = await InventoryService.getAll();
       const total = ings.reduce(
-        (sum, i) => sum + (i.warehouse_qty + i.bar_qty) * i.unit_cost,
+        (sum: number, i) => sum + (i.warehouse_qty + i.bar_qty) * i.unit_cost,
         0
       );
       setTotalValue(total);
       setIngredientCount(ings.length);
 
-      // Load recipes count
-      const recipes = await db.getAllAsync("SELECT id FROM local_recipes");
-      setRecipeCount(recipes.length);
+      // TODO: Recipe count not yet implemented in InventoryService
+      setRecipeCount(0);
 
-      // Load recent logs (mock - would be from pending_sync_logs)
-      const logs = await db.getAllAsync<{
-        id: string;
-        type: string;
-        created_at: string;
-      }>(
-        "SELECT id, type, created_at FROM pending_sync_logs ORDER BY created_at DESC LIMIT 10"
-      );
-
+      // Load low stock items as "recent activity" for now
+      const lowStock = await InventoryService.getLowStock();
       setRecentLogs(
-        logs.map((l) => ({
-          ...l,
-          ingredient_name: "Nguyên liệu",
-          quantity: 0,
+        lowStock.map((ing) => ({
+          id: ing.id,
+          type: "LOW_STOCK",
+          ingredient_name: ing.name,
+          quantity: ing.warehouse_qty + ing.bar_qty,
+          created_at: new Date().toISOString(),
         }))
       );
     } catch (err) {
@@ -134,7 +126,7 @@ export default function DashboardScreen({
         {/* Main Stats */}
         <View
           style={{
-            backgroundColor: "#1E293B",
+            backgroundColor: "#1A1A1A",
             borderRadius: 16,
             padding: 20,
             marginBottom: 16,
@@ -143,7 +135,7 @@ export default function DashboardScreen({
           <Text style={{ color: "#64748B", fontSize: 12, marginBottom: 4 }}>
             Tổng giá trị tồn kho
           </Text>
-          <Text style={{ color: "#22C55E", fontSize: 32, fontWeight: "700" }}>
+          <Text style={{ color: "#55A630", fontSize: 32, fontWeight: "700" }}>
             {formatCurrency(totalValue)}
           </Text>
         </View>
@@ -151,7 +143,7 @@ export default function DashboardScreen({
         {/* Quick Stats */}
         <View style={{ flexDirection: "row", gap: 12, marginBottom: 16 }}>
           <Pressable
-            onPress={onOpenInventory}
+            onPress={onOpenIngredients}
             style={{
               flex: 1,
               backgroundColor: "#1A1A1A",
@@ -165,7 +157,7 @@ export default function DashboardScreen({
             <Text style={{ color: "#64748B", fontSize: 12 }}>Nguyên liệu</Text>
           </Pressable>
           <Pressable
-            onPress={onOpenInventory}
+            onPress={onOpenRecipes}
             style={{
               flex: 1,
               backgroundColor: "#1A1A1A",
@@ -180,7 +172,7 @@ export default function DashboardScreen({
           </Pressable>
         </View>
 
-        {/* Quick Actions */}
+        {/* 📸 3 SNAPS STRATEGY - Quick Actions */}
         <View style={{ marginBottom: 24 }}>
           <Text
             style={{
@@ -190,37 +182,65 @@ export default function DashboardScreen({
               textTransform: "uppercase",
             }}
           >
-            Thao tác nhanh
+            3 Snaps - Thao tác nhanh
           </Text>
-          <View style={{ flexDirection: "row", gap: 12 }}>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            {/* 📸 IMPORT SNAP */}
+            <Pressable
+              onPress={onOpenInventory}
+              style={{
+                flex: 1,
+                backgroundColor: "#1A1A1A",
+                borderRadius: 12,
+                padding: 14,
+                alignItems: "center",
+                borderWidth: 1,
+                borderColor: "#2A2A2A",
+              }}
+            >
+              <Text style={{ fontSize: 28, marginBottom: 4 }}>📷</Text>
+              <Text
+                style={{ color: "#E07A2F", fontWeight: "600", fontSize: 12 }}
+              >
+                Nhập Hàng
+              </Text>
+            </Pressable>
+
+            {/* 📉 SALES SNAP */}
+            <Pressable
+              onPress={onOpenInventory}
+              style={{
+                flex: 1,
+                backgroundColor: "#1A1A1A",
+                borderRadius: 12,
+                padding: 14,
+                alignItems: "center",
+                borderWidth: 1,
+                borderColor: "#2A2A2A",
+              }}
+            >
+              <Text style={{ fontSize: 28, marginBottom: 4 }}>🧾</Text>
+              <Text
+                style={{ color: "#6B8E23", fontWeight: "600", fontSize: 12 }}
+              >
+                Bán Hàng
+              </Text>
+            </Pressable>
+
+            {/* 📦 STOCK SNAP - Nổi bật nhất */}
             <Pressable
               onPress={onOpenInventory}
               style={{
                 flex: 1,
                 backgroundColor: "#E07A2F",
                 borderRadius: 12,
-                padding: 16,
+                padding: 14,
                 alignItems: "center",
               }}
             >
-              <Text style={{ fontSize: 24, marginBottom: 4 }}>📷</Text>
-              <Text style={{ color: "white", fontWeight: "600" }}>
-                Nhập kho
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={onOpenInventory}
-              style={{
-                flex: 1,
-                backgroundColor: "#22C55E",
-                borderRadius: 12,
-                padding: 16,
-                alignItems: "center",
-              }}
-            >
-              <Text style={{ fontSize: 24, marginBottom: 4 }}>🛒</Text>
-              <Text style={{ color: "white", fontWeight: "600" }}>
-                Bán hàng
+              <Text style={{ fontSize: 28, marginBottom: 4 }}>📦</Text>
+              <Text style={{ color: "white", fontWeight: "700", fontSize: 12 }}>
+                Kiểm Kho
               </Text>
             </Pressable>
           </View>
@@ -268,7 +288,7 @@ export default function DashboardScreen({
                     style={{
                       color:
                         log.type === "IMPORT"
-                          ? "#3B82F6"
+                          ? "#E07A2F"
                           : log.type === "WASTE"
                           ? "#EF4444"
                           : "#94A3B8",

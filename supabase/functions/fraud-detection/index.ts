@@ -10,10 +10,7 @@
  */
 
 // deno-lint-ignore-file
-import {
-  createClient,
-  SupabaseClient,
-} from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "supabase";
 
 // Define minimal Database schema for tables used in this function
 // Must include all required properties for GenericSchema

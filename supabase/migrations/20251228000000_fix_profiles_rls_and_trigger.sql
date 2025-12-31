@@ -25,6 +25,11 @@ CREATE POLICY "Users can update own profile"
 ON public.profiles FOR UPDATE 
 USING (auth.uid() = id);
 
+-- Cho phép user tự tạo profile của chính mình khi đăng ký
+CREATE POLICY "Users can insert own profile" 
+ON public.profiles FOR INSERT 
+WITH CHECK (auth.uid() = id);
+
 -- ---------------------------------------------------------
 -- 2. SỬA CẤU TRÚC BẢNG (SCHEMA FIX)
 -- ---------------------------------------------------------

@@ -11,18 +11,18 @@ export const COLORS = {
   warning: "#FFC857", // Mustard Yellow - Warning
   error: "#E63946", // Tomato Red - Danger
 
-  // Backgrounds
-  background: "#0F172A", // Dark Navy
-  surface: "#1E293B", // Card background
-  surfaceHover: "#2D3A4F",
+  // Backgrounds - LIGHT MODE per .UXUIrules
+  background: "#FAF9F7", // Giấy trắng ngà - Dễ đọc cho Owner
+  surface: "#FFFFFF", // Card trắng tinh
+  surfaceHover: "#F5F5F5",
 
-  // Text
-  textPrimary: "#F5F3EF", // Cream White
-  textSecondary: "#94A3B8", // Muted
-  textMuted: "#64748B",
+  // Text - LIGHT MODE
+  textPrimary: "#1A1A1A", // Đen than - Dễ đọc
+  textSecondary: "#666666", // Xám
+  textMuted: "#999999",
 
-  // Borders
-  border: "#334155",
+  // Borders - LIGHT MODE
+  border: "#E5E5E5",
   borderFocus: "#E07A2F",
 } as const;
 
@@ -38,18 +38,38 @@ export const loginStyles: Record<string, React.CSSProperties> = {
   },
   card: {
     backgroundColor: COLORS.surface,
-    borderRadius: 16,
-    padding: 40,
-    width: 360,
+    borderRadius: 24,
+    padding: "48px 40px",
+    width: 400,
     textAlign: "center",
+    boxShadow: "0 10px 25px rgba(0,0,0,0.3)",
   },
   logo: {
-    marginBottom: 32,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    marginBottom: 40,
+  },
+  logoBox: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,
+    backgroundColor: COLORS.primary,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+    boxShadow: `0 6px 15px ${COLORS.primary}55`,
+  },
+  logoInner: {
+    color: "white",
+    fontSize: 32,
+    fontWeight: "bold",
   },
   logoText: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 700,
-    color: COLORS.primary,
+    color: COLORS.textPrimary,
   },
   tagline: {
     display: "block",
@@ -60,27 +80,41 @@ export const loginStyles: Record<string, React.CSSProperties> = {
   form: {
     display: "flex",
     flexDirection: "column",
-    gap: 12,
+    gap: 16,
+  },
+  label: {
+    display: "block",
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    marginBottom: 8,
+    marginLeft: 4,
+    fontWeight: 500,
   },
   input: {
-    padding: "12px 16px",
-    backgroundColor: COLORS.background,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: 8,
-    color: "white",
-    fontSize: 14,
+    width: "100%",
+    padding: "14px 16px",
+    backgroundColor: COLORS.surface,
+    border: `2px solid ${COLORS.border}`,
+    borderRadius: 12,
+    color: COLORS.textPrimary,
+    fontSize: 15,
     outline: "none",
+    transition: "border-color 0.2s",
+    boxSizing: "border-box",
   },
   button: {
-    padding: "14px 24px",
+    width: "100%",
+    padding: "16px 24px",
     backgroundColor: COLORS.primary,
     color: "white",
     border: "none",
-    borderRadius: 8,
+    borderRadius: 12,
     fontSize: 16,
     fontWeight: 600,
     cursor: "pointer",
     marginTop: 8,
+    boxShadow: `0 4px 10px ${COLORS.primary}33`,
+    boxSizing: "border-box",
   },
   error: {
     color: COLORS.error,
@@ -92,28 +126,7 @@ export const loginStyles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     marginTop: 24,
     margin: 0,
-  },
-  modeToggle: {
-    display: "flex",
-    gap: 8,
-    marginBottom: 24,
-  },
-  modeButton: {
-    flex: 1,
-    padding: "10px 16px",
-    backgroundColor: "transparent",
-    color: COLORS.textSecondary,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: 8,
-    fontSize: 14,
-    fontWeight: 500,
-    cursor: "pointer",
-    transition: "all 0.2s",
-  },
-  modeButtonActive: {
-    backgroundColor: COLORS.primary,
-    color: "white",
-    borderColor: COLORS.primary,
+    lineHeight: 1.5,
   },
 };
 

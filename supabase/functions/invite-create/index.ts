@@ -3,7 +3,7 @@
 // Returns: { inviteCode: string }
 // Generates 6-char alphanumeric code with 48h expiry
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "supabase";
 import {
   corsHeaders,
   handleCors,

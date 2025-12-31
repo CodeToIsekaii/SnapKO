@@ -31,12 +31,14 @@ interface RecipeListScreenProps {
   onBack: () => void;
   onEditRecipe: (recipeId: string) => void;
   onAddRecipe: () => void;
+  onScanRecipe?: () => void;
 }
 
 export default function RecipeListScreen({
   onBack,
   onEditRecipe,
   onAddRecipe,
+  onScanRecipe,
 }: RecipeListScreenProps) {
   const [recipes, setRecipes] = useState<RecipeWithCOGS[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,7 +116,7 @@ export default function RecipeListScreen({
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#0F172A" }}>
+    <View style={{ flex: 1, backgroundColor: "#121212" }}>
       {/* Header */}
       <View
         style={{
@@ -124,7 +126,7 @@ export default function RecipeListScreen({
           padding: 16,
           paddingTop: 60,
           borderBottomWidth: 1,
-          borderBottomColor: "#1E293B",
+          borderBottomColor: "#2A2A2A",
         }}
       >
         <Pressable onPress={onBack}>
@@ -133,9 +135,16 @@ export default function RecipeListScreen({
         <Text style={{ color: "white", fontSize: 18, fontWeight: "600" }}>
           Menu
         </Text>
-        <Pressable onPress={onAddRecipe}>
-          <Text style={{ color: "#3B82F6", fontSize: 16 }}>+ Thêm</Text>
-        </Pressable>
+        <View style={{ flexDirection: "row", gap: 12 }}>
+          {onScanRecipe && (
+            <Pressable onPress={onScanRecipe}>
+              <Text style={{ color: "#6B8E23", fontSize: 16 }}>🤖 AI</Text>
+            </Pressable>
+          )}
+          <Pressable onPress={onAddRecipe}>
+            <Text style={{ color: "#E07A2F", fontSize: 16 }}>+ Thêm</Text>
+          </Pressable>
+        </View>
       </View>
 
       {/* Stats */}
@@ -143,7 +152,7 @@ export default function RecipeListScreen({
         <View
           style={{
             flex: 1,
-            backgroundColor: "#1E293B",
+            backgroundColor: "#1A1A1A",
             borderRadius: 12,
             padding: 16,
           }}
@@ -156,13 +165,13 @@ export default function RecipeListScreen({
         <View
           style={{
             flex: 1,
-            backgroundColor: "#1E293B",
+            backgroundColor: "#1A1A1A",
             borderRadius: 12,
             padding: 16,
           }}
         >
           <Text style={{ color: "#64748B", fontSize: 12 }}>Avg Margin</Text>
-          <Text style={{ color: "#22C55E", fontSize: 24, fontWeight: "700" }}>
+          <Text style={{ color: "#55A630", fontSize: 24, fontWeight: "700" }}>
             {recipes.length > 0
               ? Math.round(
                   recipes.reduce(
@@ -190,7 +199,7 @@ export default function RecipeListScreen({
           <View style={{ padding: 40, alignItems: "center" }}>
             <Text style={{ color: "#64748B" }}>Chưa có món nào</Text>
             <Pressable onPress={onAddRecipe} style={{ marginTop: 16 }}>
-              <Text style={{ color: "#3B82F6" }}>+ Thêm món đầu tiên</Text>
+              <Text style={{ color: "#E07A2F" }}>+ Thêm món đầu tiên</Text>
             </Pressable>
           </View>
         }
@@ -203,7 +212,7 @@ export default function RecipeListScreen({
               onPress={() => onEditRecipe(item.id)}
               onLongPress={() => deleteRecipe(item.id, item.name)}
               style={{
-                backgroundColor: "#1E293B",
+                backgroundColor: "#1A1A1A",
                 borderRadius: 12,
                 padding: 16,
                 marginBottom: 12,
@@ -225,7 +234,7 @@ export default function RecipeListScreen({
                 >
                   {item.name}
                 </Text>
-                <Text style={{ color: "#22C55E", fontWeight: "600" }}>
+                <Text style={{ color: "#55A630", fontWeight: "600" }}>
                   {item.price.toLocaleString("vi-VN")} đ
                 </Text>
               </View>
@@ -241,7 +250,7 @@ export default function RecipeListScreen({
                   style={{
                     color:
                       margin >= 50
-                        ? "#22C55E"
+                        ? "#55A630"
                         : margin >= 30
                         ? "#F59E0B"
                         : "#EF4444",
@@ -264,7 +273,7 @@ export default function RecipeListScreen({
                 onPress={() => quickSell(item)}
                 style={{
                   marginTop: 12,
-                  backgroundColor: "#22C55E",
+                  backgroundColor: "#6B8E23",
                   borderRadius: 8,
                   paddingVertical: 10,
                   alignItems: "center",

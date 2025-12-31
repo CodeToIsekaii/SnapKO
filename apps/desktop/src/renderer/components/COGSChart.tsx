@@ -23,9 +23,12 @@ const COLORS = {
   positive: "#6B8E23", // Olive Green - Good state
   warning: "#FFC857", // Mustard Yellow - Warning
   error: "#E63946", // Tomato Red - Danger
-  surface: "#1E293B", // Card background
-  textPrimary: "#F5F3EF",
-  textSecondary: "#94A3B8",
+  surface: "#1A1A1A", // Card background
+  textPrimary: "#F5F3EF", // Cream White
+  textSecondary: "#B8B3A8", // Muted (updated per feedback)
+  textMuted: "#64748B", // Very muted
+  border: "#2A2A2A", // Border Subtle
+  gridLine: "#2A2A2A", // Chart grid lines
 };
 
 interface BarChartData {
@@ -71,7 +74,7 @@ export function InventoryValueChart({ data }: { data: BarChartData[] }) {
         backgroundColor: COLORS.surface,
         padding: 16,
         borderRadius: 12,
-        border: "1px solid #334155",
+        border: "1px solid #2A2A2A",
       }}
     >
       <h3
@@ -98,10 +101,11 @@ export function InventoryValueChart({ data }: { data: BarChartData[] }) {
             tickFormatter={formatVND}
             tickLine={false}
             axisLine={false}
+            tick={{ fill: COLORS.textSecondary }}
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: "#0F172A",
+              backgroundColor: "#FAF9F7", // Light Mode
               borderColor: "#475569",
               borderRadius: 8,
             }}
@@ -133,6 +137,10 @@ export function InventoryValueChart({ data }: { data: BarChartData[] }) {
  * Pie Chart: Loss Breakdown (Waste/Spoilage)
  */
 export function LossBreakdownChart({ data }: { data: PieChartData[] }) {
+  // Check if data is mock/empty (all values are round numbers ending in 00000)
+  const isMockData = data.every((d) => d.value % 100000 === 0);
+  const totalValue = data.reduce((sum, d) => sum + d.value, 0);
+
   return (
     <div
       style={{
@@ -141,7 +149,7 @@ export function LossBreakdownChart({ data }: { data: PieChartData[] }) {
         backgroundColor: COLORS.surface,
         padding: 16,
         borderRadius: 12,
-        border: "1px solid #334155",
+        border: `1px solid ${COLORS.border}`,
       }}
     >
       <h3
@@ -154,40 +162,55 @@ export function LossBreakdownChart({ data }: { data: PieChartData[] }) {
       >
         📉 Phân tích hao hụt
       </h3>
-      <ResponsiveContainer width="100%" height="85%">
-        <PieChart>
-          <Pie
-            data={data}
-            cx="50%"
-            cy="50%"
-            innerRadius={50}
-            outerRadius={80}
-            paddingAngle={2}
-            dataKey="value"
-            label={({ name, percent }) =>
-              `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
-            }
-            labelLine={false}
-          >
-            {data.map((entry, index) => (
-              <Cell key={`cell-${index}`} fill={entry.color} />
-            ))}
-          </Pie>
-          <Tooltip
-            contentStyle={{
-              backgroundColor: "#0F172A",
-              borderColor: "#475569",
-              borderRadius: 8,
-            }}
-            formatter={(value) =>
-              new Intl.NumberFormat("vi-VN").format(Number(value)) + " đ"
-            }
-          />
-          <Legend
-            wrapperStyle={{ color: COLORS.textSecondary, fontSize: 12 }}
-          />
-        </PieChart>
-      </ResponsiveContainer>
+      {totalValue === 0 || isMockData ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "calc(100% - 50px)",
+            color: COLORS.textSecondary,
+            fontSize: 14,
+          }}
+        >
+          Chưa có dữ liệu hao hụt
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height="85%">
+          <PieChart>
+            <Pie
+              data={data}
+              cx="50%"
+              cy="50%"
+              innerRadius={50}
+              outerRadius={80}
+              paddingAngle={2}
+              dataKey="value"
+              label={({ name, percent }) =>
+                `${name} ${((percent ?? 0) * 100).toFixed(0)}%`
+              }
+              labelLine={{ stroke: COLORS.textSecondary, strokeWidth: 1 }}
+            >
+              {data.map((entry, index) => (
+                <Cell key={`cell-${index}`} fill={entry.color} />
+              ))}
+            </Pie>
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "#FAF9F7", // Light Mode
+                borderColor: COLORS.border,
+                borderRadius: 8,
+              }}
+              formatter={(value) =>
+                new Intl.NumberFormat("vi-VN").format(Number(value)) + " đ"
+              }
+            />
+            <Legend
+              wrapperStyle={{ color: COLORS.textSecondary, fontSize: 12 }}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }
@@ -216,7 +239,7 @@ export function SummaryCard({
         backgroundColor: COLORS.surface,
         borderRadius: 12,
         padding: 20,
-        border: "1px solid #334155",
+        border: "1px solid #2A2A2A",
         borderLeft: `4px solid ${color}`,
         minWidth: 200,
       }}
@@ -293,14 +316,14 @@ export function COGSDashboard({
           value={
             new Intl.NumberFormat("vi-VN").format(summary.totalValue) + " đ"
           }
-          color={COLORS.positive}
+          color={COLORS.primary}
         />
         <SummaryCard
           icon="📦"
           title="Số mặt hàng"
           value={summary.itemCount.toString()}
           subtitle="nguyên liệu"
-          color={COLORS.primary}
+          color={COLORS.positive}
         />
         <SummaryCard
           icon="⚠️"

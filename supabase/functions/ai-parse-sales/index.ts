@@ -9,10 +9,7 @@
  */
 
 // deno-lint-ignore-file
-import {
-  createClient,
-  SupabaseClient,
-} from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "supabase";
 
 // Simple type alias to avoid complex generic type inference issues
 type SupabaseClientType = SupabaseClient<Record<string, unknown>>;
