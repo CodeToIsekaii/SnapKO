@@ -46,14 +46,14 @@ Hãy phân tích hình ảnh hóa đơn này và trả về JSON với format sa
   "invoice_number": "số hóa đơn nếu có",
   "supplier_name": "tên nhà cung cấp",
   "invoice_date": "ngày hóa đơn (YYYY-MM-DD)",
-  "total_amount": tổng tiền (số),
+  "total_amount": tổng tiền SAU THUẾ (số),
   "items": [
     {
       "ingredient_name": "tên nguyên liệu",
       "quantity": số lượng (số),
       "unit": "đơn vị (kg, lít, chai, thùng, etc.)",
-      "unit_price": đơn giá (số),
-      "total_price": thành tiền (số),
+      "unit_price": đơn giá SAU THUẾ (số),
+      "total_price": thành tiền SAU THUẾ (số),
       "confidence": độ tin cậy 0-100
     }
   ],
@@ -61,6 +61,8 @@ Hãy phân tích hình ảnh hóa đơn này và trả về JSON với format sa
 }
 
 LƯU Ý QUAN TRỌNG:
+- LUÔN sử dụng GIÁ SAU THUẾ (tổng cộng đã bao gồm VAT), KHÔNG lấy giá trước thuế
+- Nếu hóa đơn có cột "Thành tiền" và "Thành tiền sau thuế", luôn lấy giá SAU THUẾ
 - Trả về JSON thuần túy, KHÔNG có markdown code blocks
 - Số liệu phải là số, không phải string
 - Nếu không đọc được thông tin nào, để null

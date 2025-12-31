@@ -1138,6 +1138,18 @@ export default function InventoryCaptureScreen({
               // === SAVE TO DB ===
               try {
                 const db = await SQLite.openDatabaseAsync("snapko.db");
+
+                // Ensure table exists
+                await db.execAsync(`
+                  CREATE TABLE IF NOT EXISTS pending_sync_logs (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    type TEXT NOT NULL,
+                    ai_parsed_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    synced INTEGER DEFAULT 0
+                  )
+                `);
+
                 const id = Crypto.randomUUID();
                 await db.runAsync(
                   `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
