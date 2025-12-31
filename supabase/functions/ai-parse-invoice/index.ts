@@ -10,6 +10,7 @@
 
 // deno-lint-ignore-file
 import { createClient, SupabaseClient } from "supabase";
+import { fetchWithRetry } from "../_shared/retry.ts";
 
 // Simple type alias to avoid complex generic type inference issues
 type SupabaseClientType = SupabaseClient<Record<string, unknown>>;
@@ -71,7 +72,7 @@ async function callGemini(imageBase64: string): Promise<ParsedInvoice> {
     throw new Error("GEMINI_API_KEY not configured");
   }
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: "POST",

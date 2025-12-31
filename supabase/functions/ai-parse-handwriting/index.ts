@@ -14,6 +14,7 @@
 
 // deno-lint-ignore-file
 import { createClient, SupabaseClient } from "supabase";
+import { fetchWithRetry } from "../_shared/retry.ts";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -85,7 +86,7 @@ async function callGemini(imageBase64: string): Promise<ParsedStockSheet> {
     throw new Error("GEMINI_API_KEY not configured");
   }
 
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: "POST",

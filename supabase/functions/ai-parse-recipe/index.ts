@@ -6,6 +6,8 @@
  * Output: Recipe name, ingredients list with quantities and units
  */
 
+import { fetchWithRetry } from "../_shared/retry.ts";
+
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
 
 const corsHeaders = {
@@ -85,7 +87,7 @@ RULES:
       GEMINI_API_KEY
     )}`;
 
-    const geminiRes = await fetch(geminiUrl, {
+    const geminiRes = await fetchWithRetry(geminiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
