@@ -14,7 +14,12 @@
 
 import * as Network from "expo-network";
 import { File } from "expo-file-system";
-import { getDb } from "../db";
+import { getDB } from "../db";
+
+// Export processSyncQueue for easy access
+export async function processSyncQueue(): Promise<void> {
+  await syncQueue.processPendingQueue();
+}
 
 // =============================================
 // TYPES
@@ -64,7 +69,7 @@ class SyncQueueService {
     data: T,
     options?: QueueActionOptions
   ): Promise<string> {
-    const db = getDb();
+    const db = await getDB();
     if (!db) throw new Error("Database not initialized");
 
     const id = this.generateId();
@@ -114,7 +119,7 @@ class SyncQueueService {
     console.log("[SyncQueue] Starting queue processing...");
 
     try {
-      const db = getDb();
+      const db = await getDB();
       if (!db) return;
 
       // Get all pending items
@@ -154,7 +159,7 @@ class SyncQueueService {
     local_image_path: string | null;
     created_at: string;
   }): Promise<void> {
-    const db = getDb();
+    const db = await getDB();
     if (!db) return;
 
     try {
@@ -276,7 +281,7 @@ class SyncQueueService {
    * Get count of pending items
    */
   async getPendingCount(): Promise<number> {
-    const db = getDb();
+    const db = await getDB();
     if (!db) return 0;
 
     const result = await db.getFirstAsync<{ count: number }>(
@@ -290,7 +295,7 @@ class SyncQueueService {
    * Get all pending items (for UI display)
    */
   async getPendingItems(): Promise<SyncQueueItem[]> {
-    const db = getDb();
+    const db = await getDB();
     if (!db) return [];
 
     const items = await db.getAllAsync<{
@@ -321,7 +326,7 @@ class SyncQueueService {
    * Clear all synced items (cleanup)
    */
   async clearSyncedItems(): Promise<void> {
-    const db = getDb();
+    const db = await getDB();
     if (!db) return;
 
     await db.runAsync(`DELETE FROM pending_sync_logs WHERE synced = 1`);
@@ -332,7 +337,7 @@ class SyncQueueService {
    * Force retry all failed items
    */
   async retryFailedItems(): Promise<void> {
-    const db = getDb();
+    const db = await getDB();
     if (!db) return;
 
     await db.runAsync(

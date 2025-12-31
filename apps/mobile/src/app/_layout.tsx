@@ -13,7 +13,9 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { View, ActivityIndicator } from "react-native";
 import { DarkTheme, ThemeProvider } from "@react-navigation/native";
+import * as Network from "expo-network";
 import { initLocalDb } from "../db";
+import { processSyncQueue } from "../services/syncQueue";
 
 // F&B "Organic Tech" Theme - Per .UXUIrules
 const SnapKoTheme = {
@@ -100,6 +102,39 @@ export default function RootLayout() {
     }
 
     init();
+  }, []);
+
+  // Network restore auto-sync
+  useEffect(() => {
+    let wasOffline = false;
+
+    const checkNetwork = async () => {
+      const state = await Network.getNetworkStateAsync();
+      if (state.isConnected && state.isInternetReachable && wasOffline) {
+        console.log("🌐 Network restored -> Auto-syncing...");
+        processSyncQueue();
+      }
+      wasOffline = !state.isConnected;
+    };
+
+    // Check network every 10 seconds
+    const networkInterval = setInterval(checkNetwork, 10000);
+    return () => clearInterval(networkInterval);
+  }, []);
+
+  // Periodic sync every 60 seconds
+  useEffect(() => {
+    const syncInterval = setInterval(() => {
+      console.log("⏰ Periodic sync check...");
+      processSyncQueue();
+    }, 60000);
+
+    // Initial sync on app start
+    processSyncQueue().then(() => {
+      console.log("🚀 Initial sync completed");
+    });
+
+    return () => clearInterval(syncInterval);
   }, []);
 
   // Handle auth routing

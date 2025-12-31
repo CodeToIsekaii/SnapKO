@@ -27,6 +27,7 @@ import * as Crypto from "expo-crypto";
 import { Env } from "../env";
 import { calculateNetVolume } from "@snapko/shared";
 import { getDB } from "../db";
+import { processSyncQueue } from "../services/syncQueue";
 import {
   VarianceModal,
   SurplusBottomSheet,
@@ -1152,11 +1153,12 @@ export default function InventoryCaptureScreen({
 
                 const id = Crypto.randomUUID();
                 await db.runAsync(
-                  `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
-                   VALUES (?, ?, ?, ?, ?)`,
+                  `INSERT INTO pending_sync_logs (id, type, location, ai_parsed_json, created_at, synced)
+                   VALUES (?, ?, ?, ?, ?, ?)`,
                   [
                     id,
                     snapMode,
+                    "mobile", // location
                     JSON.stringify({ items }),
                     new Date().toISOString(),
                     0,
@@ -1178,6 +1180,12 @@ export default function InventoryCaptureScreen({
                       : "kiểm kho"
                   }`
                 );
+
+                // Trigger sync immediately (non-blocking)
+                processSyncQueue().then(() => {
+                  console.log("⚡ Auto-sync triggered after save");
+                });
+
                 onBack();
               } catch (err) {
                 console.error("Save failed:", err);
@@ -1215,11 +1223,12 @@ export default function InventoryCaptureScreen({
             const db = await getDB();
             const id = Crypto.randomUUID();
             await db.runAsync(
-              `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
-               VALUES (?, ?, ?, ?, ?)`,
+              `INSERT INTO pending_sync_logs (id, type, location, ai_parsed_json, created_at, synced)
+               VALUES (?, ?, ?, ?, ?, ?)`,
               [
                 id,
                 snapMode,
+                "mobile", // location
                 JSON.stringify({
                   items,
                   variance_reason: reason,
@@ -1254,11 +1263,12 @@ export default function InventoryCaptureScreen({
             const db = await getDB();
             const id = Crypto.randomUUID();
             await db.runAsync(
-              `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
-               VALUES (?, ?, ?, ?, ?)`,
+              `INSERT INTO pending_sync_logs (id, type, location, ai_parsed_json, created_at, synced)
+               VALUES (?, ?, ?, ?, ?, ?)`,
               [
                 id,
                 "TRANSFER_AUTO",
+                "mobile", // location
                 JSON.stringify({
                   surplus_items: surplusItems,
                   auto_created: true,
