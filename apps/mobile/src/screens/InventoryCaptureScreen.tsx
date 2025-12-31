@@ -70,7 +70,6 @@ interface LocalIngredient {
 interface InventoryCaptureScreenProps {
   onBack: () => void;
   onOpenSettings: () => void;
-  onNavigateToConfirm?: (items: AiMappedItem[], localImagePath: string) => void;
 }
 
 // Fuzzy match score
@@ -97,7 +96,6 @@ function getMatchScore(
 export default function InventoryCaptureScreen({
   onBack,
   onOpenSettings,
-  onNavigateToConfirm,
 }: InventoryCaptureScreenProps) {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [localImagePath, setLocalImagePath] = useState<string | null>(null);
@@ -355,10 +353,6 @@ export default function InventoryCaptureScreen({
       if (rawItems.length > 0) {
         const mapped = autoMapItems(rawItems);
         setItems(mapped);
-
-        if (onNavigateToConfirm && savedPath) {
-          onNavigateToConfirm(mapped, savedPath);
-        }
       } else {
         console.warn("[Capture] No items found in response");
         setError("Không tìm thấy dữ liệu. Thử chụp lại?");
