@@ -4,6 +4,7 @@
 // Returns: { items: [{ name, quantity, unit, confidence, unitCost? }], rawJson, totalConfidence }
 
 import { handleCors, jsonResponse, errorResponse } from "../_shared/cors.ts";
+import { fetchWithRetry } from "../_shared/retry.ts";
 
 type Body = { imageBase64: string; mimeType: string };
 
@@ -70,7 +71,7 @@ Rules:
   )}`;
 
   try {
-    const geminiRes = await fetch(geminiUrl, {
+    const geminiRes = await fetchWithRetry(geminiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -49,7 +49,7 @@ Rules:
 - unitCost is numeric in VND (if unknown, set 0 and lower confidence)
 - No personal data.`;
 
-  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-001:generateContent?key=${encodeURIComponent(
     GEMINI_API_KEY
   )}`;
 

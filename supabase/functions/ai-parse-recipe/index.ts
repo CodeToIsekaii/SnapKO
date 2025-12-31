@@ -83,7 +83,7 @@ RULES:
 6. If no recipe found, return: { "name": "", "ingredients": [], "confidence": 0 }`;
 
     // Call Gemini API
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${encodeURIComponent(
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-001:generateContent?key=${encodeURIComponent(
       GEMINI_API_KEY
     )}`;
 
