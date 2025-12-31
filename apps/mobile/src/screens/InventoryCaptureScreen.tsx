@@ -820,11 +820,10 @@ export default function InventoryCaptureScreen({
                       borderTopRightRadius: 8,
                     }}
                   />
-                  <FlatList
-                    data={getFilteredSuggestions()}
-                    keyExtractor={(ing) => ing.id}
-                    renderItem={({ item: ing }) => (
+                  <ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled>
+                    {getFilteredSuggestions().map((ing) => (
                       <Pressable
+                        key={ing.id}
                         onPress={() => linkIngredient(index, ing)}
                         style={{
                           padding: 12,
@@ -837,19 +836,17 @@ export default function InventoryCaptureScreen({
                           {ing.base_unit} · {ing.unit_cost?.toLocaleString()}đ
                         </Text>
                       </Pressable>
-                    )}
-                    ListFooterComponent={
-                      <Pressable
-                        onPress={() => markAsNew(index)}
-                        style={{ padding: 12, backgroundColor: "#1A1A1A" }}
-                      >
-                        <Text style={{ color: "#E07A2F" }}>
-                          ➕ Tạo nguyên liệu mới "{item.rawName}"
-                        </Text>
-                      </Pressable>
-                    }
-                    style={{ maxHeight: 150 }}
-                  />
+                    ))}
+                    {/* Create new ingredient button */}
+                    <Pressable
+                      onPress={() => markAsNew(index)}
+                      style={{ padding: 12, backgroundColor: "#1A1A1A" }}
+                    >
+                      <Text style={{ color: "#E07A2F" }}>
+                        ➕ Tạo nguyên liệu mới "{item.rawName}"
+                      </Text>
+                    </Pressable>
+                  </ScrollView>
                 </View>
               )}
 
