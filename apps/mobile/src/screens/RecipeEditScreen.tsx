@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import * as SQLite from "expo-sqlite";
 import * as Haptics from "expo-haptics";
+import * as Crypto from "expo-crypto";
 import {
   convertUnits,
   areUnitsCompatible,
@@ -222,7 +223,7 @@ export default function RecipeEditScreen({
 
     try {
       const db = await SQLite.openDatabaseAsync("snapko.db");
-      const id = recipeId || crypto.randomUUID();
+      const id = recipeId || Crypto.randomUUID();
 
       await db.runAsync(
         `INSERT OR REPLACE INTO local_recipes (id, name, price, category, created_at)
@@ -239,7 +240,7 @@ export default function RecipeEditScreen({
         await db.runAsync(
           `INSERT INTO local_recipe_ingredients (id, recipe_id, ingredient_id, quantity, unit)
            VALUES (?, ?, ?, ?, ?)`,
-          [crypto.randomUUID(), id, ing.ingredient_id, ing.quantity, ing.unit]
+          [Crypto.randomUUID(), id, ing.ingredient_id, ing.quantity, ing.unit]
         );
       }
 

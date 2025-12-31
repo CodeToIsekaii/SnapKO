@@ -24,6 +24,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { File } from "expo-file-system";
 import * as SQLite from "expo-sqlite";
 import * as Haptics from "expo-haptics";
+import * as Crypto from "expo-crypto";
 import { Env } from "../env";
 import { calculateNetVolume } from "@snapko/shared";
 import {
@@ -1140,7 +1141,7 @@ export default function InventoryCaptureScreen({
               // === SAVE TO DB ===
               try {
                 const db = await SQLite.openDatabaseAsync("snapko.db");
-                const id = crypto.randomUUID();
+                const id = Crypto.randomUUID();
                 await db.runAsync(
                   `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
                    VALUES (?, ?, ?, ?, ?)`,
@@ -1203,7 +1204,7 @@ export default function InventoryCaptureScreen({
           // Save with reason attached
           try {
             const db = await SQLite.openDatabaseAsync("snapko.db");
-            const id = crypto.randomUUID();
+            const id = Crypto.randomUUID();
             await db.runAsync(
               `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
                VALUES (?, ?, ?, ?, ?)`,
@@ -1242,7 +1243,7 @@ export default function InventoryCaptureScreen({
           // Create transfer log automatically
           try {
             const db = await SQLite.openDatabaseAsync("snapko.db");
-            const id = crypto.randomUUID();
+            const id = Crypto.randomUUID();
             await db.runAsync(
               `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
                VALUES (?, ?, ?, ?, ?)`,

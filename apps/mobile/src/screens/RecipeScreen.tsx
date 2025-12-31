@@ -16,6 +16,7 @@ import {
   RefreshControl,
 } from "react-native";
 import * as SQLite from "expo-sqlite";
+import * as Crypto from "expo-crypto";
 
 interface LocalIngredient {
   id: string;
@@ -207,7 +208,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
 
     try {
       const db = await SQLite.openDatabaseAsync("snapko.db");
-      const id = editingRecipe?.id ?? crypto.randomUUID();
+      const id = editingRecipe?.id ?? Crypto.randomUUID();
       const price = parseInt(recipePrice) || 0;
 
       // Upsert recipe
@@ -228,7 +229,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
         await db.runAsync(
           `INSERT INTO local_recipe_ingredients (id, recipe_id, ingredient_id, quantity, unit)
            VALUES (?, ?, ?, ?, ?)`,
-          [crypto.randomUUID(), id, ing.ingredient_id, ing.quantity, ing.unit]
+          [Crypto.randomUUID(), id, ing.ingredient_id, ing.quantity, ing.unit]
         );
       }
 
