@@ -921,7 +921,7 @@ export default function InventoryCaptureScreen({
                     matched.density || 1
                   );
 
-                  if (netMl === -1) {
+                  if (netMl === null || netMl === -1) {
                     // 🔔 Haptic feedback for invalid weight
                     Haptics.notificationAsync(
                       Haptics.NotificationFeedbackType.Error
@@ -952,7 +952,7 @@ export default function InventoryCaptureScreen({
                       }}
                     >
                       <Text style={{ color: "#94A3B8", fontSize: 12 }}>
-                        📊 Quy đổi: {netMl.toFixed(0)}ml (trừ bình{" "}
+                        📊 Quy đổi: {netMl!.toFixed(0)}ml (trừ bình{" "}
                         {matched.tare_weight}g, tỷ trọng {matched.density})
                       </Text>
                     </View>

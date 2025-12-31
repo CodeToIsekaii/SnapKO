@@ -94,13 +94,15 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
     );
 
     -- Pending sync queue with area_id
+    -- Drop old table to reset schema (temporary fix for NOT NULL constraint)
+    DROP TABLE IF EXISTS pending_sync_logs;
     CREATE TABLE IF NOT EXISTS pending_sync_logs (
       id TEXT PRIMARY KEY NOT NULL,
       log_type TEXT NOT NULL DEFAULT 'inventory',
       ingredient_id TEXT,
       area_id TEXT,
-      location TEXT NOT NULL,
-      type TEXT NOT NULL,
+      location TEXT DEFAULT 'mobile',
+      type TEXT DEFAULT 'STOCK',
       ai_parsed_quantity REAL,
       ai_confidence_score REAL,
       final_confirmed_quantity REAL,
