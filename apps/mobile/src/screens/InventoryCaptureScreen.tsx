@@ -22,11 +22,11 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { File } from "expo-file-system";
-import * as SQLite from "expo-sqlite";
 import * as Haptics from "expo-haptics";
 import * as Crypto from "expo-crypto";
 import { Env } from "../env";
 import { calculateNetVolume } from "@snapko/shared";
+import { getDB } from "../db";
 import {
   VarianceModal,
   SurplusBottomSheet,
@@ -133,7 +133,7 @@ export default function InventoryCaptureScreen({
 
   const loadIngredients = async () => {
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
       const rows = await db.getAllAsync<LocalIngredient>(
         "SELECT id, name, aliases, base_unit, unit_cost, density, tare_weight, warehouse_qty, bar_qty FROM local_ingredients WHERE archived = 0"
       );
@@ -1137,7 +1137,7 @@ export default function InventoryCaptureScreen({
 
               // === SAVE TO DB ===
               try {
-                const db = await SQLite.openDatabaseAsync("snapko.db");
+                const db = await getDB();
 
                 // Ensure table exists
                 await db.execAsync(`
@@ -1212,7 +1212,7 @@ export default function InventoryCaptureScreen({
           setShowVarianceModal(false);
           // Save with reason attached
           try {
-            const db = await SQLite.openDatabaseAsync("snapko.db");
+            const db = await getDB();
             const id = Crypto.randomUUID();
             await db.runAsync(
               `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)
@@ -1251,7 +1251,7 @@ export default function InventoryCaptureScreen({
           setShowSurplusSheet(false);
           // Create transfer log automatically
           try {
-            const db = await SQLite.openDatabaseAsync("snapko.db");
+            const db = await getDB();
             const id = Crypto.randomUUID();
             await db.runAsync(
               `INSERT INTO pending_sync_logs (id, type, ai_parsed_json, created_at, synced)

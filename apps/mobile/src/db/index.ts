@@ -175,7 +175,17 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
 }
 
 /**
- * Get database instance
+ * Get database instance (async, ensures initialized)
+ * Use this instead of openDatabaseAsync directly!
+ */
+export async function getDB(): Promise<SQLite.SQLiteDatabase> {
+  if (db) return db;
+  return await initLocalDb();
+}
+
+/**
+ * Get database instance (sync, may be null)
+ * @deprecated Use getDB() instead
  */
 export function getDb(): SQLite.SQLiteDatabase | null {
   return db;

@@ -9,7 +9,10 @@
  */
 
 // deno-lint-ignore-file
-import { createClient, SupabaseClient } from "supabase";
+import {
+  createClient,
+  SupabaseClient,
+} from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchWithRetry } from "../_shared/retry.ts";
 
 // Simple type alias to avoid complex generic type inference issues
