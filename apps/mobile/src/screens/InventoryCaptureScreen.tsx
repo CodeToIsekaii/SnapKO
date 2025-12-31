@@ -275,6 +275,7 @@ export default function InventoryCaptureScreen({
         headers: {
           "Content-Type": "application/json",
           apikey: Env.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${Env.SUPABASE_ANON_KEY}`,
         },
         body: JSON.stringify(payload),
         signal: controller.signal,
