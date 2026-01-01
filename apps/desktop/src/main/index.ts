@@ -285,9 +285,22 @@ function registerAuthIPC() {
     }
 
     try {
+      // Fetch profile with inventory_model and join businesses for business_name
       const { data: profile, error } = await authClient
         .from("profiles")
-        .select("id, business_id, role, status, full_name")
+        .select(
+          `
+          id,
+          business_id,
+          role,
+          status,
+          full_name,
+          inventory_model,
+          businesses (
+            name
+          )
+        `
+        )
         .eq("id", currentSession.user.id)
         .single();
 
@@ -296,8 +309,14 @@ function registerAuthIPC() {
         return { profile: null, error: error.message };
       }
 
-      console.log("[Auth] Profile fetched:", profile);
-      return { profile };
+      // Flatten business_name from joined table
+      const flattenedProfile = {
+        ...profile,
+        business_name: (profile?.businesses as any)?.name || null,
+      };
+
+      console.log("[Auth] Profile fetched:", flattenedProfile);
+      return { profile: flattenedProfile };
     } catch (err: any) {
       console.error("[Auth] Get profile error:", err);
       return { profile: null, error: err.message };
