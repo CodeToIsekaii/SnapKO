@@ -13,7 +13,10 @@
  */
 
 // deno-lint-ignore-file
-import { createClient, SupabaseClient } from "supabase";
+import {
+  createClient,
+  SupabaseClient,
+} from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchWithRetry } from "../_shared/retry.ts";
 import type { StockItem, ParsedStockSheet } from "../_shared/types.ts";
 
