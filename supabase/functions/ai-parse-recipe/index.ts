@@ -7,6 +7,7 @@
  */
 
 import { fetchWithRetry } from "../_shared/retry.ts";
+import type { RecipeIngredient, ParsedRecipe } from "../_shared/types.ts";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
 
@@ -15,20 +16,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
-
-interface RecipeIngredient {
-  name: string;
-  quantity: number;
-  unit: string;
-}
-
-interface ParsedRecipe {
-  name: string;
-  category: string;
-  price: number | null;
-  ingredients: RecipeIngredient[];
-  confidence: number;
-}
 
 Deno.serve(async (req) => {
   // Handle CORS

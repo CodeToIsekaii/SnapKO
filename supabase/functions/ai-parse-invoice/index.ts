@@ -14,6 +14,7 @@ import {
   SupabaseClient,
 } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchWithRetry } from "../_shared/retry.ts";
+import type { InvoiceItem, ParsedInvoice } from "../_shared/types.ts";
 
 // Simple type alias to avoid complex generic type inference issues
 type SupabaseClientType = SupabaseClient<Record<string, unknown>>;
@@ -21,25 +22,6 @@ type SupabaseClientType = SupabaseClient<Record<string, unknown>>;
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-interface InvoiceItem {
-  ingredient_name: string;
-  quantity: number;
-  unit: string;
-  unit_price: number;
-  total_price: number;
-  confidence: number;
-}
-
-interface ParsedInvoice {
-  invoice_number?: string;
-  supplier_name?: string;
-  invoice_date?: string;
-  total_amount?: number;
-  items: InvoiceItem[];
-  overall_confidence: number;
-  raw_text?: string;
-}
 
 // Gemini prompt for invoice parsing
 const INVOICE_PROMPT = `Bạn là một AI chuyên đọc và phân tích hóa đơn nhập hàng cho nhà hàng/quán bar tại Việt Nam.

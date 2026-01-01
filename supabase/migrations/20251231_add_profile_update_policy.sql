@@ -4,7 +4,8 @@
 -- =========================================================
 
 -- Allow authenticated users to update their own profile
-CREATE POLICY IF NOT EXISTS "Users can update their own profile"
+DROP POLICY IF EXISTS "Users can update their own profile" ON profiles;
+CREATE POLICY "Users can update their own profile"
 ON profiles FOR UPDATE
 TO authenticated
 USING (id = auth.uid())
