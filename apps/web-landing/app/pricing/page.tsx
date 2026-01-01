@@ -75,12 +75,22 @@ export default function PricingPage() {
   const createPayment = async () => {
     if (!user) return;
 
+    // 1. Chống Spam Click: Nếu đang loading thì chặn luôn
+    if (paymentLoading) return;
+
+    // 2. Kiểm tra nếu đã có link chưa thanh toán (Optional - UX improvement)
+    // Nếu bạn muốn user phải hủy link cũ mới được tạo link mới thì check payosUrl ở đây.
+    // if (payosUrl) { window.open(payosUrl, '_blank'); return; }
+
     setPaymentLoading(true);
     setError(null);
 
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
+
+      // 3. Lấy domain hiện tại (localhost hoặc production) để redirect về đúng chỗ
+      const origin = window.location.origin;
 
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-payos-link`,
@@ -94,15 +104,24 @@ export default function PricingPage() {
           body: JSON.stringify({
             tier: "PRO",
             amount: PRO_PRICE,
+            // Gửi URL return/cancel động theo môi trường
+            returnUrl: `${origin}/settings/billing?status=success`,
+            cancelUrl: `${origin}/settings/billing?status=cancelled`,
           }),
         }
       );
 
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+
+      // 4. Xử lý lỗi từ Backend trả về (Ví dụ: "Bạn còn đơn chưa thanh toán")
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Không thể tạo link thanh toán");
+      }
 
       if (data.checkoutUrl) {
         setPayosUrl(data.checkoutUrl);
+        // Tùy chọn: Tự động mở tab mới luôn cho tiện
+        // window.open(data.checkoutUrl, '_blank');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Lỗi tạo thanh toán";

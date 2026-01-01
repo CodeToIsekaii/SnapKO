@@ -16,6 +16,7 @@ import { DarkTheme, ThemeProvider } from "@react-navigation/native";
 import * as Network from "expo-network";
 import { initLocalDb } from "../db";
 import { processSyncQueue } from "../services/syncQueue";
+import { syncBusinessConfig } from "../lib/supabase";
 
 // F&B "Organic Tech" Theme - Per .UXUIrules
 const SnapKoTheme = {
@@ -77,13 +78,34 @@ export default function RootLayout() {
         // For now, simulate checking local profile
         const db = (await import("../db")).getDb();
         if (db) {
-          const profile = await db.getFirstAsync<{
+          let profile = await db.getFirstAsync<{
             id: string;
             business_id: string | null;
             role: string;
             status: string;
             inventory_model: string | null;
           }>("SELECT * FROM local_profiles LIMIT 1");
+
+          // If we have a profile, sync config from server to get latest inventory_model
+          if (profile && profile.business_id) {
+            console.log("🔄 Syncing business config from server...");
+            const serverConfig = await syncBusinessConfig();
+
+            if (serverConfig.success && serverConfig.inventoryModel) {
+              // Re-fetch local profile after sync updated it
+              profile = await db.getFirstAsync<{
+                id: string;
+                business_id: string | null;
+                role: string;
+                status: string;
+                inventory_model: string | null;
+              }>("SELECT * FROM local_profiles LIMIT 1");
+              console.log(
+                "✅ Synced inventory_model:",
+                serverConfig.inventoryModel
+              );
+            }
+          }
 
           if (profile) {
             setAuthState({

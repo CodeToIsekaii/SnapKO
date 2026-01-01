@@ -8,7 +8,7 @@ import React, { useState } from "react";
 import { COLORS } from "../styles/theme";
 
 interface ModelSelectionPageProps {
-  onSave: (model: "MODEL_A" | "MODEL_B") => void;
+  onSave: (model: "SIMPLE" | "STANDARD") => void;
   businessName?: string;
 }
 
@@ -17,7 +17,7 @@ export default function ModelSelectionPage({
   businessName = "Quán của bạn",
 }: ModelSelectionPageProps) {
   const [selectedModel, setSelectedModel] = useState<
-    "MODEL_A" | "MODEL_B" | null
+    "SIMPLE" | "STANDARD" | null
   >(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -56,11 +56,11 @@ export default function ModelSelectionPage({
         <div
           style={{
             ...styles.card,
-            ...(selectedModel === "MODEL_A" ? styles.cardSelected : {}),
+            ...(selectedModel === "SIMPLE" ? styles.cardSelected : {}),
             borderColor:
-              selectedModel === "MODEL_A" ? COLORS.primary : COLORS.border,
+              selectedModel === "SIMPLE" ? COLORS.primary : COLORS.border,
           }}
-          onClick={() => setSelectedModel("MODEL_A")}
+          onClick={() => setSelectedModel("SIMPLE")}
         >
           <div style={styles.cardIcon}>🏠</div>
           <h2 style={styles.cardTitle}>KHO ĐƠN</h2>
@@ -88,16 +88,16 @@ export default function ModelSelectionPage({
           <button
             style={{
               ...styles.selectButton,
-              ...(selectedModel === "MODEL_A"
+              ...(selectedModel === "SIMPLE"
                 ? styles.selectButtonActive
                 : styles.selectButtonOutline),
             }}
             onClick={(e) => {
               e.stopPropagation();
-              setSelectedModel("MODEL_A");
+              setSelectedModel("SIMPLE");
             }}
           >
-            {selectedModel === "MODEL_A" ? "✓ Đã chọn" : "Chọn Mô Hình Này"}
+            {selectedModel === "SIMPLE" ? "✓ Đã chọn" : "Chọn Mô Hình Này"}
           </button>
         </div>
 
@@ -105,11 +105,11 @@ export default function ModelSelectionPage({
         <div
           style={{
             ...styles.card,
-            ...(selectedModel === "MODEL_B" ? styles.cardSelected : {}),
+            ...(selectedModel === "STANDARD" ? styles.cardSelected : {}),
             borderColor:
-              selectedModel === "MODEL_B" ? COLORS.primary : COLORS.border,
+              selectedModel === "STANDARD" ? COLORS.primary : COLORS.border,
           }}
-          onClick={() => setSelectedModel("MODEL_B")}
+          onClick={() => setSelectedModel("STANDARD")}
         >
           <div style={styles.cardIcon}>🏭→🍸</div>
           <h2 style={styles.cardTitle}>KHO KÉP</h2>
@@ -138,16 +138,16 @@ export default function ModelSelectionPage({
           <button
             style={{
               ...styles.selectButton,
-              ...(selectedModel === "MODEL_B"
+              ...(selectedModel === "STANDARD"
                 ? styles.selectButtonActive
                 : styles.selectButtonPrimary),
             }}
             onClick={(e) => {
               e.stopPropagation();
-              setSelectedModel("MODEL_B");
+              setSelectedModel("STANDARD");
             }}
           >
-            {selectedModel === "MODEL_B" ? "✓ Đã chọn" : "Chọn Mô Hình Này"}
+            {selectedModel === "STANDARD" ? "✓ Đã chọn" : "Chọn Mô Hình Này"}
           </button>
 
           {/* Recommended badge */}

@@ -84,5 +84,76 @@ export async function isAuthenticated(): Promise<boolean> {
   return !!session;
 }
 
+/**
+ * Sync business config from server to local SQLite
+ * Fetches inventory_model from profiles table and updates local_profiles
+ * Returns the inventory_model or null if not set
+ */
+export async function syncBusinessConfig(): Promise<{
+  inventoryModel: string | null;
+  businessName: string | null;
+  success: boolean;
+}> {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      console.log("[syncBusinessConfig] No session");
+      return { inventoryModel: null, businessName: null, success: false };
+    }
+
+    // Fetch profile with inventory_model and business info
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select(
+        `
+        inventory_model,
+        business_id,
+        businesses (
+          name
+        )
+      `
+      )
+      .eq("id", session.user.id)
+      .single();
+
+    if (error) {
+      console.error("[syncBusinessConfig] Query error:", error);
+      return { inventoryModel: null, businessName: null, success: false };
+    }
+
+    const inventoryModel = profile?.inventory_model || null;
+    const businessName = (profile?.businesses as any)?.name || null;
+
+    console.log("[syncBusinessConfig] Fetched from server:", {
+      inventoryModel,
+      businessName,
+    });
+
+    // Update local SQLite if we have a model
+    if (inventoryModel) {
+      const { getDb } = await import("../db");
+      const db = getDb();
+      if (db) {
+        await db.runAsync(
+          "UPDATE local_profiles SET inventory_model = ? WHERE id = ?",
+          [inventoryModel, session.user.id]
+        );
+        console.log(
+          "✅ Local DB updated with inventory_model:",
+          inventoryModel
+        );
+      }
+    }
+
+    return { inventoryModel, businessName, success: true };
+  } catch (err) {
+    console.error("[syncBusinessConfig] Error:", err);
+    return { inventoryModel: null, businessName: null, success: false };
+  }
+}
+
 // Re-export types for convenience
 export type { Session, User } from "@supabase/supabase-js";

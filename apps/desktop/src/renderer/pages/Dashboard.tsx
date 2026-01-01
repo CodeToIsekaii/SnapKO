@@ -11,6 +11,8 @@ import { DashboardTab } from "./tabs/DashboardTab";
 import { EmployeesTab } from "./tabs/EmployeesTab";
 import IngredientsPage from "./IngredientsPage";
 import RecipesPage from "./Recipes";
+import SettingsPage from "./SettingsPage";
+import ProfileEditPage from "./ProfileEditPage";
 import { dashboardStyles, COLORS } from "../styles/theme";
 import { User } from "../types";
 
@@ -19,18 +21,20 @@ type TabId =
   | "employees"
   | "inventory"
   | "ingredients"
-  | "recipes";
+  | "recipes"
+  | "settings";
 
 interface DashboardProps {
   user: User;
 }
 
 export function Dashboard({ user }: DashboardProps) {
-  const { logout } = useAuth();
+  const { logout, profile, updateProfile, refreshProfile } = useAuth();
   const inventory = useInventory();
   const staff = useStaff();
 
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
+  const [editingProfile, setEditingProfile] = useState(false);
 
   // Load data on mount
   useEffect(() => {
@@ -38,14 +42,40 @@ export function Dashboard({ user }: DashboardProps) {
     staff.loadStaff();
   }, []);
 
-  // Tab definitions - Updated with new pages
+  // Tab definitions - Updated with Settings
   const tabs: { id: TabId; label: string; icon: string }[] = [
     { id: "dashboard", label: "Dashboard", icon: "📊" },
     { id: "employees", label: "Nhân viên", icon: "👥" },
     { id: "inventory", label: "Tồn kho", icon: "📦" },
     { id: "ingredients", label: "Nguyên liệu", icon: "🥬" },
     { id: "recipes", label: "Công thức", icon: "🍳" },
+    { id: "settings", label: "Cài đặt", icon: "⚙️" },
   ];
+
+  // Handle model change
+  const handleChangeModel = async (model: "SIMPLE" | "STANDARD") => {
+    if (updateProfile) {
+      await updateProfile({ inventory_model: model });
+    }
+  };
+
+  // Show Profile Edit Page if editing
+  if (editingProfile) {
+    return (
+      <ProfileEditPage
+        onBack={() => setEditingProfile(false)}
+        onSave={() => {
+          setEditingProfile(false);
+          refreshProfile?.();
+        }}
+        initialData={{
+          fullName: profile?.full_name || "",
+          businessName: profile?.business_name || "",
+          phoneNumber: "",
+        }}
+      />
+    );
+  }
 
   return (
     <div style={dashboardStyles.container}>
@@ -110,6 +140,19 @@ export function Dashboard({ user }: DashboardProps) {
         {activeTab === "ingredients" && <IngredientsPage />}
 
         {activeTab === "recipes" && <RecipesPage />}
+
+        {activeTab === "settings" && (
+          <SettingsPage
+            onLogout={logout}
+            userName={profile?.full_name || undefined}
+            userEmail={user.email}
+            userRole={profile?.role}
+            businessName={profile?.business_name || "Chưa thiết lập"}
+            inventoryModel={profile?.inventory_model}
+            onChangeModel={handleChangeModel}
+            onEditProfile={() => setEditingProfile(true)}
+          />
+        )}
       </main>
     </div>
   );

@@ -12,7 +12,9 @@ interface SettingsPageProps {
   userEmail?: string;
   userRole?: string;
   businessName?: string;
+  inventoryModel?: string | null; // SIMPLE | STANDARD | CHAIN
   onEditProfile?: () => void;
+  onChangeModel?: (model: "SIMPLE" | "STANDARD") => Promise<void>;
 }
 
 export default function SettingsPage({
@@ -21,7 +23,9 @@ export default function SettingsPage({
   userEmail,
   userRole,
   businessName,
+  inventoryModel,
   onEditProfile,
+  onChangeModel,
 }: SettingsPageProps) {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteCode, setInviteCode] = useState<string | null>(null);
@@ -29,6 +33,7 @@ export default function SettingsPage({
   const [syncStatus, setSyncStatus] = useState<
     "idle" | "syncing" | "success" | "error"
   >("idle");
+  const [changingModel, setChangingModel] = useState(false);
 
   const isOwner = userRole === "OWNER";
 
@@ -135,65 +140,74 @@ export default function SettingsPage({
         </div>
       </div>
 
-      {/* Sync Status Card */}
-      <div style={styles.card}>
-        <div style={styles.cardHeader}>
-          <span style={styles.cardTitle}>🔄 Đồng bộ dữ liệu</span>
-        </div>
-        <div style={styles.cardContent}>
-          <p style={styles.hint}>
-            Dữ liệu được lưu local và tự đồng bộ khi có mạng. Bấm nút bên dưới
-            để đồng bộ thủ công.
-          </p>
-          <button
-            onClick={handleSync}
-            disabled={syncStatus === "syncing"}
-            style={{
-              ...styles.secondaryButton,
-              opacity: syncStatus === "syncing" ? 0.6 : 1,
-            }}
-          >
-            {syncStatus === "syncing"
-              ? "⌛ Đang đồng bộ..."
-              : syncStatus === "success"
-              ? "✅ Đã đồng bộ!"
-              : syncStatus === "error"
-              ? "❌ Lỗi - Thử lại"
-              : "🔄 Đồng bộ ngay"}
-          </button>
-        </div>
-      </div>
-
-      {/* Staff Management - Owner Only */}
-      {isOwner && (
+      {/* Inventory Model Card - Owner Only */}
+      {isOwner && onChangeModel && (
         <div style={styles.card}>
           <div style={styles.cardHeader}>
-            <span style={styles.cardTitle}>👥 Quản lý nhân viên</span>
+            <span style={styles.cardTitle}>🏪 Mô hình kho</span>
           </div>
           <div style={styles.cardContent}>
             <p style={styles.hint}>
-              Tạo mã mời để nhân viên tham gia quản lý kho. Mã có hiệu lực 7
-              ngày.
+              Chọn mô hình vận hành phù hợp với quán của bạn. Điều này ảnh hưởng
+              đến cách nhân viên kiểm kho trên app.
             </p>
 
-            {inviteCode ? (
-              <div style={styles.inviteCodeBox}>
-                <span style={styles.inviteCode}>{inviteCode}</span>
-                <button onClick={copyToClipboard} style={styles.copyButton}>
-                  📋 Copy
-                </button>
-              </div>
-            ) : (
+            <div style={styles.modelToggleContainer}>
+              {/* SIMPLE Button */}
               <button
-                onClick={handleGenerateInviteCode}
-                disabled={generatingCode}
                 style={{
-                  ...styles.primaryButton,
-                  opacity: generatingCode ? 0.6 : 1,
+                  ...styles.modelButton,
+                  ...(inventoryModel === "SIMPLE"
+                    ? styles.modelButtonActive
+                    : {}),
                 }}
+                onClick={async () => {
+                  if (inventoryModel !== "SIMPLE") {
+                    setChangingModel(true);
+                    await onChangeModel("SIMPLE");
+                    setChangingModel(false);
+                  }
+                }}
+                disabled={changingModel}
               >
-                {generatingCode ? "Đang tạo..." : "🎟️ Tạo mã mời"}
+                <span style={styles.modelIcon}>🏠</span>
+                <span style={styles.modelName}>KHO ĐƠN</span>
+                <span style={styles.modelDesc}>1 kho duy nhất</span>
+                {inventoryModel === "SIMPLE" && (
+                  <span style={styles.modelCheck}>✓</span>
+                )}
               </button>
+
+              {/* STANDARD Button */}
+              <button
+                style={{
+                  ...styles.modelButton,
+                  ...(inventoryModel === "STANDARD"
+                    ? styles.modelButtonActive
+                    : {}),
+                }}
+                onClick={async () => {
+                  if (inventoryModel !== "STANDARD") {
+                    setChangingModel(true);
+                    await onChangeModel("STANDARD");
+                    setChangingModel(false);
+                  }
+                }}
+                disabled={changingModel}
+              >
+                <span style={styles.modelIcon}>🏭→🍸</span>
+                <span style={styles.modelName}>KHO KÉP</span>
+                <span style={styles.modelDesc}>Kho Tổng + Quầy Bar</span>
+                {inventoryModel === "STANDARD" && (
+                  <span style={styles.modelCheck}>✓</span>
+                )}
+              </button>
+            </div>
+
+            {changingModel && (
+              <p style={{ ...styles.hint, marginTop: 12, textAlign: "center" }}>
+                ⏳ Đang cập nhật...
+              </p>
             )}
           </div>
         </div>
@@ -435,5 +449,56 @@ const styles: Record<string, React.CSSProperties> = {
   },
   version: {
     color: COLORS.textMuted,
+  },
+  // Model Selection Styles
+  modelToggleContainer: {
+    display: "flex",
+    gap: 16,
+  },
+  modelButton: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    padding: 16,
+    backgroundColor: COLORS.surfaceHover,
+    border: `2px solid ${COLORS.border}`,
+    borderRadius: 12,
+    cursor: "pointer",
+    transition: "all 0.2s ease",
+    position: "relative",
+  },
+  modelButtonActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: `${COLORS.primary}15`,
+  },
+  modelIcon: {
+    fontSize: 28,
+    marginBottom: 8,
+  },
+  modelName: {
+    fontSize: 14,
+    fontWeight: 600,
+    color: COLORS.textPrimary,
+    marginBottom: 4,
+  },
+  modelDesc: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+  },
+  modelCheck: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    backgroundColor: COLORS.positive,
+    color: "white",
+    borderRadius: "50%",
+    width: 20,
+    height: 20,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 12,
+    fontWeight: "bold",
   },
 };
