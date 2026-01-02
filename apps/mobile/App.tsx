@@ -11,6 +11,7 @@ import "./global.css";
 import { StatusBar } from "expo-status-bar";
 import React, { useMemo, useEffect } from "react";
 import { ActivityIndicator, View, Text } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as SQLite from "expo-sqlite";
 
@@ -31,8 +32,14 @@ import {
   RecipeScanScreen,
   IngredientsListScreen,
   ProfileEditScreen,
+  AdHocTransferScreen,
 } from "./src/screens";
-import type { ConfirmItem } from "./src/screens/ConfirmLogScreen";
+import { InventoryModelProvider } from "./src/contexts/InventoryModelContext";
+import type {
+  StorageArea,
+  CheckMode,
+} from "./src/components/AreaSelectorModal";
+import type { ConfirmItem } from "./src/screens";
 
 // F&B Theme Colors
 const colors = {
@@ -389,11 +396,15 @@ export default function App() {
   );
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <AppNavigator />
-        <StatusBar style="light" />
-      </AuthProvider>
-    </QueryClientProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <InventoryModelProvider>
+            <AppNavigator />
+            <StatusBar style="light" />
+          </InventoryModelProvider>
+        </AuthProvider>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }

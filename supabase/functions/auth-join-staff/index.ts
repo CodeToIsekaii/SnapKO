@@ -18,6 +18,7 @@ interface JoinRequest {
   inviteCode: string;
   fullName: string;
   phoneNumber: string;
+  password: string;
 }
 
 Deno.serve(async (req) => {
@@ -56,6 +57,7 @@ Deno.serve(async (req) => {
   const phoneNumber = String(body.phoneNumber ?? "")
     .trim()
     .replace(/\s+/g, "");
+  const password = String(body.password ?? "");
 
   // Validate inputs
   if (!inviteCode || inviteCode.length !== 6) {
@@ -66,6 +68,9 @@ Deno.serve(async (req) => {
   }
   if (!phoneNumber || !/^[0-9]{9,12}$/.test(phoneNumber)) {
     return errorResponse("Invalid phone number", 400);
+  }
+  if (!password || password.length < 6) {
+    return errorResponse("Password must be at least 6 characters", 400);
   }
 
   // === 1. VALIDATE INVITE CODE ===
@@ -93,9 +98,10 @@ Deno.serve(async (req) => {
 
   const businessId = inviteRecord.business_id;
 
-  // === 2. CREATE SHADOW ACCOUNT CREDENTIALS ===
-  const shadowEmail = `${phoneNumber}@staff.snapko.local`;
-  const shadowPassword = `staff-${phoneNumber}-${inviteCode}-${Date.now()}`;
+  // === 2. CREATE ACCOUNT CREDENTIALS ===
+  const staffEmail = `${phoneNumber}@staff.snapko.local`;
+  // Use password from user input instead of auto-generated shadow password
+  const staffPassword = password;
 
   // === 3. CHECK IF USER ALREADY EXISTS ===
   let userId: string | null = null;
@@ -127,7 +133,7 @@ Deno.serve(async (req) => {
   if (!userId) {
     // Check if shadow email exists using listUsers filter
     const { data: userList } = await supabaseAdmin.auth.admin.listUsers();
-    const existingUser = userList?.users?.find((u) => u.email === shadowEmail);
+    const existingUser = userList?.users?.find((u) => u.email === staffEmail);
 
     if (existingUser) {
       userId = existingUser.id;
@@ -135,8 +141,8 @@ Deno.serve(async (req) => {
       // Create new shadow auth user
       const { data: newUser, error: createError } =
         await supabaseAdmin.auth.admin.createUser({
-          email: shadowEmail,
-          password: shadowPassword,
+          email: staffEmail,
+          password: staffPassword,
           email_confirm: true, // Auto-confirm so they can login
           user_metadata: {
             full_name: fullName,
@@ -185,13 +191,13 @@ Deno.serve(async (req) => {
   }
 
   await supabaseAdmin.auth.admin.updateUserById(userId, {
-    password: shadowPassword,
+    password: staffPassword,
   });
 
   const { data: sessionData, error: signInError } =
     await supabaseAdmin.auth.signInWithPassword({
-      email: shadowEmail,
-      password: shadowPassword,
+      email: staffEmail,
+      password: staffPassword,
     });
 
   if (signInError || !sessionData.session) {

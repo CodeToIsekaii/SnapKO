@@ -55,6 +55,7 @@ export default function InviteJoinScreen({
   const [inviteCode, setInviteCode] = useState("");
   const [fullName, setFullName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,6 +86,7 @@ export default function InviteJoinScreen({
       inviteCode,
       fullName: fullName.trim(),
       phoneNumber: phoneNumber.replace(/\s+/g, ""),
+      password,
     };
 
     const validationError = getFirstError(inviteJoinSchema, data);
@@ -332,6 +334,40 @@ export default function InviteJoinScreen({
                 placeholderTextColor={colors.textMuted}
                 keyboardType="phone-pad"
                 maxLength={12}
+                style={{
+                  backgroundColor: colors.surface,
+                  borderRadius: 12,
+                  padding: 16,
+                  color: colors.textPrimary,
+                  fontSize: 16,
+                  borderWidth: 2,
+                  borderColor: colors.border,
+                }}
+              />
+            </View>
+
+            <View>
+              <Text
+                style={{
+                  color: colors.textSecondary,
+                  marginBottom: 8,
+                  fontSize: 14,
+                }}
+              >
+                Mật khẩu
+              </Text>
+              <TextInput
+                value={password}
+                onChangeText={(t) => {
+                  setPassword(t);
+                  setError(null);
+                }}
+                placeholder="Tối thiểu 6 ký tự"
+                placeholderTextColor={colors.textMuted}
+                secureTextEntry={true}
+                autoCapitalize="none"
+                autoCorrect={false}
+                maxLength={72}
                 style={{
                   backgroundColor: colors.surface,
                   borderRadius: 12,

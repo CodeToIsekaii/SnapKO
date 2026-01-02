@@ -78,12 +78,26 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
   const handleSubmit = async () => {
     setError(null);
 
-    // Validate
+    // Check if input looks like a phone number (starts with 0 and has 9-11 digits)
+    const cleanInput = email.trim().replace(/\s|-/g, "");
+    const phoneRegex = /^0\d{8,10}$/;
+    const isPhoneNumber = phoneRegex.test(cleanInput);
+
+    // Validate - skip email format check if it's a phone number
     if (mode === "login") {
-      const validationError = getFirstError(loginSchema, { email, password });
-      if (validationError) {
-        setError(validationError);
-        return;
+      if (isPhoneNumber) {
+        // Only validate password for phone login
+        if (!password || password.length < 6) {
+          setError("Mật khẩu tối thiểu 6 ký tự");
+          return;
+        }
+      } else {
+        // Full email + password validation
+        const validationError = getFirstError(loginSchema, { email, password });
+        if (validationError) {
+          setError(validationError);
+          return;
+        }
       }
     } else {
       const validationError = getFirstError(registerSchema, {
@@ -100,10 +114,19 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
     setLoading(true);
 
     try {
+      // Convert phone number to staff email format if needed
+      let loginEmail = email.trim().toLowerCase();
+
+      if (isPhoneNumber) {
+        // Convert phone to staff email format
+        loginEmail = `${cleanInput}@staff.snapko.local`;
+        console.log("[Login] Phone detected, converted to:", loginEmail);
+      }
+
       if (mode === "login") {
-        await signIn(email.trim().toLowerCase(), password);
+        await signIn(loginEmail, password);
       } else {
-        await signUp(email.trim().toLowerCase(), password);
+        await signUp(loginEmail, password);
         Alert.alert(
           "Đăng ký thành công!",
           "Tài khoản của bạn đã được tạo. Bạn đã đăng nhập."
@@ -176,7 +199,7 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
 
         {/* Form */}
         <View style={{ gap: 16 }}>
-          {/* Email */}
+          {/* Email / Phone */}
           <View>
             <Text
               style={{
@@ -185,7 +208,7 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
                 fontSize: 14,
               }}
             >
-              Email
+              Email / Số điện thoại
             </Text>
             <TextInput
               value={email}
@@ -193,7 +216,7 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
                 setEmail(t);
                 setError(null);
               }}
-              placeholder="owner@quancafe.vn"
+              placeholder="email@example.com hoặc 0912345678"
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               keyboardType="email-address"
@@ -208,6 +231,15 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
                 borderColor: colors.border,
               }}
             />
+            <Text
+              style={{
+                color: colors.textMuted,
+                fontSize: 11,
+                marginTop: 4,
+              }}
+            >
+              Nhân viên đã đăng ký: nhập số điện thoại
+            </Text>
           </View>
 
           {/* Password */}
@@ -399,7 +431,10 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
           <Text
             style={{ color: colors.brand, fontSize: 16, fontWeight: "600" }}
           >
-            Tôi là nhân viên (có mã mời)
+            🆕 Nhân viên MỚI (có mã mời)
+          </Text>
+          <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 4 }}>
+            Đã đăng ký trước đó? Đăng nhập bằng SĐT phía trên
           </Text>
         </Pressable>
 

@@ -19,3 +19,5 @@ export { default as OwnerPendingListScreen } from "./OwnerPendingListScreen";
 export { default as DashboardScreen } from "./DashboardScreen";
 export { default as SetupPendingScreen } from "./SetupPendingScreen";
 export { default as AdHocTransferScreen } from "./AdHocTransferScreen";
+export { default as ConfirmLogScreen } from "./ConfirmLogScreen";
+export type { ConfirmItem } from "./ConfirmLogScreen";

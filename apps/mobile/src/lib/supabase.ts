@@ -92,6 +92,7 @@ export async function isAuthenticated(): Promise<boolean> {
 export async function syncBusinessConfig(): Promise<{
   inventoryModel: string | null;
   businessName: string | null;
+  businessId: string | null;
   success: boolean;
 }> {
   try {
@@ -101,7 +102,12 @@ export async function syncBusinessConfig(): Promise<{
 
     if (!session) {
       console.log("[syncBusinessConfig] No session");
-      return { inventoryModel: null, businessName: null, success: false };
+      return {
+        inventoryModel: null,
+        businessName: null,
+        businessId: null,
+        success: false,
+      };
     }
 
     // Fetch profile with inventory_model and business info
@@ -123,7 +129,12 @@ export async function syncBusinessConfig(): Promise<{
 
     if (error) {
       console.error("[syncBusinessConfig] Query error:", error);
-      return { inventoryModel: null, businessName: null, success: false };
+      return {
+        inventoryModel: null,
+        businessName: null,
+        businessId: null,
+        success: false,
+      };
     }
 
     console.log(
@@ -145,21 +156,63 @@ export async function syncBusinessConfig(): Promise<{
 
     // Update local SQLite if we have a model (use INSERT OR REPLACE for empty DB)
     if (inventoryModel) {
-      const { getDB } = await import("../db");
-      const db = await getDB();
-      await db.runAsync(
-        `INSERT OR REPLACE INTO local_profiles 
-         (id, business_id, role, status, inventory_model, created_at) 
-         VALUES (?, ?, 'staff', 'active', ?, datetime('now'))`,
-        [session.user.id, profile?.business_id || "", inventoryModel]
-      );
-      console.log("✅ Local DB updated with inventory_model:", inventoryModel);
+      try {
+        const { getDB } = await import("../db");
+        const db = await getDB();
+
+        // Check if db is properly initialized
+        if (!db) {
+          console.warn(
+            "[syncBusinessConfig] Database not ready yet, skipping local update"
+          );
+          return {
+            inventoryModel,
+            businessName,
+            businessId: profile?.business_id || null,
+            success: true,
+          };
+        }
+
+        await db.runAsync(
+          `INSERT OR REPLACE INTO local_profiles 
+           (id, business_id, role, status, inventory_model, created_at) 
+           VALUES (?, ?, 'staff', 'active', ?, datetime('now'))`,
+          [session.user.id, profile?.business_id || "", inventoryModel]
+        );
+        console.log(
+          "✅ Local DB updated with inventory_model:",
+          inventoryModel
+        );
+      } catch (dbErr: any) {
+        // Handle database not ready or NullPointerException
+        console.warn(
+          "[syncBusinessConfig] DB update skipped (not ready):",
+          dbErr?.message || dbErr
+        );
+        // Still return success since we got data from server
+        return {
+          inventoryModel,
+          businessName,
+          businessId: profile?.business_id || null,
+          success: true,
+        };
+      }
     }
 
-    return { inventoryModel, businessName, success: true };
+    return {
+      inventoryModel,
+      businessName,
+      businessId: profile?.business_id || null,
+      success: true,
+    };
   } catch (err) {
     console.error("[syncBusinessConfig] Error:", err);
-    return { inventoryModel: null, businessName: null, success: false };
+    return {
+      inventoryModel: null,
+      businessName: null,
+      businessId: null,
+      success: false,
+    };
   }
 }
 

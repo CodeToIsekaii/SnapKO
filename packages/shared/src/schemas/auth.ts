@@ -86,6 +86,10 @@ export const inviteJoinSchema = z.object({
     .refine((v) => vietnamesePhoneRegex.test(v), {
       message: "Số điện thoại không hợp lệ (VD: 0901234567)",
     }),
+  password: z
+    .string()
+    .min(6, "Mật khẩu tối thiểu 6 ký tự")
+    .max(72, "Mật khẩu quá dài"),
 });
 
 export type InviteJoinInput = z.infer<typeof inviteJoinSchema>;
