@@ -295,9 +295,11 @@ function registerAuthIPC() {
           role,
           status,
           full_name,
+          phone_number,
           inventory_model,
           businesses (
-            name
+            name,
+            inventory_model
           )
         `
         )
@@ -309,10 +311,15 @@ function registerAuthIPC() {
         return { profile: null, error: error.message };
       }
 
-      // Flatten business_name from joined table
+      // Flatten business info from joined table
       const flattenedProfile = {
         ...profile,
         business_name: (profile?.businesses as any)?.name || null,
+        // PREFER business model (global) over profile model (legacy)
+        inventory_model:
+          (profile?.businesses as any)?.inventory_model ||
+          profile.inventory_model ||
+          "STANDARD",
       };
 
       console.log("[Auth] Profile fetched:", flattenedProfile);
@@ -358,6 +365,117 @@ function registerAuthIPC() {
         }
       } catch (err: any) {
         console.error("[Auth] Create business error:", err);
+        return { success: false, error: err.message };
+      }
+    }
+  );
+
+  // Update profile (for model selection, etc.)
+  // CRITICAL: Must use main process client which has auth session
+  ipcMain.handle(
+    "auth:update-profile",
+    async (
+      _event,
+      data: {
+        inventory_model?: string;
+        full_name?: string;
+        phone_number?: string | null;
+      }
+    ) => {
+      if (!authClient || !currentSession?.user) {
+        return { success: false, error: "Not authenticated" };
+      }
+
+      try {
+        console.log("[Auth] Updating profile:", data);
+
+        // 1. Update profile (UI state / backward compatibility)
+        const { error } = await authClient
+          .from("profiles")
+          .update(data)
+          .eq("id", currentSession.user.id);
+
+        if (error) {
+          console.error("[Auth] Update profile error:", error);
+          return { success: false, error: error.message };
+        }
+
+        // 2. If inventory_model changed, sync to BUSINESS table (Global setting)
+        if (data.inventory_model) {
+          // Get current profile to check role & business_id
+          const { data: profile } = await authClient
+            .from("profiles")
+            .select("business_id, role")
+            .eq("id", currentSession.user.id)
+            .single();
+
+          if (profile?.role === "OWNER" && profile.business_id) {
+            console.log(
+              "[Auth] Syncing model to BUSINESS:",
+              data.inventory_model
+            );
+            const { error: busError } = await authClient
+              .from("businesses")
+              .update({ inventory_model: data.inventory_model })
+              .eq("id", profile.business_id);
+
+            if (busError) {
+              console.error("[Auth] Failed to sync to business:", busError);
+              // Don't fail the whole request, but log it
+            }
+          }
+        }
+
+        console.log("[Auth] Profile updated successfully");
+        return { success: true };
+      } catch (err: any) {
+        console.error("[Auth] Update profile error:", err);
+        return { success: false, error: err.message };
+      }
+    }
+  );
+
+  // Update business (Global Settings) - Explicit Handler
+  ipcMain.handle(
+    "auth:update-business",
+    async (_event, data: { inventory_model?: string; name?: string }) => {
+      if (!authClient || !currentSession?.user) {
+        return { success: false, error: "Not authenticated" };
+      }
+
+      try {
+        console.log("[Auth] Updating business explicitly:", data);
+
+        // 1. Get Business ID from Profile
+        const { data: profile, error: profileError } = await authClient
+          .from("profiles")
+          .select("business_id, role")
+          .eq("id", currentSession.user.id)
+          .single();
+
+        if (profileError || !profile?.business_id) {
+          return { success: false, error: "Business not found for user" };
+        }
+
+        if (profile.role !== "OWNER") {
+          return { success: false, error: "Only OWNER can update business" };
+        }
+
+        // 2. Update Business
+        const { error } = await authClient
+          .from("businesses")
+          .update(data)
+          .eq("id", profile.business_id);
+
+        if (error) {
+          console.error("[Auth] Update business error:", error);
+          return { success: false, error: error.message };
+        }
+
+        console.log("[Auth] Business updated successfully");
+        return { success: true };
+      } catch (err: any) {
+        console.error("[Auth] Update business exception:", err);
         return { success: false, error: err.message };
       }
     }

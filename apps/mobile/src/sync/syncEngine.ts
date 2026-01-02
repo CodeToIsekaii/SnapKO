@@ -386,6 +386,21 @@ export async function syncPendingLogs(
     syncStatus.lastSyncAt = new Date().toISOString();
     await updatePendingCount(db);
 
+    // 🔔 Ring the bell to notify other devices (Signal Pattern)
+    if (syncedCount > 0) {
+      try {
+        const profile = await db.getFirstAsync<{ business_id: string }>(
+          "SELECT business_id FROM local_profiles LIMIT 1"
+        );
+        if (profile?.business_id) {
+          const { triggerStockUpdateSignal } = await import("./realtimeSync");
+          await triggerStockUpdateSignal(profile.business_id);
+        }
+      } catch (signalErr) {
+        console.warn("[SyncEngine] Failed to trigger signal:", signalErr);
+      }
+    }
+
     console.log(
       `[SyncEngine] Sync complete: ${syncedCount} synced, ${failedCount} failed`
     );

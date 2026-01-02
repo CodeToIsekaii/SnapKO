@@ -19,7 +19,7 @@
 
 import { useState, useCallback, useMemo } from "react";
 import * as Haptics from "expo-haptics";
-import { Alert } from "react-native";
+import { Alert, ToastAndroid, Platform } from "react-native";
 import {
   parseStockWithAI,
   type ParsedStockItem,
@@ -465,6 +465,15 @@ export function useStockTakeLogic(): UseStockTakeLogicReturn {
                 ],
               });
             }
+          }
+
+          // Show toast notification for implicit transfers (per UXUIrules 3.D)
+          const transferCount = state.itemsWithImport.length;
+          const toastMsg = `Đã tự động tạo phiếu chuyển kho cho ${transferCount} món từ cột "Nhập".`;
+          if (Platform.OS === "android") {
+            ToastAndroid.show(toastMsg, ToastAndroid.LONG);
+          } else {
+            Alert.alert("Chuyển kho tự động", toastMsg);
           }
         }
 

@@ -5,16 +5,71 @@
 import * as SQLite from "expo-sqlite";
 
 let db: SQLite.SQLiteDatabase | null = null;
+let initPromise: Promise<SQLite.SQLiteDatabase> | null = null; // Mutex lock
+
+// Schema version - INCREMENT THIS to force database reset
+// v5: Added business_id, inventory_model to local_profiles + density/tare_weight to ingredients
+const SCHEMA_VERSION = 5;
 
 /**
  * Initialize local SQLite database with all tables
+ * Uses mutex lock to prevent concurrent initialization
  */
 export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
+  // Return existing database if already initialized
   if (db) return db;
 
-  db = await SQLite.openDatabaseAsync("snapko.db");
+  // If initialization is in progress, wait for it
+  if (initPromise) return initPromise;
 
-  await db.execAsync(`
+  // Start initialization with lock
+  initPromise = (async () => {
+    db = await SQLite.openDatabaseAsync("snapko.db");
+
+    // Check schema version and migrate if needed
+    await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS schema_info (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+
+    const versionRow = await db.getFirstAsync<{ value: string }>(
+      "SELECT value FROM schema_info WHERE key = 'version'"
+    );
+    const currentVersion = versionRow ? parseInt(versionRow.value) : 0;
+
+    if (currentVersion < SCHEMA_VERSION) {
+      console.log(
+        `[DB] Migrating from v${currentVersion} to v${SCHEMA_VERSION}...`
+      );
+
+      // Drop old tables to recreate with new schema
+      await db.execAsync(`
+      DROP TABLE IF EXISTS local_profiles;
+      DROP TABLE IF EXISTS local_storage_areas;
+      DROP TABLE IF EXISTS local_stock_levels;
+      DROP TABLE IF EXISTS local_transfer_logs;
+      DROP TABLE IF EXISTS local_inventory_logs;
+      DROP TABLE IF EXISTS local_waste_logs;
+      DROP TABLE IF EXISTS pending_sync_logs;
+      DROP TABLE IF EXISTS local_ingredients;
+      DROP TABLE IF EXISTS local_import_logs;
+      DROP TABLE IF EXISTS local_sales_logs;
+      DROP TABLE IF EXISTS local_metadata;
+    `);
+
+      // Update version
+      await db.runAsync(
+        "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('version', ?)",
+        [SCHEMA_VERSION.toString()]
+      );
+
+      console.log(`[DB] Migration complete!`);
+    }
+
+    // Create all tables (will be no-op if they exist)
+    await db.execAsync(`
     PRAGMA journal_mode = WAL;
 
     -- Profiles (minimal data) with inventory_model
@@ -129,6 +184,10 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       base_unit TEXT,
       min_threshold REAL NOT NULL DEFAULT 0,
       average_unit_cost REAL NOT NULL DEFAULT 0,
+      unit_cost REAL,
+      density REAL,
+      tare_weight REAL,
+      aliases TEXT,
       archived INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
@@ -166,6 +225,13 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       synced INTEGER NOT NULL DEFAULT 0
     );
 
+    -- Metadata table for sync timestamps (Signal Pattern)
+    CREATE TABLE IF NOT EXISTS local_metadata (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_pending_synced ON pending_sync_logs(synced);
     CREATE INDEX IF NOT EXISTS idx_ingredients_business ON local_ingredients(business_id);
     CREATE INDEX IF NOT EXISTS idx_stock_levels_ingredient ON local_stock_levels(ingredient_id);
@@ -173,7 +239,10 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
     CREATE INDEX IF NOT EXISTS idx_storage_areas_business ON local_storage_areas(business_id);
   `);
 
-  return db;
+    return db;
+  })();
+
+  return initPromise;
 }
 
 /**

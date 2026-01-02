@@ -17,6 +17,7 @@ import * as Network from "expo-network";
 import { initLocalDb } from "../db";
 import { processSyncQueue } from "../services/syncQueue";
 import { syncBusinessConfig } from "../lib/supabase";
+import { InventoryModelProvider } from "../contexts/InventoryModelContext";
 
 // F&B "Organic Tech" Theme - Per .UXUIrules
 const SnapKoTheme = {
@@ -207,39 +208,43 @@ export default function RootLayout() {
   // Show loading spinner while checking auth
   if (authState.isLoading) {
     return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: "center",
-          alignItems: "center",
-          backgroundColor: COLORS.background,
-        }}
-      >
-        <ActivityIndicator size="large" color={COLORS.primary} />
-      </View>
+      <InventoryModelProvider>
+        <View
+          style={{
+            flex: 1,
+            justifyContent: "center",
+            alignItems: "center",
+            backgroundColor: COLORS.background,
+          }}
+        >
+          <ActivityIndicator size="large" color={COLORS.primary} />
+        </View>
+      </InventoryModelProvider>
     );
   }
 
   return (
-    <ThemeProvider value={SnapKoTheme}>
-      <StatusBar style="light" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: COLORS.background },
-          animation: "slide_from_right",
-        }}
-      >
-        {/* Note: Auth is handled by App.tsx, not Expo Router */}
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen
-          name="camera/[snapType]"
-          options={{
-            presentation: "fullScreenModal",
-            animation: "slide_from_bottom",
+    <InventoryModelProvider>
+      <ThemeProvider value={SnapKoTheme}>
+        <StatusBar style="light" />
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: COLORS.background },
+            animation: "slide_from_right",
           }}
-        />
-      </Stack>
-    </ThemeProvider>
+        >
+          {/* Note: Auth is handled by App.tsx, not Expo Router */}
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="camera/[snapType]"
+            options={{
+              presentation: "fullScreenModal",
+              animation: "slide_from_bottom",
+            }}
+          />
+        </Stack>
+      </ThemeProvider>
+    </InventoryModelProvider>
   );
 }

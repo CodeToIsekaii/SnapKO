@@ -18,6 +18,7 @@ interface Profile {
   id: string;
   business_id: string | null;
   business_name?: string | null;
+  phone_number: string | null;
   role: string;
   status: string;
   full_name: string | null;
@@ -317,20 +318,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Update profile (for model selection, etc.)
+  // CRITICAL: Use IPC to main process which has auth session for RLS
   const updateProfile = useCallback(
     async (data: Partial<Profile>): Promise<boolean> => {
       try {
-        if (!supabase || !state.user) {
+        if (!state.user) {
           throw new Error("Not authenticated");
         }
 
-        // Update profile in Supabase
-        const { error } = await supabase
-          .from("profiles")
-          .update(data)
-          .eq("id", state.user.id);
+        // Call IPC handler in main process (has auth session)
+        // Cast to expected type for IPC
+        const ipcData = {
+          inventory_model: data.inventory_model ?? undefined,
+          full_name: data.full_name ?? undefined,
+        };
+        const result = await window.electronAPI?.updateProfile?.(ipcData);
 
-        if (error) throw error;
+        if (!result?.success) {
+          throw new Error(result?.error || "Update failed");
+        }
 
         // Update local state
         setState((s) => ({
@@ -338,7 +344,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           profile: s.profile ? { ...s.profile, ...data } : null,
         }));
 
-        console.log("[AuthContext] Profile updated:", data);
+        console.log("[AuthContext] Profile updated via IPC:", data);
         return true;
       } catch (err) {
         console.error("[AuthContext] Update profile error:", err);

@@ -52,10 +52,44 @@ export function Dashboard({ user }: DashboardProps) {
     { id: "settings", label: "Cài đặt", icon: "⚙️" },
   ];
 
-  // Handle model change
+  // Handle model change with error handling
   const handleChangeModel = async (model: "SIMPLE" | "STANDARD") => {
     if (updateProfile) {
-      await updateProfile({ inventory_model: model });
+      console.log("[Dashboard] Changing model to:", model);
+
+      try {
+        // CHECK IF API IS AVAILABLE (Force Restart if missing)
+        if (!(window as any).electronAPI?.updateBusiness) {
+          alert(
+            "⚠️ Lỗi phiên bản: API chưa được cập nhật.\n\nVui lòng TẮT và MỞ LẠI ứng dụng Desktop (Restart) để nhận code mới!"
+          );
+          return;
+        }
+
+        // 1. Update GLOBAL Business Config (Source of Truth)
+        await (window as any).electronAPI?.updateBusiness?.({
+          inventory_model: model,
+        });
+
+        // 2. Update Legacy Profile + Local State (for UI consistency)
+        const success = await updateProfile({ inventory_model: model });
+
+        if (success) {
+          console.log("[Dashboard] Model updated successfully!");
+          // Force refresh profile from server to confirm sync
+          await refreshProfile?.();
+          alert(
+            `✅ Đã chuyển sang chế độ ${
+              model === "SIMPLE" ? "Kho Đơn" : "Kho Kép"
+            }!`
+          );
+        } else {
+          throw new Error("Local profile update failed");
+        }
+      } catch (err) {
+        console.error("[Dashboard] Model update failed:", err);
+        alert("❌ Lỗi: Không thể cập nhật mô hình kho. Vui lòng thử lại.");
+      }
     }
   };
 
@@ -71,7 +105,7 @@ export function Dashboard({ user }: DashboardProps) {
         initialData={{
           fullName: profile?.full_name || "",
           businessName: profile?.business_name || "",
-          phoneNumber: "",
+          phoneNumber: profile?.phone_number || "",
         }}
       />
     );

@@ -66,7 +66,16 @@ function AppContent() {
         onSave={async (model) => {
           // Update profile with selected model
           if (updateProfile) {
-            await updateProfile({ inventory_model: model });
+            try {
+              // 1. Update Global Business
+              await (window as any).electronAPI?.updateBusiness?.({
+                inventory_model: model,
+              });
+              // 2. Update Legacy Profile
+              await updateProfile({ inventory_model: model });
+            } catch (e) {
+              console.error("Model setup failed", e);
+            }
           }
         }}
       />

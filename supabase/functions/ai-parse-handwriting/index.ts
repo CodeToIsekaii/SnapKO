@@ -24,25 +24,31 @@ const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-// Gemini prompt for handwritten stock sheet OCR
-// Per UPDATED .antigravityrules: Must read "Tồn cuối" AND "Nhập/Import" columns
-const HANDWRITING_PROMPT = `Bạn là một AI chuyên đọc chữ viết tay tiếng Việt trên phiếu kiểm kho của nhà hàng/quán bar.
+const getPrompt = (model: string, area: string) => {
+  const isBarCheck = area === "bar";
+  const isStandard = model === "STANDARD";
+
+  const note =
+    isStandard && isBarCheck
+      ? "LƯU Ý: Đây là kiểm Bar. Hãy đọc kỹ cột NHẬP để ghi nhận hàng chuyển từ Kho Tổng qua."
+      : `LƯU Ý: Đây là kiểm ${
+          isBarCheck ? "Bar" : "Kho"
+        }. Tập trung vào cột TỒN CUỐI.`;
+
+  return `Bạn là một AI chuyên đọc chữ viết tay tiếng Việt trên phiếu kiểm kho.
+MÔ HÌNH: ${isStandard ? "STANDARD (Kho Kép: Tổng & Bar)" : "SIMPLE (Kho Đơn)"}
+KHU VỰC: ${isBarCheck ? "QUẦY BAR (Service)" : "KHO TỔNG (Storage)"}
 
 QUAN TRỌNG - "SMART SHEET" FEATURE:
 Phiếu kiểm thường có 2 CỘT SỐ LIỆU:
-1. **Cột "TỒN CUỐI"** (hoặc "Tồn", "Closing"): Số lượng đếm được cuối ca
-2. **Cột "NHẬP"** (hoặc "Import", "Nhập vào"): Số lượng nhập từ Kho Tổng trong ca
+1. **Cột "TỒN CUỐI"**: Số lượng đếm được cuối ca.
+2. **Cột "NHẬP"**: Số lượng nhập từ Kho Tổng (chỉ có ý nghĩa khi kiểm Bar ở mô hình STANDARD).
 
-NẾU CỘT NHẬP ĐỂ TRỐNG hoặc GẠCH NGANG (-), trả về import_qty = 0, KHÔNG trả về null.
-
-Chữ viết tay nhân viên thường:
-- Viết tắt (VD: "bơ" = bơ, "sr" = sữa rút, "cf" = cà phê)
-- Số viết ẩu, khó đọc
-- Bôi xóa, gạch ngang
+${note}
 
 Hãy phân tích hình ảnh phiếu kiểm này và trả về JSON với format sau:
 {
-  "check_type": "bar",
+  "check_type": "${area}",
   "items": [
     {
       "ingredient_name": "tên nguyên liệu (chuẩn hóa)",
@@ -58,19 +64,24 @@ Hãy phân tích hình ảnh phiếu kiểm này và trả về JSON với forma
   "warnings": ["cảnh báo nếu có vấn đề"]
 }
 
-QUY TẮC QUAN TRỌNG:
-1. Trả về JSON thuần túy, KHÔNG có markdown
-2. Số liệu phải là số, không phải string
-3. Nếu confidence < 85, đặt needs_review = true
-4. Nếu không đọc được số TỒN, trả về stock_qty = 0 và needs_review = true
-5. Nếu cột NHẬP để trống hoặc gạch ngang, trả về import_qty = 0 (KHÔNG null)
-6. Chuẩn hóa tên nguyên liệu (VD: "sr" → "Sữa tươi", "cf" → "Cà phê")
-7. Thêm warning nếu phát hiện chữ bị gạch xóa hoặc sửa`;
+QUY TẮC:
+1. Trả về JSON thuần túy, KHÔNG markdown.
+2. Số liệu là số (number), không phải string.
+3. Nếu confidence < 85, đặt needs_review = true.
+4. Cột NHẬP trống hoặc gạch ngang → import_qty = 0.
+5. Chuẩn hóa tên: "sr" -> "Sữa tươi", "cf" -> "Cà phê", "bơ" -> "Bơ".`;
+};
 
-async function callGemini(imageBase64: string): Promise<ParsedStockSheet> {
+async function callGemini(
+  imageBase64: string,
+  model: string,
+  area: string
+): Promise<ParsedStockSheet> {
   if (!GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY not configured");
   }
+
+  const prompt = getPrompt(model, area);
 
   const response = await fetchWithRetry(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-001:generateContent?key=${GEMINI_API_KEY}`,
@@ -81,7 +92,7 @@ async function callGemini(imageBase64: string): Promise<ParsedStockSheet> {
         contents: [
           {
             parts: [
-              { text: HANDWRITING_PROMPT },
+              { text: prompt },
               {
                 inline_data: {
                   mime_type: "image/jpeg",
@@ -92,8 +103,8 @@ async function callGemini(imageBase64: string): Promise<ParsedStockSheet> {
           },
         ],
         generationConfig: {
-          temperature: 0.2, // Slightly higher for creative interpretation of messy handwriting
-          maxOutputTokens: 4096, // Stock sheets can have many items
+          temperature: 0.1,
+          maxOutputTokens: 2048,
           responseMimeType: "application/json",
         },
       }),
@@ -110,7 +121,6 @@ async function callGemini(imageBase64: string): Promise<ParsedStockSheet> {
 
   try {
     const parsed = JSON.parse(text);
-    // Ensure all items have needs_review flag
     if (parsed.items) {
       parsed.items = parsed.items.map((item: StockItem) => ({
         ...item,
@@ -133,7 +143,6 @@ async function matchIngredients(
   businessId: string,
   items: StockItem[]
 ): Promise<(StockItem & { ingredient_id?: string })[]> {
-  // Get existing ingredients for this business
   const { data: ingredients } = (await supabase
     .from("ingredients")
     .select("id, name, base_unit")
@@ -144,16 +153,12 @@ async function matchIngredients(
 
   if (!ingredients) return items;
 
-  // Fuzzy matching with Vietnamese normalization
   return items.map((item) => {
     const normalizedName = item.ingredient_name.toLowerCase().trim();
-
-    // Try exact match first
     let match = ingredients.find(
       (ing) => ing.name.toLowerCase() === normalizedName
     );
 
-    // Try partial match
     if (!match) {
       match = ingredients.find(
         (ing) =>
@@ -166,14 +171,12 @@ async function matchIngredients(
       ...item,
       ingredient_id: match?.id,
       unit: item.unit || match?.base_unit,
-      // If no match found, mark for review
       needs_review: item.needs_review || !match,
     };
   });
 }
 
 Deno.serve(async (req: Request) => {
-  // CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {
       headers: {
@@ -185,7 +188,12 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { image_base64, business_id, area_type } = await req.json();
+    const {
+      image_base64,
+      business_id,
+      area_type,
+      inventory_model = "SIMPLE",
+    } = await req.json();
 
     if (!image_base64) {
       return new Response(
@@ -194,10 +202,8 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Parse handwritten stock sheet with Gemini
-    const parsed = await callGemini(image_base64);
+    const parsed = await callGemini(image_base64, inventory_model, area_type);
 
-    // Match items to existing ingredients if business_id provided
     let matchedItems = parsed.items;
     if (business_id) {
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);

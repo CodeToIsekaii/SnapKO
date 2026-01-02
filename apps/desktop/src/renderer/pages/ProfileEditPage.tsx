@@ -55,10 +55,10 @@ export default function ProfileEditPage({
     setError(null);
 
     try {
-      // Update profile via IPC
+      // Update profile via IPC (use snake_case for DB columns)
       const result = await (window as any).electronAPI?.updateProfile?.({
-        fullName: formData.fullName.trim(),
-        phoneNumber: formData.phoneNumber.trim() || null,
+        full_name: formData.fullName.trim(),
+        phone_number: formData.phoneNumber.trim() || null,
       });
 
       // Update business name via IPC

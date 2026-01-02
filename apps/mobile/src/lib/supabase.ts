@@ -105,6 +105,7 @@ export async function syncBusinessConfig(): Promise<{
     }
 
     // Fetch profile with inventory_model and business info
+    // Fetch profile with inventory_model and business info
     const { data: profile, error } = await supabase
       .from("profiles")
       .select(
@@ -112,7 +113,8 @@ export async function syncBusinessConfig(): Promise<{
         inventory_model,
         business_id,
         businesses (
-          name
+          name,
+          inventory_model
         )
       `
       )
@@ -124,28 +126,34 @@ export async function syncBusinessConfig(): Promise<{
       return { inventoryModel: null, businessName: null, success: false };
     }
 
-    const inventoryModel = profile?.inventory_model || null;
+    console.log(
+      "[syncBusinessConfig] Raw Profile:",
+      JSON.stringify(profile, null, 2)
+    );
+
+    // Prioritize GLOBAL business model over LEGACY profile model
+    const businessModel = (profile?.businesses as any)?.inventory_model;
+    const inventoryModel =
+      businessModel || profile?.inventory_model || "STANDARD";
     const businessName = (profile?.businesses as any)?.name || null;
 
     console.log("[syncBusinessConfig] Fetched from server:", {
-      inventoryModel,
       businessName,
+      inventoryModel,
+      source: businessModel ? "GLOBAL BUSINESS" : "LEGACY PROFILE",
     });
 
-    // Update local SQLite if we have a model
+    // Update local SQLite if we have a model (use INSERT OR REPLACE for empty DB)
     if (inventoryModel) {
-      const { getDb } = await import("../db");
-      const db = getDb();
-      if (db) {
-        await db.runAsync(
-          "UPDATE local_profiles SET inventory_model = ? WHERE id = ?",
-          [inventoryModel, session.user.id]
-        );
-        console.log(
-          "✅ Local DB updated with inventory_model:",
-          inventoryModel
-        );
-      }
+      const { getDB } = await import("../db");
+      const db = await getDB();
+      await db.runAsync(
+        `INSERT OR REPLACE INTO local_profiles 
+         (id, business_id, role, status, inventory_model, created_at) 
+         VALUES (?, ?, 'staff', 'active', ?, datetime('now'))`,
+        [session.user.id, profile?.business_id || "", inventoryModel]
+      );
+      console.log("✅ Local DB updated with inventory_model:", inventoryModel);
     }
 
     return { inventoryModel, businessName, success: true };

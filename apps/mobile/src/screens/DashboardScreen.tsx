@@ -1,6 +1,10 @@
 /**
  * DashboardScreen - Realtime COGS chart and recent activity
  * Shows inventory value, recent logs with staff info
+ *
+ * MODEL-BASED UI:
+ * - SIMPLE: 3 buttons (Nhập, Bán, Kiểm) - direct to inventory
+ * - STANDARD: 3 buttons + Area Modal + "Cấp Hàng Khẩn" button
  */
 
 import React, { useState, useEffect, useCallback } from "react";
@@ -10,8 +14,15 @@ import {
   ScrollView,
   RefreshControl,
   Pressable,
+  Alert,
 } from "react-native";
 import { InventoryService } from "../features/inventory/services/inventory.service";
+import { useInventoryModel } from "../contexts/InventoryModelContext";
+import { supabase } from "../lib/supabase";
+import AreaSelectorModal, {
+  StorageArea,
+  CheckMode,
+} from "../components/AreaSelectorModal";
 
 interface DailySummary {
   date: string;
@@ -29,10 +40,15 @@ interface RecentLog {
 
 interface DashboardScreenProps {
   onOpenSettings: () => void;
-  onOpenInventory: () => void;
+  onOpenInventory: (
+    snapMode?: string,
+    areaType?: StorageArea,
+    checkMode?: CheckMode
+  ) => void;
   onOpenPendingList: () => void;
   onOpenRecipes?: () => void;
   onOpenIngredients?: () => void;
+  onOpenTransfer?: () => void; // New: For ad-hoc transfer (STANDARD only)
 }
 
 export default function DashboardScreen({
@@ -41,7 +57,11 @@ export default function DashboardScreen({
   onOpenPendingList,
   onOpenRecipes,
   onOpenIngredients,
+  onOpenTransfer,
 }: DashboardScreenProps) {
+  const { model, businessId, isStandard, syncModel } = useInventoryModel();
+  const [showAreaModal, setShowAreaModal] = useState(false);
+  const [currentSnapMode, setCurrentSnapMode] = useState<string>("stock");
   const [totalValue, setTotalValue] = useState(0);
   const [ingredientCount, setIngredientCount] = useState(0);
   const [recipeCount, setRecipeCount] = useState(0);
@@ -51,6 +71,9 @@ export default function DashboardScreen({
 
   const loadData = useCallback(async () => {
     try {
+      // Sync model from server first (for pull-to-refresh)
+      await syncModel();
+
       // Initialize InventoryService if needed
       await InventoryService.init();
 
@@ -82,11 +105,104 @@ export default function DashboardScreen({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [syncModel]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // 🔔 Realtime subscription - Auto-sync when owner changes model
+  // 🔔 Realtime subscription - Auto-sync when owner changes model (GLOBAL BUSINESS SYNC)
+  useEffect(() => {
+    if (!businessId) return;
+
+    let subscription: any = null;
+
+    const setupRealtimeSync = async () => {
+      // Listen for BUSINESS mode changes (global sync)
+      console.log(`[Dashboard] Subscribing to business changes: ${businessId}`);
+      const channelName = `business-model-changes-${businessId}`;
+
+      subscription = supabase
+        .channel(channelName)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "businesses",
+            filter: `id=eq.${businessId}`,
+          },
+          async (payload: any) => {
+            const newModel = payload.new?.inventory_model;
+            console.log("🔔 Realtime: Global model changed to", newModel);
+
+            // Sync locally and show notification
+            await syncModel();
+
+            // Show Toast/Alert
+            if (Platform.OS === "android") {
+              ToastAndroid.show(`Đã cập nhật: ${newModel}`, ToastAndroid.LONG);
+            } else {
+              Alert.alert(
+                "Cập nhật hệ thống",
+                `Chế độ đã thay đổi thành ${
+                  newModel === "STANDARD" ? "Kho Kép 📦" : "Kho Đơn 📋"
+                }`
+              );
+            }
+          }
+        )
+        .subscribe((status) => {
+          console.log(
+            `[Realtime] Subscription status for ${channelName}:`,
+            status
+          );
+        });
+    };
+
+    setupRealtimeSync();
+
+    return () => {
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
+  }, [businessId, syncModel]);
+
+  // Separate refreshing state for pull-to-refresh (like Facebook)
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    console.log("🔄 Pull-to-refresh triggered...");
+
+    try {
+      // Sync model from server
+      await syncModel();
+
+      // Reload all data
+      await InventoryService.init();
+      const ings = await InventoryService.getAll();
+      const total = ings.reduce(
+        (sum: number, i) => sum + (i.warehouse_qty + i.bar_qty) * i.unit_cost,
+        0
+      );
+      setTotalValue(total);
+      setIngredientCount(ings.length);
+
+      console.log("✅ Refresh complete!");
+      Alert.alert("Cập nhật thành công", "Dữ liệu đã được đồng bộ mới nhất.");
+    } catch (err) {
+      console.error("Refresh error:", err);
+      Alert.alert(
+        "Lỗi cập nhật",
+        "Không thể đồng bộ dữ liệu. Vui lòng thử lại."
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }, [syncModel]);
 
   const formatCurrency = (value: number) => {
     return value.toLocaleString("vi-VN") + " đ";
@@ -118,11 +234,45 @@ export default function DashboardScreen({
       </View>
 
       <ScrollView
+        style={{ flex: 1 }}
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={loadData} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={["#E07A2F"]}
+            tintColor="#E07A2F"
+            title="Đang đồng bộ..."
+            titleColor="#94A3B8"
+          />
         }
-        contentContainerStyle={{ padding: 16 }}
+        contentContainerStyle={{ padding: 16, flexGrow: 1, minHeight: "100%" }}
+        overScrollMode="always"
+        alwaysBounceVertical={true}
       >
+        {/* Model Debug Banner */}
+        <View
+          style={{
+            backgroundColor: model === "STANDARD" ? "#6B8E2320" : "#E07A2F20",
+            borderRadius: 8,
+            padding: 10,
+            marginBottom: 12,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Text
+            style={{
+              color: model === "STANDARD" ? "#6B8E23" : "#E07A2F",
+              fontSize: 12,
+              fontWeight: "600",
+            }}
+          >
+            Mode: {model} {model === "STANDARD" ? "📦" : "📋"} • Kéo xuống để
+            đồng bộ
+          </Text>
+        </View>
+
         {/* Main Stats */}
         <View
           style={{
@@ -182,12 +332,12 @@ export default function DashboardScreen({
               textTransform: "uppercase",
             }}
           >
-            3 Snaps - Thao tác nhanh
+            3 Snaps - Thao tác nhanh {isStandard ? "(Kho Kép)" : "(Kho Đơn)"}
           </Text>
           <View style={{ flexDirection: "row", gap: 8 }}>
             {/* 📸 IMPORT SNAP */}
             <Pressable
-              onPress={onOpenInventory}
+              onPress={() => onOpenInventory("import")}
               style={{
                 flex: 1,
                 backgroundColor: "#1A1A1A",
@@ -208,7 +358,7 @@ export default function DashboardScreen({
 
             {/* 📉 SALES SNAP */}
             <Pressable
-              onPress={onOpenInventory}
+              onPress={() => onOpenInventory("sales")}
               style={{
                 flex: 1,
                 backgroundColor: "#1A1A1A",
@@ -223,13 +373,22 @@ export default function DashboardScreen({
               <Text
                 style={{ color: "#6B8E23", fontWeight: "600", fontSize: 12 }}
               >
-                Bán Hàng
+                Kết Ca
               </Text>
             </Pressable>
 
-            {/* 📦 STOCK SNAP - Nổi bật nhất */}
+            {/* 📦 STOCK SNAP - Model-based behavior */}
             <Pressable
-              onPress={onOpenInventory}
+              onPress={() => {
+                if (isStandard) {
+                  // STANDARD: Show area selector modal
+                  setCurrentSnapMode("stock");
+                  setShowAreaModal(true);
+                } else {
+                  // SIMPLE: Go direct to stock check
+                  onOpenInventory("stock");
+                }
+              }}
               style={{
                 flex: 1,
                 backgroundColor: "#E07A2F",
@@ -244,7 +403,41 @@ export default function DashboardScreen({
               </Text>
             </Pressable>
           </View>
+
+          {/* 🔄 TRANSFER BUTTON - STANDARD MODE ONLY */}
+          {isStandard && onOpenTransfer && (
+            <Pressable
+              onPress={onOpenTransfer}
+              style={{
+                marginTop: 12,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "#2A2A2A",
+                borderRadius: 10,
+                padding: 12,
+                borderWidth: 1,
+                borderColor: "#3A3A3A",
+              }}
+            >
+              <Text style={{ fontSize: 20, marginRight: 8 }}>🔄</Text>
+              <Text
+                style={{ color: "#94A3B8", fontWeight: "600", fontSize: 13 }}
+              >
+                Cấp Hàng Khẩn (Chuyển Kho)
+              </Text>
+            </Pressable>
+          )}
         </View>
+
+        {/* Area Selector Modal for STANDARD mode */}
+        <AreaSelectorModal
+          visible={showAreaModal}
+          onClose={() => setShowAreaModal(false)}
+          onSelect={(area, mode) => {
+            onOpenInventory(currentSnapMode, area, mode);
+          }}
+        />
 
         {/* Recent Activity */}
         <View>

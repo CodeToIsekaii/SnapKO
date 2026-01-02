@@ -83,12 +83,19 @@ type Screen =
   | "RECIPE_EDIT"
   | "RECIPE_SCAN"
   | "INGREDIENTS_LIST"
-  | "PROFILE_EDIT";
+  | "PROFILE_EDIT"
+  | "TRANSFER";
 
 // State for ConfirmLog screen
 interface ConfirmLogParams {
   items: ConfirmItem[];
   localImagePath: string;
+}
+
+interface InventoryParams {
+  mode: "import" | "sales" | "stock";
+  areaType?: StorageArea;
+  checkMode?: CheckMode;
 }
 
 function AppNavigator() {
@@ -105,6 +112,11 @@ function AppNavigator() {
     React.useState<ConfirmLogParams | null>(null);
   const [editingRecipeId, setEditingRecipeId] = React.useState<string | null>(
     null
+  );
+  const [inventoryParams, setInventoryParams] = React.useState<InventoryParams>(
+    {
+      mode: "stock",
+    }
   );
 
   // Initialize DB and sync engine
@@ -251,14 +263,23 @@ function AppNavigator() {
     case "INVENTORY_CAPTURE":
       return (
         <InventoryCaptureScreen
-          onBack={() =>
-            setCurrentScreen(isOwner ? "DASHBOARD" : "INVENTORY_CAPTURE")
-          }
+          initialMode={inventoryParams.mode}
+          areaType={inventoryParams.areaType}
+          checkMode={inventoryParams.checkMode}
+          onBack={() => setCurrentScreen(isOwner ? "DASHBOARD" : "SETTINGS")}
           onOpenSettings={() => setCurrentScreen("SETTINGS")}
           onNavigateToConfirm={(items, localImagePath) => {
             setConfirmLogParams({ items, localImagePath });
             setCurrentScreen("CONFIRM_LOG");
           }}
+        />
+      );
+
+    case "TRANSFER":
+      return (
+        <AdHocTransferScreen
+          onBack={() => setCurrentScreen("DASHBOARD")}
+          onSuccess={() => setCurrentScreen("DASHBOARD")}
         />
       );
 
@@ -334,7 +355,15 @@ function AppNavigator() {
       return (
         <DashboardScreen
           onOpenSettings={() => setCurrentScreen("SETTINGS")}
-          onOpenInventory={() => setCurrentScreen("INVENTORY_CAPTURE")}
+          onOpenInventory={(mode, area, check) => {
+            setInventoryParams({
+              mode: (mode as any) || "stock",
+              areaType: area,
+              checkMode: check,
+            });
+            setCurrentScreen("INVENTORY_CAPTURE");
+          }}
+          onOpenTransfer={() => setCurrentScreen("TRANSFER")}
           onOpenPendingList={() => setCurrentScreen("OWNER_PENDING_LIST")}
           onOpenRecipes={() => setCurrentScreen("RECIPE_LIST")}
           onOpenIngredients={() => setCurrentScreen("INGREDIENTS_LIST")}

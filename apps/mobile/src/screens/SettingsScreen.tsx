@@ -236,33 +236,36 @@ export default function SettingsScreen({
         )}
 
         {/* Account Management - Opens web (Apple compliant - no payment keywords) */}
-        <View style={{ padding: 16, paddingTop: 0 }}>
-          <Pressable
-            onPress={() => openLink(ACCOUNT_URL)}
-            style={{
-              backgroundColor: "#E07A2F",
-              borderRadius: 12,
-              padding: 16,
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Text style={{ color: "white", fontWeight: "600", fontSize: 16 }}>
-              ⭐ Quản lý tài khoản
+        {/* OWNER ONLY - Staff doesn't need subscription management */}
+        {isOwner && (
+          <View style={{ padding: 16, paddingTop: 0 }}>
+            <Pressable
+              onPress={() => openLink(ACCOUNT_URL)}
+              style={{
+                backgroundColor: "#E07A2F",
+                borderRadius: 12,
+                padding: 16,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Text style={{ color: "white", fontWeight: "600", fontSize: 16 }}>
+                ⭐ Quản lý tài khoản
+              </Text>
+            </Pressable>
+            <Text
+              style={{
+                color: "#64748B",
+                fontSize: 11,
+                marginTop: 8,
+                textAlign: "center",
+              }}
+            >
+              Xem chi tiết gói dịch vụ của bạn
             </Text>
-          </Pressable>
-          <Text
-            style={{
-              color: "#64748B",
-              fontSize: 11,
-              marginTop: 8,
-              textAlign: "center",
-            }}
-          >
-            Xem chi tiết gói dịch vụ của bạn
-          </Text>
-        </View>
+          </View>
+        )}
 
         {/* Legal Links */}
         <View style={{ padding: 16, paddingTop: 0 }}>

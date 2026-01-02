@@ -18,6 +18,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   ToastAndroid,
+  StyleSheet,
+  TouchableOpacity,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -33,6 +35,11 @@ import {
   SurplusBottomSheet,
   VarianceReason,
 } from "../components";
+import { InventoryService } from "../features/inventory/services/inventory.service";
+import { useInventoryModel } from "../contexts/InventoryModelContext";
+import { useTodayIncoming } from "../hooks/useTodayIncoming";
+import { IncomingLogCard } from "../components/IncomingLogCard";
+import { StorageArea, CheckMode } from "../components/AreaSelectorModal";
 
 const CONFIDENCE_THRESHOLD = 85;
 
@@ -72,6 +79,10 @@ interface LocalIngredient {
 interface InventoryCaptureScreenProps {
   onBack: () => void;
   onOpenSettings: () => void;
+  onNavigateToConfirm: (items: AiMappedItem[], imagePath: string) => void;
+  initialMode?: "import" | "sales" | "stock";
+  areaType?: StorageArea;
+  checkMode?: CheckMode;
 }
 
 // Fuzzy match score
@@ -98,7 +109,12 @@ function getMatchScore(
 export default function InventoryCaptureScreen({
   onBack,
   onOpenSettings,
+  onNavigateToConfirm,
+  initialMode = "stock",
+  areaType,
+  checkMode,
 }: InventoryCaptureScreenProps) {
+  const { isStandard } = useInventoryModel();
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [localImagePath, setLocalImagePath] = useState<string | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -106,7 +122,13 @@ export default function InventoryCaptureScreen({
   const [items, setItems] = useState<AiMappedItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [snapMode, setSnapMode] = useState<"STOCK" | "IMPORT" | "SALES">(
-    "STOCK"
+    initialMode.toUpperCase() as any
+  );
+
+  // Storage Areas state for Standard Mode
+  const [currentAreaId, setCurrentAreaId] = useState<string | null>(null);
+  const { items: incomingItems } = useTodayIncoming(
+    isStandard && areaType === "BAR" ? currentAreaId : null
   );
 
   // Local ingredients for autocomplete
@@ -130,7 +152,25 @@ export default function InventoryCaptureScreen({
   // Load ingredients from local DB
   useEffect(() => {
     loadIngredients();
-  }, []);
+    if (isStandard && areaType) {
+      loadAreaId();
+    }
+  }, [isStandard, areaType]);
+
+  const loadAreaId = async () => {
+    try {
+      const db = await getDB();
+      const area = await db.getFirstAsync<{ id: string }>(
+        "SELECT id FROM local_storage_areas WHERE type = ? LIMIT 1",
+        [areaType === "BAR" ? "SERVICE" : "STORAGE"]
+      );
+      if (area) {
+        setCurrentAreaId(area.id);
+      }
+    } catch (err) {
+      console.error("Area load error:", err);
+    }
+  };
 
   const loadIngredients = async () => {
     try {
@@ -277,8 +317,15 @@ export default function InventoryCaptureScreen({
         case "STOCK":
         default:
           endpoint = `${Env.SUPABASE_URL}/functions/v1/ai-parse-handwriting`;
-          payload = { image_base64: base64, business_id: "" };
-          loadingMessage = "🤖 AI đang đọc phiếu kiểm kho...";
+          payload = {
+            image_base64: base64,
+            business_id: "",
+            inventory_model: isStandard ? "STANDARD" : "SIMPLE",
+            area_type: areaType === "BAR" ? "SERVICE" : "STORAGE",
+          };
+          loadingMessage = `🤖 AI đang đọc phiếu kiểm ${
+            areaType === "BAR" ? "Quầy Bar" : "Kho Tổng"
+          }...`;
           break;
       }
 
@@ -483,6 +530,7 @@ export default function InventoryCaptureScreen({
         style={{
           flexDirection: "row",
           alignItems: "center",
+          justifyContent: "space-between",
           padding: 16,
           paddingTop: 60,
           borderBottomWidth: 1,
@@ -494,20 +542,38 @@ export default function InventoryCaptureScreen({
             ← Quay lại
           </Text>
         </Pressable>
-        <Text
-          style={{
-            color: "white",
-            fontSize: 18,
-            fontWeight: "600",
-            marginLeft: 16,
-          }}
+        <View style={{ alignItems: "center" }}>
+          <Text
+            style={{
+              color: "white",
+              fontSize: 18,
+              fontWeight: "600",
+            }}
+          >
+            {snapMode === "STOCK"
+              ? "Kiểm kê kho"
+              : snapMode === "IMPORT"
+              ? "Nhập hàng"
+              : "Bán hàng"}
+          </Text>
+          <Text
+            style={{
+              fontSize: 10,
+              color: isStandard ? "#6B8E23" : "#E07A2F",
+              marginTop: 2,
+              fontWeight: "700",
+              textTransform: "uppercase",
+            }}
+          >
+            {isStandard ? "Kho Kép (Standard)" : "Kho Đơn (Simple)"}
+          </Text>
+        </View>
+        <Pressable
+          onPress={onOpenSettings}
+          style={{ padding: 8, marginRight: -8 }}
         >
-          {snapMode === "STOCK"
-            ? "Kiểm kê kho"
-            : snapMode === "IMPORT"
-            ? "Nhập hàng"
-            : "Bán hàng"}
-        </Text>
+          <Text style={{ color: "#B8B3A8", fontSize: 20 }}>⚙️</Text>
+        </Pressable>
       </View>
 
       {/* 📸 3 SNAPS SELECTOR */}
@@ -583,6 +649,74 @@ export default function InventoryCaptureScreen({
       </View>
 
       <ScrollView style={{ flex: 1, padding: 16 }}>
+        {/* MODEL-BASED ALERTS & LABELS */}
+        {isStandard && snapMode === "STOCK" && areaType === "BAR" && (
+          <IncomingLogCard items={incomingItems} />
+        )}
+
+        {isStandard &&
+          snapMode === "STOCK" &&
+          areaType === "WAREHOUSE" &&
+          checkMode === "FULL" && (
+            <View style={styles.freezeAlert}>
+              <Text style={styles.freezeAlertTitle}>⚠️ ĐÓNG BĂNG KHO TỔNG</Text>
+              <Text style={styles.freezeAlertText}>
+                Hãy chuyển hết hàng cần thiết qua Bar{" "}
+                <Text style={{ fontWeight: "700" }}>NGAY BÂY GIỜ</Text>. Sau khi
+                bắt đầu kiểm, bạn{" "}
+                <Text style={{ color: "#EF4444", fontWeight: "700" }}>
+                  KHÔNG ĐƯỢC
+                </Text>{" "}
+                lấy hàng từ Kho Tổng nữa.
+              </Text>
+            </View>
+          )}
+
+        {isStandard && snapMode === "IMPORT" && (
+          <View style={styles.importTargetLabel}>
+            <Text style={{ color: "#94A3B8", fontSize: 12 }}>
+              Nhập hàng vào:
+            </Text>
+            <Pressable
+              onPress={() =>
+                setCurrentAreaId(currentAreaId === "bar" ? "warehouse" : "bar")
+              }
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                backgroundColor: "#1A1A1A",
+                borderRadius: 8,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                borderWidth: 1,
+                borderColor: "#3A3A3A",
+                marginLeft: 10,
+              }}
+            >
+              <Text style={{ fontSize: 16, marginRight: 8 }}>
+                {!currentAreaId || currentAreaId === "warehouse" ? "🏭" : "🍷"}
+              </Text>
+              <Text
+                style={{
+                  color:
+                    !currentAreaId || currentAreaId === "warehouse"
+                      ? "#E07A2F"
+                      : "#6B8E23",
+                  fontWeight: "700",
+                  fontSize: 14,
+                }}
+              >
+                {!currentAreaId || currentAreaId === "warehouse"
+                  ? "Kho Tổng"
+                  : "Quầy Bar"}
+              </Text>
+              <Text style={{ color: "#64748B", marginLeft: 8, fontSize: 12 }}>
+                ▼
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
         {/* Image preview or camera */}
         {imageUri ? (
           <View style={{ marginBottom: 16 }}>
@@ -1294,3 +1428,36 @@ export default function InventoryCaptureScreen({
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  freezeAlert: {
+    backgroundColor: "rgba(220, 38, 38, 0.15)",
+    borderWidth: 1,
+    borderColor: "#DC2626",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+  },
+  freezeAlertTitle: {
+    color: "#EF4444",
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  freezeAlertText: {
+    color: "#D1D5DB",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  importTargetLabel: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#1A1A1A",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#2A2A2A",
+  },
+});

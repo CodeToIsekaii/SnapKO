@@ -257,7 +257,8 @@ class AIService {
   async parseStockSheet(
     imageUri: string,
     businessId: string,
-    areaType: "warehouse" | "bar"
+    areaType: "warehouse" | "bar",
+    inventoryModel: "SIMPLE" | "STANDARD" = "SIMPLE"
   ): Promise<ParsedStockResponse> {
     try {
       const compressedUri = await this.compressImage(imageUri);
@@ -269,6 +270,7 @@ class AIService {
           image_base64: base64,
           business_id: businessId,
           area_type: areaType,
+          inventory_model: inventoryModel,
         }
       );
 

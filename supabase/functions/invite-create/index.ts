@@ -5,7 +5,7 @@
 
 import { createClient } from "supabase";
 import {
-  corsHeaders,
+  corsHeaders as _corsHeaders,
   handleCors,
   jsonResponse,
   errorResponse,

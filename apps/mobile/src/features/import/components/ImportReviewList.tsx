@@ -54,6 +54,9 @@ interface ImportReviewListProps {
   onUpdateItem: (index: number, updates: Partial<ImportItem>) => void;
   onRemoveItem: (index: number) => void;
   onAddItem: (item: ImportItem) => void;
+  inventoryModel?: "SIMPLE" | "STANDARD";
+  targetAreaId?: string;
+  onTargetAreaChange?: (areaId: string) => void;
 }
 
 export function ImportReviewList({
@@ -65,6 +68,9 @@ export function ImportReviewList({
   onUpdateItem,
   onRemoveItem,
   onAddItem,
+  inventoryModel = "SIMPLE",
+  targetAreaId,
+  onTargetAreaChange,
 }: ImportReviewListProps) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
@@ -260,9 +266,16 @@ export function ImportReviewList({
           {supplierName && (
             <Text style={styles.supplierName}>{supplierName}</Text>
           )}
-          {invoiceNumber && (
-            <Text style={styles.invoiceNumber}>Số: {invoiceNumber}</Text>
-          )}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {invoiceNumber && (
+              <Text style={styles.invoiceNumber}>Số: {invoiceNumber}</Text>
+            )}
+            {inventoryModel === "STANDARD" && (
+              <View style={styles.standardBadge}>
+                <Text style={styles.standardBadgeText}>Standard</Text>
+              </View>
+            )}
+          </View>
         </View>
         <View
           style={[
@@ -285,6 +298,49 @@ export function ImportReviewList({
           </Text>
         </View>
       </View>
+
+      {/* Target Area Selector (STANDARD Only) */}
+      {inventoryModel === "STANDARD" && (
+        <View style={styles.areaSelectorContainer}>
+          <Text style={styles.areaSelectorLabel}>Nhập hàng vào:</Text>
+          <View style={styles.areaOptions}>
+            <TouchableOpacity
+              style={[
+                styles.areaOption,
+                (!targetAreaId || targetAreaId.includes("warehouse")) &&
+                  styles.areaOptionActive,
+              ]}
+              onPress={() => onTargetAreaChange?.("warehouse_default")}
+            >
+              <Text
+                style={[
+                  styles.areaOptionText,
+                  (!targetAreaId || targetAreaId.includes("warehouse")) &&
+                    styles.areaOptionTextActive,
+                ]}
+              >
+                🏭 Kho Tổng
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.areaOption,
+                targetAreaId?.includes("bar") && styles.areaOptionActive,
+              ]}
+              onPress={() => onTargetAreaChange?.("bar_default")}
+            >
+              <Text
+                style={[
+                  styles.areaOptionText,
+                  targetAreaId?.includes("bar") && styles.areaOptionTextActive,
+                ]}
+              >
+                🍷 Quầy Bar
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* Match summary */}
       <View style={styles.matchSummary}>
@@ -567,5 +623,53 @@ const styles = StyleSheet.create({
   discrepancyText: {
     fontSize: 12,
     color: COLORS.warning,
+  },
+  standardBadge: {
+    backgroundColor: COLORS.primary + "30",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  standardBadgeText: {
+    fontSize: 10,
+    color: COLORS.primary,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  areaSelectorContainer: {
+    padding: 16,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  areaSelectorLabel: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginBottom: 10,
+  },
+  areaOptions: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  areaOption: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: "center",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surfaceElevated,
+  },
+  areaOptionActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primary + "15",
+  },
+  areaOptionText: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    fontWeight: "600",
+  },
+  areaOptionTextActive: {
+    color: COLORS.primary,
   },
 });

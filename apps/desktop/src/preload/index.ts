@@ -25,6 +25,17 @@ export interface ElectronAPI {
 
   // Profile & Business (Cloud-first for Edge Function compatibility)
   getProfile: () => Promise<{ profile: any | null; error?: string }>;
+  updateProfile: (data: {
+    inventory_model?: string;
+    full_name?: string;
+    phone_number?: string | null;
+  }) => Promise<{ success: boolean; error?: string }>;
+
+  updateBusiness: (data: {
+    inventory_model?: string;
+    name?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+
   createBusiness: (data: {
     name: string;
     userId: string;
@@ -84,6 +95,10 @@ export interface ElectronAPI {
   // Realtime Listeners
   onNewLog: (callback: (log: any) => void) => () => void;
   onIngredientUpdate: (callback: (ingredient: any) => void) => () => void;
+
+  // Signal Pattern Sync (generic event listeners)
+  on: (channel: string, callback: (data?: any) => void) => void;
+  off: (channel: string, callback: (data?: any) => void) => void;
 }
 
 // Expose IPC API to renderer
@@ -103,6 +118,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // ==================== PROFILE & BUSINESS ====================
   getProfile: () => ipcRenderer.invoke("auth:get-profile"),
+
+  updateProfile: (data: { inventory_model?: string; full_name?: string }) =>
+    ipcRenderer.invoke("auth:update-profile", data),
+
+  updateBusiness: (data: { inventory_model?: string; name?: string }) =>
+    ipcRenderer.invoke("auth:update-business", data),
 
   createBusiness: (data: { name: string; userId: string }) =>
     ipcRenderer.invoke("auth:create-business", data),
@@ -166,6 +187,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("realtime:ingredient-update", handler);
     return () =>
       ipcRenderer.removeListener("realtime:ingredient-update", handler);
+  },
+
+  // ==================== SIGNAL PATTERN SYNC ====================
+  on: (channel: string, callback: (data?: any) => void) => {
+    const handler = (_event: any, data: any) => callback(data);
+    ipcRenderer.on(channel, handler);
+  },
+
+  off: (channel: string, callback: (data?: any) => void) => {
+    ipcRenderer.removeAllListeners(channel);
   },
 } as ElectronAPI);
 
