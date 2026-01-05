@@ -18,12 +18,7 @@ export default function DashboardPage() {
           pathname: `/camera/${mode}`,
           params: {
             // areaId: Not needed, screen loads it from type
-            areaType:
-              area === "warehouse"
-                ? "WAREHOUSE"
-                : area === "bar"
-                ? "BAR"
-                : undefined,
+            areaType: area, // Pass through directly - StorageArea type is already "WAREHOUSE" | "BAR"
             captureMode,
           },
         });
@@ -33,6 +28,10 @@ export default function DashboardPage() {
         // Navigate to transfer camera or screen
         // Assuming /camera/transfer exists or we use a specific form
         router.push("/camera/transfer");
+      }}
+      onOpenQuickOut={() => {
+        // Navigate to Quick Out screen
+        router.push("/camera/quickout");
       }}
     />
   );

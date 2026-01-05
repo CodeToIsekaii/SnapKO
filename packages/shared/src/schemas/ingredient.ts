@@ -45,6 +45,10 @@ export const createIngredientSchema = z.object({
   tareWeight: z.number().min(0, "Trọng lượng vỏ không được âm").default(0),
   // Aliases for AI recognition, comma-separated or array
   aliases: z.array(z.string()).optional().default([]),
+  // Inventory Configuration
+  itemType: z.enum(["STOCK", "PHANTOM"]).default("STOCK"),
+  trackingMode: z.enum(["STRICT", "LOOSE"]).default("STRICT"),
+  allowableVariance: z.number().min(0).max(1).default(0.05), // 0.05 = 5%
 });
 
 export type CreateIngredientInput = z.infer<typeof createIngredientSchema>;
@@ -65,6 +69,9 @@ export const updateIngredientSchema = z.object({
   aliases: z.array(z.string()).optional(),
   warehouseQty: z.number().min(0).optional(),
   barQty: z.number().min(0).optional(),
+  itemType: z.enum(["STOCK", "PHANTOM"]).optional(),
+  trackingMode: z.enum(["STRICT", "LOOSE"]).optional(),
+  allowableVariance: z.number().min(0).max(1).optional(),
 });
 
 export type UpdateIngredientInput = z.infer<typeof updateIngredientSchema>;

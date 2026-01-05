@@ -237,3 +237,131 @@ export function getUnitsForType(
 export function getAllUnits(): string[] {
   return [...UNIT_TYPES.WEIGHT, ...UNIT_TYPES.VOLUME, ...UNIT_TYPES.COUNT];
 }
+
+// =============================================
+// CROSS-FAMILY CONVERSION (Weight ↔ Volume)
+// =============================================
+
+/**
+ * Check if conversion is cross-family (Weight ↔ Volume)
+ */
+export function isCrossFamilyConversion(
+  fromUnit: string,
+  toUnit: string
+): boolean {
+  const fromGroup = getUnitGroup(fromUnit);
+  const toGroup = getUnitGroup(toUnit);
+  return (
+    (fromGroup === "WEIGHT" && toGroup === "VOLUME") ||
+    (fromGroup === "VOLUME" && toGroup === "WEIGHT")
+  );
+}
+
+/**
+ * Convert between Weight and Volume units using density
+ *
+ * Formula: Density = Mass(g) / Volume(ml)
+ * - Weight → Volume: V = M / Density
+ * - Volume → Weight: M = V × Density
+ *
+ * @example
+ * crossFamilyConvert(1, 'kg', 'lít', 1.03) // 0.97 (1kg milk → 0.97L)
+ * crossFamilyConvert(1, 'lít', 'kg', 1.03) // 1.03 (1L milk → 1.03kg)
+ */
+export function crossFamilyConvert(
+  value: number,
+  fromUnit: string,
+  toUnit: string,
+  density: number
+): number | "NEED_DENSITY" | "INVALID" {
+  // Validate density
+  if (!density || density <= 0) {
+    return "NEED_DENSITY";
+  }
+
+  // Check if it's actually cross-family
+  if (!isCrossFamilyConversion(fromUnit, toUnit)) {
+    return "INVALID";
+  }
+
+  const isFromWeight = UNIT_TYPES.WEIGHT.includes(fromUnit as WeightUnit);
+  const isToVolume = UNIT_TYPES.VOLUME.includes(toUnit as VolumeUnit);
+
+  // Step 1: Convert to base unit (g or ml)
+  let baseValue =
+    fromUnit === "kg" || fromUnit === "lít" || fromUnit === "l"
+      ? value * 1000
+      : value;
+
+  // Step 2: Apply density
+  let convertedBaseValue: number;
+
+  if (isFromWeight && isToVolume) {
+    // Weight → Volume: V = M / Density
+    convertedBaseValue = baseValue / density;
+  } else {
+    // Volume → Weight: M = V × Density
+    convertedBaseValue = baseValue * density;
+  }
+
+  // Step 3: Convert to target unit
+  return toUnit === "kg" || toUnit === "lít" || toUnit === "l"
+    ? convertedBaseValue / 1000
+    : convertedBaseValue;
+}
+
+// =============================================
+// BATCH RECIPE HELPERS
+// =============================================
+
+/**
+ * Get available units for smart dropdown in batch recipe
+ * Shows all units in same family
+ */
+export function getUnitFamilyOptions(baseUnit: string): string[] {
+  const group = getUnitGroup(baseUnit);
+  if (group === "WEIGHT") return ["g", "kg"];
+  if (group === "VOLUME") return ["ml", "lít"];
+  return [baseUnit]; // Custom units: return itself
+}
+
+/**
+ * Convert input value to ingredient's base unit
+ * Used when saving batch recipe quantities
+ *
+ * @example
+ * convertToIngredientBase(500, 'g', 'kg') // 0.5 (500g → 0.5 in kg base)
+ */
+export function convertToIngredientBase(
+  inputValue: number,
+  inputUnit: string,
+  ingredientBaseUnit: string,
+  density?: number
+): number | "NEED_DENSITY" {
+  // Same unit, no conversion
+  if (inputUnit === ingredientBaseUnit) {
+    return inputValue;
+  }
+
+  // Same family, use standard conversion
+  if (canConvert(inputUnit, ingredientBaseUnit)) {
+    return convertUnit(inputValue, inputUnit, ingredientBaseUnit);
+  }
+
+  // Cross-family, need density
+  if (isCrossFamilyConversion(inputUnit, ingredientBaseUnit)) {
+    if (!density || density <= 0) {
+      return "NEED_DENSITY";
+    }
+    const result = crossFamilyConvert(
+      inputValue,
+      inputUnit,
+      ingredientBaseUnit,
+      density
+    );
+    return typeof result === "number" ? result : "NEED_DENSITY";
+  }
+
+  // Incompatible units (e.g., kg to chai)
+  return inputValue;
+}

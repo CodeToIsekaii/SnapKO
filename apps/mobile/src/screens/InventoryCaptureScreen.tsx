@@ -401,6 +401,88 @@ export default function InventoryCaptureScreen({
 
       if (rawItems.length > 0) {
         const mapped = autoMapItems(rawItems);
+
+        // AI CROSS-CHECK: Check for duplicate transfers (Per .script Section 2.3.C)
+        if (snapMode === "STOCK" && areaType === "BAR") {
+          try {
+            const db = await getDB();
+            const today = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in local timezone
+            const transfers = await db.getAllAsync<any>(
+              `SELECT ai_parsed_json FROM pending_sync_logs 
+               WHERE type IN ('TRANSFER', 'QUICK_OUT') AND date(created_at) = ?`,
+              [today]
+            );
+
+            // Parse all transfer items
+            const transferredItems: { name: string; qty: number }[] = [];
+            for (const t of transfers) {
+              try {
+                const parsed =
+                  typeof t.ai_parsed_json === "string"
+                    ? JSON.parse(t.ai_parsed_json)
+                    : t.ai_parsed_json;
+                for (const item of parsed?.items || []) {
+                  transferredItems.push({
+                    name: (item.ingredient_name || "").toLowerCase(),
+                    qty: item.quantity || 0,
+                  });
+                }
+              } catch (e) {
+                /* skip invalid json */
+              }
+            }
+
+            // Check for matches
+            const duplicates: string[] = [];
+            for (const mappedItem of mapped) {
+              const scannedName = (
+                mappedItem.linkedIngredientName ||
+                mappedItem.rawName ||
+                ""
+              ).toLowerCase();
+              const scannedQty = mappedItem.quantity;
+
+              const match = transferredItems.find(
+                (t) =>
+                  t.name.includes(scannedName) || scannedName.includes(t.name)
+              );
+
+              if (match && Math.abs(match.qty - scannedQty) < 0.5) {
+                duplicates.push(`${mappedItem.rawName}: ${scannedQty}`);
+              }
+            }
+
+            // Show warning if duplicates found
+            if (duplicates.length > 0) {
+              Alert.alert(
+                "⚠️ Có thể trùng lặp!",
+                `Hệ thống phát hiện các món sau đã được CẤP HÀNG KHẨN hôm nay:\n\n${duplicates.join(
+                  "\n"
+                )}\n\nĐây là hàng MỚI hay trùng với lệnh cũ?`,
+                [
+                  {
+                    text: "🔄 Giữ lại (Lấy thêm lần nữa)",
+                    style: "default",
+                  },
+                  {
+                    text: "❌ Bỏ qua (Đã tính rồi)",
+                    onPress: () => {
+                      // Remove duplicate items from mapped list
+                      const filtered = mapped.filter(
+                        (m) => !duplicates.some((d) => d.startsWith(m.rawName))
+                      );
+                      setItems(filtered);
+                    },
+                    style: "destructive",
+                  },
+                ]
+              );
+            }
+          } catch (err) {
+            console.log("[CrossCheck] Error:", err);
+          }
+        }
+
         setItems(mapped);
       } else {
         console.warn("[Capture] No items found in response");

@@ -78,6 +78,12 @@ export function initDatabase(): Database.Database {
       warehouse_qty REAL NOT NULL DEFAULT 0,
       bar_qty REAL NOT NULL DEFAULT 0,
       unit_cost REAL NOT NULL DEFAULT 0,
+      density REAL NOT NULL DEFAULT 1,
+      tare_weight REAL NOT NULL DEFAULT 0,
+      min_threshold REAL NOT NULL DEFAULT 0,
+      unit_weight REAL,
+      unit_weight_unit TEXT,
+      aliases TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -94,6 +100,50 @@ export function initDatabase(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_ingredients_business ON local_ingredients(business_id);
     CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_inventory_stats(date);
   `);
+
+  // Migration: Add missing columns if table already exists
+  try {
+    db.exec(
+      `ALTER TABLE local_ingredients ADD COLUMN density REAL NOT NULL DEFAULT 1`
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  try {
+    db.exec(
+      `ALTER TABLE local_ingredients ADD COLUMN tare_weight REAL NOT NULL DEFAULT 0`
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  try {
+    db.exec(
+      `ALTER TABLE local_ingredients ADD COLUMN min_threshold REAL NOT NULL DEFAULT 0`
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN aliases TEXT`);
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  // Migration: Add unit_weight columns for AI conversion
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN unit_weight REAL`);
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN unit_weight_unit TEXT`);
+  } catch (e) {
+    /* Column already exists */
+  }
 
   console.log("[Database] Initialized at:", dbPath);
 
@@ -206,13 +256,15 @@ export function registerDatabaseIPC(): void {
         density?: number;
         tare_weight?: number;
         min_threshold?: number;
+        unit_weight?: number;
+        unit_weight_unit?: string;
       }
     ) => {
       const database = getDatabase();
       const stmt = database.prepare(`
       INSERT OR REPLACE INTO local_ingredients 
-      (id, business_id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, min_threshold, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      (id, business_id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, min_threshold, unit_weight, unit_weight_unit, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `);
       stmt.run(
         ingredient.id,
@@ -224,7 +276,9 @@ export function registerDatabaseIPC(): void {
         ingredient.unit_cost ?? 0,
         ingredient.density ?? 1,
         ingredient.tare_weight ?? 0,
-        ingredient.min_threshold ?? 0
+        ingredient.min_threshold ?? 0,
+        ingredient.unit_weight ?? null,
+        ingredient.unit_weight_unit ?? null
       );
       return { success: true };
     }

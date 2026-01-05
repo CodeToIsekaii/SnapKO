@@ -32,6 +32,10 @@ export function EmployeesTab({
   onStaffAction,
 }: EmployeesTabProps) {
   const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error";
+  } | null>(null);
 
   useEffect(() => {
     onLoadStaff();
@@ -40,7 +44,8 @@ export function EmployeesTab({
   const handleGenerateCode = async () => {
     const result = await onGenerateCode();
     if (result?.error) {
-      alert("❌ " + result.error);
+      setToast({ message: "❌ " + result.error, type: "error" });
+      setTimeout(() => setToast(null), 3000);
     } else if (result?.code) {
       setInviteCode(result.code);
     }
@@ -56,12 +61,34 @@ export function EmployeesTab({
   const handleCopyCode = () => {
     if (inviteCode) {
       navigator.clipboard.writeText(inviteCode);
-      alert("✅ Đã sao chép mã!");
+      setToast({ message: "✅ Đã sao chép mã!", type: "success" });
+      setTimeout(() => setToast(null), 3000);
     }
   };
 
   return (
     <div>
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          style={{
+            position: "fixed",
+            top: 20,
+            right: 20,
+            padding: "12px 20px",
+            borderRadius: 8,
+            backgroundColor: toast.type === "success" ? "#6B8E23" : "#EF4444",
+            color: "white",
+            fontWeight: 600,
+            fontSize: 14,
+            zIndex: 9999,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+          }}
+        >
+          {toast.message}
+        </div>
+      )}
+
       {/* Header */}
       <div style={styles.header}>
         <h2 style={styles.title}>👥 Quản lý nhân viên</h2>
@@ -79,8 +106,8 @@ export function EmployeesTab({
 
       {/* Invite Code Modal */}
       {inviteCode && (
-        <div style={styles.modalOverlay} onClick={() => setInviteCode(null)}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalOverlay}>
+          <div style={styles.modal}>
             <h3 style={styles.modalTitle}>🎫 Mã mời nhân viên</h3>
             <div style={styles.codeBox}>
               <span style={styles.code}>{inviteCode}</span>

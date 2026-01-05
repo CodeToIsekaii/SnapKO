@@ -233,6 +233,85 @@ export const InventoryService = {
       "SELECT * FROM local_ingredients WHERE (warehouse_qty + bar_qty) < 10"
     );
   },
+
+  /**
+   * Update unit cost using Weighted Average method
+   * Formula: new_cost = (old_qty * old_cost + new_qty * new_cost) / (old_qty + new_qty)
+   * Per .script Section 3.3: Cost Update (COGS)
+   */
+  updateCostWeightedAverage: async (
+    ingredientId: string,
+    newQuantity: number,
+    newUnitCost: number
+  ): Promise<number> => {
+    const database = await getDB();
+
+    // Get current ingredient data
+    const current = await database.getFirstAsync<IngredientData>(
+      "SELECT * FROM local_ingredients WHERE id = ?",
+      [ingredientId]
+    );
+
+    if (!current) {
+      console.warn(`[COGS] Ingredient ${ingredientId} not found`);
+      return newUnitCost;
+    }
+
+    const oldQty = current.warehouse_qty + current.bar_qty;
+    const oldCost = current.unit_cost;
+
+    // Calculate weighted average
+    // If no existing stock, use new cost directly
+    if (oldQty <= 0) {
+      return newUnitCost;
+    }
+
+    const totalQty = oldQty + newQuantity;
+    const weightedCost =
+      (oldQty * oldCost + newQuantity * newUnitCost) / totalQty;
+
+    console.log(
+      `[COGS] Weighted Average: (${oldQty} * ${oldCost} + ${newQuantity} * ${newUnitCost}) / ${totalQty} = ${weightedCost.toFixed(
+        2
+      )}`
+    );
+
+    return Math.round(weightedCost * 100) / 100; // Round to 2 decimals
+  },
+
+  /**
+   * Add import (Nhập hàng) - Updates stock and COGS using weighted average
+   * Per .script Section 3.3: COGS recalculation on import
+   */
+  addImport: async (
+    ingredientId: string,
+    quantity: number,
+    unitCost: number,
+    location: "WAREHOUSE" | "BAR" = "WAREHOUSE"
+  ): Promise<void> => {
+    const database = await getDB();
+
+    // Calculate new weighted average cost
+    const newCost = await InventoryService.updateCostWeightedAverage(
+      ingredientId,
+      quantity,
+      unitCost
+    );
+
+    // Update stock and cost
+    const qtyColumn = location === "WAREHOUSE" ? "warehouse_qty" : "bar_qty";
+    await database.runAsync(
+      `UPDATE local_ingredients 
+       SET ${qtyColumn} = ${qtyColumn} + ?, 
+           unit_cost = ?
+       WHERE id = ?`,
+      [quantity, newCost, ingredientId]
+    );
+
+    console.log(
+      `[Import] Added ${quantity} to ${location}, new COGS: ${newCost}`
+    );
+  },
 };
 
 // ==================== PENDING LOG SERVICE ====================

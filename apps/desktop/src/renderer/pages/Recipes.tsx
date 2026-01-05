@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { COLORS } from "../styles/theme";
+import GuideModal from "../components/GuideModal";
 import { UNIT_TYPES, getUnitGroup, convertUnit } from "@snapko/shared/logic";
 
 interface Ingredient {
@@ -42,6 +43,9 @@ export default function RecipesPage() {
     category: "",
     ingredients: [] as Recipe["ingredients"],
   });
+  // NEW: Store multiple scanned recipes from AI
+  const [scannedRecipes, setScannedRecipes] = useState<any[]>([]);
+  const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -53,12 +57,19 @@ export default function RecipesPage() {
     // TODO: Load recipes from IPC
   }
 
-  // AI Scan Logic
+  // Toast notification state
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error";
+  } | null>(null);
+
+  // AI Scan Logic - Upload Image or Excel file (no camera on Desktop)
+  // Per .script Section 4.1: Desktop uses Upload instead of Camera
   async function handleAIScan() {
-    // Create hidden file input
+    // Create hidden file input for image OR Excel
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "image/*";
+    input.accept = "image/*,.xlsx,.xls,.csv"; // Accept images and spreadsheets
 
     input.onchange = async (e: any) => {
       const file = e.target.files[0];
@@ -89,42 +100,100 @@ export default function RecipesPage() {
           if (!response.ok) throw new Error("AI Scan failed");
           const data = await response.json();
 
-          // Map AI results to the form
-          if (data && data.name) {
-            // Find ingredient IDs for the names returned by AI
-            const mappedIngredients = (data.ingredients || []).map(
-              (aiIng: any) => {
-                const matched = ingredients.find((i) =>
-                  i.name.toLowerCase().includes(aiIng.name.toLowerCase())
-                );
+          // NEW: Handle multiple recipes from AI response
+          const recipesToProcess = data.recipes || (data.name ? [data] : []);
 
-                const unit = aiIng.unit || matched?.base_unit || "g";
-                const qty = aiIng.quantity || 0;
-                const baseQty = matched
-                  ? convertUnit(qty, unit, matched.base_unit)
-                  : qty;
+          if (recipesToProcess.length > 0) {
+            // Map all recipes with ingredient matching
+            const mappedRecipes = recipesToProcess.map((recipe: any) => {
+              const mappedIngredients = (recipe.ingredients || []).map(
+                (aiIng: any) => {
+                  const aiName = aiIng.name.toLowerCase().trim();
 
-                return {
-                  ingredient_id: matched?.id || "",
-                  name: matched?.name || aiIng.name + " (Chưa có)",
-                  quantity: qty,
-                  unit: unit,
-                  cost: baseQty * (matched?.unit_cost || 0),
-                };
-              }
-            );
+                  // Better matching: check if AI name contains ingredient OR ingredient contains AI name
+                  const matched = ingredients.find((i) => {
+                    const ingName = i.name.toLowerCase().trim();
+                    // Remove common prefixes/suffixes for better matching
+                    const cleanAiName = aiName.replace(
+                      /\s*(blend|note|tươi|đậm|nhạt)\s*/gi,
+                      ""
+                    );
+                    const cleanIngName = ingName.replace(
+                      /\s*(blend|note|tươi|đậm|nhạt)\s*/gi,
+                      ""
+                    );
 
-            setNewRecipe({
-              name: data.name,
-              price: data.price || 0,
-              category: data.category || "",
-              ingredients: mappedIngredients,
+                    return (
+                      ingName.includes(cleanAiName) ||
+                      cleanAiName.includes(ingName) ||
+                      ingName.includes(aiName) ||
+                      aiName.includes(ingName)
+                    );
+                  });
+
+                  const unit = aiIng.unit || matched?.base_unit || "g";
+                  const qty = aiIng.quantity || 0;
+                  const baseQty = matched
+                    ? convertUnit(qty, unit, matched.base_unit)
+                    : qty;
+
+                  return {
+                    // Use matched id, or generate temp id for unmatched ingredients
+                    ingredient_id:
+                      matched?.id ||
+                      `temp_${Date.now()}_${Math.random()
+                        .toString(36)
+                        .slice(2, 8)}`,
+                    name: matched?.name || aiIng.name + " (Chưa có)",
+                    quantity: qty,
+                    unit: unit,
+                    cost: baseQty * (matched?.unit_cost || 0),
+                  };
+                }
+              );
+
+              return {
+                name: recipe.name,
+                price: recipe.price || 0,
+                category: recipe.category || "",
+                ingredients: mappedIngredients,
+                confidence: recipe.confidence || 0,
+              };
             });
-            alert(`✨ AI đã trích xuất: ${data.name} (${data.confidence}%)`);
+
+            // Store all scanned recipes
+            setScannedRecipes(mappedRecipes);
+
+            // Set first recipe to form
+            const firstRecipe = mappedRecipes[0];
+            setNewRecipe({
+              name: firstRecipe.name,
+              price: firstRecipe.price,
+              category: firstRecipe.category,
+              ingredients: firstRecipe.ingredients,
+            });
+
+            // Use toast instead of alert to prevent focus loss
+            const totalCount = mappedRecipes.length;
+            setToast({
+              message:
+                totalCount > 1
+                  ? `✨ AI đã trích xuất ${totalCount} công thức! Chọn từ danh sách bên dưới.`
+                  : `✨ AI đã trích xuất: ${firstRecipe.name} (${firstRecipe.confidence}%)`,
+              type: "success",
+            });
+            setTimeout(() => setToast(null), 5000);
+          } else {
+            setToast({
+              message: "Không tìm thấy công thức trong ảnh",
+              type: "error",
+            });
+            setTimeout(() => setToast(null), 4000);
           }
         };
       } catch (err: any) {
-        alert("Lỗi quét AI: " + err.message);
+        setToast({ message: "Lỗi quét AI: " + err.message, type: "error" });
+        setTimeout(() => setToast(null), 4000);
       } finally {
         setScanning(false);
       }
@@ -200,22 +269,187 @@ export default function RecipesPage() {
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.title}>🍳 Quản lý Công thức</h2>
-      <p style={styles.subtitle}>Nhập liệu nhanh trên PC, sync xuống Mobile</p>
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          style={{
+            position: "fixed",
+            top: 20,
+            right: 20,
+            padding: "12px 20px",
+            borderRadius: 8,
+            backgroundColor: toast.type === "success" ? "#6B8E23" : "#EF4444",
+            color: "white",
+            fontWeight: 600,
+            fontSize: 14,
+            zIndex: 9999,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+          }}
+        >
+          {toast.message}
+        </div>
+      )}
+
+      {/* Guide Modal */}
+      <GuideModal
+        title="Hướng dẫn Quản lý Công Thức"
+        isOpen={showGuide}
+        onClose={() => setShowGuide(false)}
+        sections={[
+          {
+            title: "AI Scan (Quét Công Thức Thông Minh)",
+            content: (
+              <>
+                <p>
+                  <strong>📝 Hỗ trợ:</strong> Ảnh chụp menu, công thức viết tay
+                  hoặc file Excel.
+                </p>
+                <p>
+                  <strong>🚀 Tự động:</strong> Hệ thống sẽ tự tách tên món và
+                  định lượng. Nếu 1 ảnh chứa nhiều món, bạn có thể chọn món cần
+                  lưu từ danh sách.
+                </p>
+              </>
+            ),
+          },
+          {
+            title: "Quy đổi Đơn vị (Unit Normalization)",
+            content: (
+              <p>
+                Bạn nhập hàng theo <strong>Thùng/Kg</strong> nhưng pha chế theo{" "}
+                <strong>ml/thìa</strong>? Hệ thống tự động quy đổi dựa trên{" "}
+                <strong>Tỷ trọng (Density)</strong> bạn cài ở phần Nguyên Liệu.
+                Không cần nhân chia thủ công!
+              </p>
+            ),
+          },
+          {
+            title: "Giá Vốn (COGS Live)",
+            content: (
+              <p>
+                Giá vốn món ăn được tính <strong>tức thời</strong> (Real-time)
+                dựa trên giá nhập nguyên liệu mới nhất. Khi giá Chanh tăng, chi
+                phí món "Trà Chanh" sẽ tự động tăng theo.
+              </p>
+            ),
+          },
+        ]}
+      />
+
+      <div style={styles.header}>
+        <div>
+          <h1 style={styles.title}>📜 Quản lý Công Thức</h1>
+          <p style={styles.subtitle}>Định lượng và tính giá vốn (Cost)</p>
+        </div>
+        <div style={styles.headerButtons}>
+          <button
+            style={{
+              padding: "10px 16px",
+              backgroundColor: "white",
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+              marginRight: 8,
+            }}
+            onClick={() => setShowGuide(true)}
+          >
+            ❓ Hướng dẫn
+          </button>
+
+          <button
+            style={styles.scanButton}
+            onClick={handleAIScan}
+            disabled={scanning}
+          >
+            {scanning ? "🤖 Đang quét..." : "📸 AI Scan"}
+          </button>
+        </div>
+      </div>
 
       <div style={styles.grid}>
         {/* Form */}
         <div style={styles.card}>
-          <div style={styles.cardTitle}>
-            <span>Tạo món mới</span>
-            <button
-              onClick={handleAIScan}
-              disabled={scanning}
-              style={{ ...styles.aiButton, opacity: scanning ? 0.6 : 1 }}
-            >
-              {scanning ? "⌛ Đang quét..." : "📷 Tự tạo bằng AI"}
+          {/* The original cardTitle div content is now replaced by the new header structure */}
+          {/* The instruction shows `        {scanning ? "⌛ Đang xử lý..." : "📁 Upload ảnh/Excel"}
             </button>
-          </div>
+          </div>` which seems to be a partial snippet of the old button.
+          I will remove the old `cardTitle` div entirely as it's replaced by the new `styles.header` structure. */}
+
+          {/* Scanned Recipes List - Shows when AI finds multiple recipes */}
+          {scannedRecipes.length > 1 && (
+            <div
+              style={{
+                backgroundColor: "#F0FFF0",
+                borderRadius: 8,
+                padding: 12,
+                marginBottom: 16,
+                border: "1px solid #6B8E23",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "#6B8E23",
+                  marginBottom: 8,
+                }}
+              >
+                📋 AI tìm thấy {scannedRecipes.length} công thức - Chọn để chỉnh
+                sửa:
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {scannedRecipes.map((recipe, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => {
+                      setNewRecipe({
+                        name: recipe.name,
+                        price: recipe.price,
+                        category: recipe.category,
+                        ingredients: recipe.ingredients,
+                      });
+                      setToast({
+                        message: `Đang chỉnh sửa: ${recipe.name}`,
+                        type: "success",
+                      });
+                      setTimeout(() => setToast(null), 2000);
+                    }}
+                    style={{
+                      padding: "6px 12px",
+                      backgroundColor:
+                        newRecipe.name === recipe.name ? "#6B8E23" : "white",
+                      color:
+                        newRecipe.name === recipe.name
+                          ? "white"
+                          : COLORS.textPrimary,
+                      border: "1px solid #6B8E23",
+                      borderRadius: 6,
+                      fontSize: 13,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {recipe.name} ({recipe.confidence}%)
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setScannedRecipes([])}
+                style={{
+                  marginTop: 8,
+                  padding: "4px 8px",
+                  backgroundColor: "transparent",
+                  color: COLORS.textSecondary,
+                  border: "none",
+                  fontSize: 11,
+                  cursor: "pointer",
+                }}
+              >
+                ✕ Đóng danh sách
+              </button>
+            </div>
+          )}
 
           <div style={styles.field}>
             <label style={styles.label}>Tên món</label>
@@ -234,9 +468,12 @@ export default function RecipesPage() {
               <label style={styles.label}>Giá bán (đ)</label>
               <input
                 type="number"
-                value={newRecipe.price}
+                value={newRecipe.price || ""}
                 onChange={(e) =>
-                  setNewRecipe((p) => ({ ...p, price: Number(e.target.value) }))
+                  setNewRecipe((p) => ({
+                    ...p,
+                    price: e.target.value === "" ? 0 : Number(e.target.value),
+                  }))
                 }
                 style={styles.input}
               />
@@ -262,10 +499,11 @@ export default function RecipesPage() {
                 <span style={{ flex: 1, fontWeight: 500 }}>{ing.name}</span>
                 <input
                   type="number"
-                  value={ing.quantity}
+                  value={ing.quantity || ""}
                   onChange={(e) =>
                     updateIngredient(ing.ingredient_id, {
-                      quantity: Number(e.target.value),
+                      quantity:
+                        e.target.value === "" ? 0 : Number(e.target.value),
                     })
                   }
                   style={{ ...styles.input, width: 80 }}
@@ -486,5 +724,30 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: 4,
+  },
+  // Added for GuideModal integration
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 24,
+  },
+  headerButtons: {
+    display: "flex",
+    gap: 12,
+    alignItems: "center",
+  },
+  scanButton: {
+    padding: "10px 16px",
+    backgroundColor: COLORS.primary,
+    color: "white",
+    border: "none",
+    borderRadius: 8,
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
   },
 };

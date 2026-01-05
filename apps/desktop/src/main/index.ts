@@ -11,6 +11,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
 import { createClient } from "@supabase/supabase-js";
+import Store from "electron-store";
 import { Env } from "../env";
 import {
   initDatabase,
@@ -34,7 +35,48 @@ const authClient =
     ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
 
-// Store current session
+// ==================== SESSION PERSISTENCE ====================
+// Use electron-store to persist session across app restarts
+interface SessionData {
+  access_token: string;
+  refresh_token: string;
+  user: {
+    id: string;
+    email: string;
+  };
+}
+
+const sessionStore = new Store<{ session: SessionData | null }>({
+  name: "snapko-session",
+  encryptionKey: "snapko-desktop-session-v1", // Basic encryption for session data
+});
+
+// Save session to disk
+function saveSession(session: SessionData | null) {
+  sessionStore.set("session", session);
+  console.log(
+    "[Session] Saved to disk:",
+    session ? session.user.email : "null"
+  );
+}
+
+// Load session from disk
+function loadSession(): SessionData | null {
+  const session = sessionStore.get("session");
+  console.log(
+    "[Session] Loaded from disk:",
+    session ? session.user.email : "null"
+  );
+  return session || null;
+}
+
+// Clear session from disk
+function clearSession() {
+  sessionStore.delete("session");
+  console.log("[Session] Cleared from disk");
+}
+
+// Store current session (in memory)
 let currentSession: any = null;
 let mainWindow: BrowserWindow | null = null;
 
@@ -84,6 +126,18 @@ function registerAuthIPC() {
 
         currentSession = data.session;
 
+        // Persist session to disk for auto-login on restart
+        if (data.session && data.user) {
+          saveSession({
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token || "",
+            user: {
+              id: data.user.id,
+              email: data.user.email || "",
+            },
+          });
+        }
+
         // Set token for sync client
         if (data.session?.access_token) {
           setAuthToken(data.session.access_token);
@@ -129,6 +183,7 @@ function registerAuthIPC() {
       await authClient.auth.signOut();
     }
     currentSession = null;
+    clearSession(); // Clear persisted session from disk
     setAuthToken(null);
     console.log("[Auth] Logged out");
     return { success: true };
@@ -225,6 +280,18 @@ function registerAuthIPC() {
 
               currentSession = sessionData.session;
               setAuthToken(accessToken);
+
+              // Persist session to disk for auto-login on restart
+              if (sessionData.session && sessionData.session.user) {
+                saveSession({
+                  access_token: sessionData.session.access_token,
+                  refresh_token: sessionData.session.refresh_token || "",
+                  user: {
+                    id: sessionData.session.user.id,
+                    email: sessionData.session.user.email || "",
+                  },
+                });
+              }
 
               // Set Supabase client for staff module
               const client = getSyncClient();
@@ -502,7 +569,7 @@ function registerSyncIPC() {
 
 // ==================== APP LIFECYCLE ====================
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Initialize local database
   initDatabase();
   console.log("[SnapKO Desktop] Database initialized");
@@ -516,7 +583,75 @@ app.whenReady().then(() => {
   registerStaffIPC();
   console.log("[SnapKO Desktop] All IPC handlers registered");
 
+  // ==================== RESTORE SESSION ====================
+  // Try to restore session from disk on startup
+  const savedSession = loadSession();
+  if (savedSession && authClient) {
+    console.log(
+      "[Session] Attempting to restore session for:",
+      savedSession.user.email
+    );
+
+    try {
+      // Validate and refresh the session with Supabase
+      const { data, error } = await authClient.auth.setSession({
+        access_token: savedSession.access_token,
+        refresh_token: savedSession.refresh_token,
+      });
+
+      if (error) {
+        console.log(
+          "[Session] Refresh failed, clearing stored session:",
+          error.message
+        );
+        clearSession();
+      } else if (data.session) {
+        console.log(
+          "[Session] Session restored successfully:",
+          data.session.user?.email
+        );
+        currentSession = data.session;
+
+        // Update saved session with new tokens
+        if (data.session.access_token !== savedSession.access_token) {
+          saveSession({
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token || "",
+            user: {
+              id: data.session.user?.id || "",
+              email: data.session.user?.email || "",
+            },
+          });
+        }
+
+        // Set token for sync client
+        setAuthToken(data.session.access_token);
+
+        // Set Supabase client for staff module
+        const client = getSyncClient();
+        if (client) {
+          setStaffSupabaseClient(client);
+          setDatabaseSupabaseClient(client);
+        }
+
+        // Note: Realtime listener will start after window is created and mainWindow is available
+      }
+    } catch (err) {
+      console.error("[Session] Restore error:", err);
+      clearSession();
+    }
+  }
+
   createWindow();
+
+  // Start realtime after window is created (if session is valid)
+  if (currentSession && mainWindow) {
+    startRealtimeListener(
+      currentSession.access_token,
+      currentSession.user?.id || "",
+      mainWindow
+    );
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
