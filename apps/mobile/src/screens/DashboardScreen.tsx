@@ -15,17 +15,16 @@ import {
   RefreshControl,
   Pressable,
   Alert,
-  Platform,
-  ToastAndroid,
   ScrollView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { StatCard } from "../components/StatCard";
 import { NotificationModal } from "../components/NotificationModal";
+import { LowStockModal } from "../components/LowStockModal";
+import { useLowStock } from "../hooks/useLowStock";
 import { InventoryService } from "../features/inventory/services/inventory.service";
 import { useInventoryModel } from "../contexts/InventoryModelContext";
 import { useAuth } from "../contexts/AuthContext";
-import { supabase } from "../lib/supabase";
 import { getDB } from "../db";
 import AreaSelectorModal, {
   StorageArea,
@@ -76,11 +75,21 @@ export default function DashboardScreen({
   const [totalValue, setTotalValue] = useState(0);
   const [ingredientCount, setIngredientCount] = useState(0);
   const [recipeCount, setRecipeCount] = useState(0);
-  const [dailySummary, setDailySummary] = useState<DailySummary[]>([]);
   const [recentLogs, setRecentLogs] = useState<RecentLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasTodaySales, setHasTodaySales] = useState(false);
   const [todayTransfers, setTodayTransfers] = useState<any[]>([]);
+
+  // New LowStock Hook
+  const {
+    ingredients: lowStockIngredients,
+    supplies: lowStockSupplies,
+    totalCount: lowStockCount,
+    isLoading: lowStockLoading,
+    refetch: refetchLowStock,
+  } = useLowStock();
+  const [showLowStockModal, setShowLowStockModal] = useState(false);
+
   // Initialize isOwner directly from AuthContext to prevent UI flicker
   // Using lazy initializer ensures we check authState at mount time
   const [isOwner, setIsOwner] = useState(() => {
@@ -90,7 +99,6 @@ export default function DashboardScreen({
     );
   });
   const [showNotifications, setShowNotifications] = useState(false);
-  const [lowStockCount, setLowStockCount] = useState(0);
 
   // Mock notifications (replace with real data later)
   const mockNotifications = [
@@ -213,18 +221,11 @@ export default function DashboardScreen({
       const rCount = await InventoryService.getRecipeCount();
       setRecipeCount(rCount);
 
-      // Load low stock items as "recent activity" for now
-      const lowStock = await InventoryService.getLowStock();
-      setLowStockCount(lowStock.length);
-      setRecentLogs(
-        lowStock.map((ing) => ({
-          id: ing.id,
-          type: "LOW_STOCK",
-          ingredient_name: ing.name,
-          quantity: ing.warehouse_qty + ing.bar_qty,
-          created_at: new Date().toISOString(),
-        }))
-      );
+      // Load low stock items (via hook)
+      await refetchLowStock();
+
+      // Mock recent logs from low stock for now (or empty)
+      setRecentLogs([]);
 
       // Also load today's data for guards
       await loadTodayData();
@@ -233,7 +234,7 @@ export default function DashboardScreen({
     } finally {
       setLoading(false);
     }
-  }, [syncModel, loadTodayData]);
+  }, [syncModel, loadTodayData, refetchLowStock]);
 
   useEffect(() => {
     loadData();
@@ -281,9 +282,6 @@ export default function DashboardScreen({
     }
   };
 
-  // NOTE: Realtime subscription for model sync is now handled at Context level (InventoryModelContext)
-  // This prevents race condition where Dashboard mounts before businessId is available
-
   // Separate refreshing state for pull-to-refresh (like Facebook)
   const [refreshing, setRefreshing] = useState(false);
 
@@ -302,6 +300,8 @@ export default function DashboardScreen({
 
       // 3. Reload all data from local DB
       await InventoryService.init();
+      // ... reload data handled by loadData call below?
+      // Reuse logic manually to ensure refresh
       const ings = await InventoryService.getAll();
       const total = ings.reduce(
         (sum: number, i) => sum + (i.warehouse_qty + i.bar_qty) * i.unit_cost,
@@ -309,15 +309,11 @@ export default function DashboardScreen({
       );
       setTotalValue(total);
       setIngredientCount(ings.length);
-
-      // Update recipe count
       const rCount = await InventoryService.getRecipeCount();
       setRecipeCount(rCount);
+      await refetchLowStock();
 
       console.log("✅ Refresh complete!");
-      console.log("✅ Refresh complete!");
-      // Success alert removed to prevent blocking UI/RefreshControl
-      // Alert.alert("Cập nhật thành công", "Dữ liệu đã được đồng bộ mới nhất.");
     } catch (err) {
       console.error("Refresh error:", err);
       Alert.alert(
@@ -327,7 +323,7 @@ export default function DashboardScreen({
     } finally {
       setRefreshing(false);
     }
-  }, [syncModel]);
+  }, [syncModel, refetchLowStock]);
 
   const formatCurrency = (value: number) => {
     return value.toLocaleString("vi-VN") + " đ";
@@ -406,47 +402,49 @@ export default function DashboardScreen({
           </Pressable>
         </View>
 
-        <Pressable onPress={onOpenPendingList}>
-          <Text style={{ color: "#F59E0B", fontSize: 16 }}>👥</Text>
-        </Pressable>
-
-        {/* Notification Bell - Owner Only */}
-        {isOwner && (
-          <Pressable
-            onPress={() => setShowNotifications(true)}
-            style={{
-              padding: 8,
-              backgroundColor: "#1C1C1E",
-              borderRadius: 20,
-              marginLeft: 8,
-            }}
-          >
-            <Ionicons name="notifications-outline" size={20} color="white" />
-            {mockNotifications.length > 0 && (
-              <View
-                style={{
-                  position: "absolute",
-                  top: -2,
-                  right: -2,
-                  backgroundColor: "#EF4444",
-                  width: 16,
-                  height: 16,
-                  borderRadius: 8,
-                  justifyContent: "center",
-                  alignItems: "center",
-                  borderWidth: 2,
-                  borderColor: "#121212",
-                }}
-              >
-                <Text
-                  style={{ color: "white", fontSize: 9, fontWeight: "bold" }}
-                >
-                  {mockNotifications.length}
-                </Text>
-              </View>
-            )}
+        {/* Right Actions Group */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <Pressable onPress={onOpenPendingList}>
+            <Text style={{ color: "#F59E0B", fontSize: 16 }}>👥</Text>
           </Pressable>
-        )}
+
+          {/* Notification Bell - Owner Only */}
+          {isOwner && (
+            <Pressable
+              onPress={() => setShowNotifications(true)}
+              style={{
+                padding: 8,
+                backgroundColor: "#1C1C1E",
+                borderRadius: 20,
+              }}
+            >
+              <Ionicons name="notifications-outline" size={20} color="white" />
+              {mockNotifications.length > 0 && (
+                <View
+                  style={{
+                    position: "absolute",
+                    top: -2,
+                    right: -2,
+                    backgroundColor: "#EF4444",
+                    width: 16,
+                    height: 16,
+                    borderRadius: 8,
+                    justifyContent: "center",
+                    alignItems: "center",
+                    borderWidth: 2,
+                    borderColor: "#121212",
+                  }}
+                >
+                  <Text
+                    style={{ color: "white", fontSize: 9, fontWeight: "bold" }}
+                  >
+                    {mockNotifications.length}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+          )}
+        </View>
       </View>
 
       {/* Content with padding */}
@@ -508,6 +506,7 @@ export default function DashboardScreen({
                 icon="alert-circle-outline"
                 color="#EF4444"
                 isAlert={lowStockCount > 0}
+                onPress={() => setShowLowStockModal(true)}
               />
               <StatCard
                 title="Tổng nguyên liệu"
@@ -950,6 +949,14 @@ export default function DashboardScreen({
         visible={showNotifications}
         onClose={() => setShowNotifications(false)}
         notifications={mockNotifications}
+      />
+
+      {/* Low Stock Detailed Modal */}
+      <LowStockModal
+        visible={showLowStockModal}
+        onClose={() => setShowLowStockModal(false)}
+        data={{ ingredients: lowStockIngredients, supplies: lowStockSupplies }}
+        isLoading={lowStockLoading}
       />
     </>
   );

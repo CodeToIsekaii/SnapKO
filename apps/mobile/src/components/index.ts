@@ -7,6 +7,7 @@ export { default as LoadingSpinner } from "./LoadingSpinner";
 export { default as EmptyState } from "./EmptyState";
 export { SyncStatusIndicator } from "./SyncStatusIndicator";
 export { LowStockAlert } from "./LowStockAlert";
+export { LowStockModal } from "./LowStockModal";
 export { default as CreateIngredientModal } from "./CreateIngredientModal";
 export { default as InviteCodeGeneratorModal } from "./InviteCodeGeneratorModal";
 

@@ -15,6 +15,8 @@ import React, {
   type ReactNode,
 } from "react";
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as FileSystem from "expo-file-system";
 import { createClient, type Session, type User } from "@supabase/supabase-js";
 import type { ProfileRoleEnum, ProfileStatusEnum } from "@snapko/ts-types";
 import { Env } from "../env";
@@ -59,17 +61,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
   auth: {
-    storage: {
-      async getItem(key: string) {
-        return SecureStore.getItemAsync(key);
-      },
-      async setItem(key: string, value: string) {
-        await SecureStore.setItemAsync(key, value);
-      },
-      async removeItem(key: string) {
-        await SecureStore.deleteItemAsync(key);
-      },
-    },
+    storage: AsyncStorage, // Standard solution for handling large sessions on React Native
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
@@ -326,9 +318,28 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const { getDB } = await import("../db");
       const db = await getDB();
 
-      // Clear all user-specific tables
-      await db.runAsync("DELETE FROM local_profiles");
-      await db.runAsync("DELETE FROM local_stock_levels");
+      // Clear ALL user-specific tables to prevent data leakage
+      // This is critical when switching between businesses on the same device
+      const tablesToClear = [
+        "local_profiles",
+        "local_stock_levels",
+        "local_inventory_logs",
+        "local_ingredients",
+        "local_recipes",
+        "local_storage_areas",
+        "local_transfer_logs",
+        "local_waste_logs",
+        "pending_sync_logs",
+        "local_import_logs",
+        "local_sales_logs",
+        "local_metadata",
+        "local_recipe_ingredients",
+        "local_batch_recipes",
+      ];
+
+      for (const table of tablesToClear) {
+        await db.runAsync(`DELETE FROM ${table}`);
+      }
 
       console.log("[AuthContext] Cleared all local data for account switch");
     } catch (e) {

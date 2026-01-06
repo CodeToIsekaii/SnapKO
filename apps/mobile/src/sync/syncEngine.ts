@@ -14,7 +14,181 @@ import NetInfo, { NetInfoState } from "@react-native-community/netinfo";
 import { AppState, AppStateStatus } from "react-native";
 import { Env } from "../env";
 
+import { supabase } from "../lib/supabase";
+
 const SYNC_TASK_NAME = "SNAPKO_BACKGROUND_SYNC";
+
+// --- MASTER DATA SYNC (Mobile -> Cloud) ---
+// See implementation_plan.md for architecture
+
+export const addToSyncQueue = async (
+  tableName: "recipes" | "ingredients",
+  action: "UPSERT" | "DELETE",
+  data: any
+) => {
+  try {
+    const { getDB } = await import("../db");
+    const db = await getDB();
+
+    // A. Optimistic Update (Handled by Caller for React State)
+    // NOTE: If caller hasn't updated SQLite, they should do it before calling this.
+
+    // B. Push to Queue
+    const payload = JSON.stringify(data);
+    await db.runAsync(
+      `INSERT INTO local_sync_queue (action, table_name, payload, status) VALUES (?, ?, ?, 'PENDING')`,
+      [action, tableName, payload]
+    );
+
+    // C. Trigger Sync Immediately if Online
+    const netState = await NetInfo.fetch();
+    if (netState.isConnected) {
+      processSyncQueue();
+    }
+  } catch (error) {
+    console.error("addToSyncQueue Error:", error);
+  }
+};
+
+export const processSyncQueue = async () => {
+  try {
+    const { getDB } = await import("../db");
+    const db = await getDB();
+
+    const pendingItems = await db.getAllAsync<{
+      id: number;
+      action: string;
+      table_name: string;
+      payload: string;
+    }>(
+      `SELECT * FROM local_sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC`
+    );
+
+    if (pendingItems.length === 0) return;
+
+    for (const item of pendingItems) {
+      try {
+        const payload = JSON.parse(item.payload);
+        let error = null;
+
+        if (item.action === "UPSERT") {
+          const { error: err } = await supabase
+            .from(item.table_name)
+            .upsert(payload);
+          error = err;
+        } else if (item.action === "DELETE") {
+          const { error: err } = await supabase
+            .from(item.table_name)
+            .delete()
+            .eq("id", payload.id);
+          error = err;
+        }
+
+        if (error) throw error;
+
+        // Success -> Remove from queue
+        await db.runAsync(`DELETE FROM local_sync_queue WHERE id = ?`, [
+          item.id,
+        ]);
+      } catch (err) {
+        console.error(`Sync failed item ${item.id}:`, err);
+        // Keep PENDING to retry later
+      }
+    }
+  } catch (err) {
+    console.error("processSyncQueue Error:", err);
+  }
+};
+
+// --- DOWNSTREAM SYNC (Cloud -> Mobile) ---
+export const fetchMasterDataUpdates = async () => {
+  try {
+    const { getDB } = await import("../db");
+    const db = await getDB();
+
+    // Get last sync time
+    const settings = await db.getFirstAsync<{ value: string }>(
+      `SELECT value FROM app_settings WHERE key = 'last_sync_time'`
+    );
+    const lastSyncTime = settings?.value || "1970-01-01T00:00:00Z";
+    const now = new Date().toISOString();
+
+    console.log(`[Sync] Fetching updates since ${lastSyncTime}...`);
+
+    // 1. Pull Recipes
+    const { data: recipes, error: rError } = await supabase
+      .from("recipes")
+      .select(
+        "id, business_id, name, price, category, is_active, created_at, updated_at"
+      )
+      .gt("updated_at", lastSyncTime);
+
+    if (recipes && recipes.length > 0) {
+      console.log(`[Sync] Pulled ${recipes.length} updated recipes`);
+      for (const r of recipes) {
+        await db.runAsync(
+          `INSERT OR REPLACE INTO local_recipes (id, business_id, name, price, category, is_active, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            r.id,
+            r.business_id,
+            r.name,
+            r.price,
+            r.category,
+            r.is_active ? 1 : 0,
+            r.created_at,
+            r.updated_at,
+          ]
+        );
+      }
+    }
+
+    // 2. Pull Ingredients
+    const { data: ingredients, error: iError } = await supabase
+      .from("ingredients")
+      .select("*")
+      .gt("updated_at", lastSyncTime);
+
+    // NOTE: We only sync basic columns here.
+    // Ideally we should sync all columns, but let's stick to core ones for safety.
+    if (ingredients && ingredients.length > 0) {
+      console.log(`[Sync] Pulled ${ingredients.length} updated ingredients`);
+      for (const i of ingredients) {
+        // Check if column exists or use default
+        await db.runAsync(
+          `INSERT OR REPLACE INTO local_ingredients (id, business_id, name, base_unit, min_threshold, average_unit_cost, unit_cost, density, tare_weight, archived, warehouse_qty, bar_qty, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            i.id,
+            i.business_id,
+            i.name,
+            i.base_unit,
+            i.min_threshold ?? 0,
+            i.average_unit_cost ?? 0,
+            i.unit_cost ?? 0,
+            i.density ?? 1,
+            i.tare_weight ?? 0,
+            i.archived ? 1 : 0,
+            i.warehouse_qty ?? 0,
+            i.bar_qty ?? 0,
+            i.created_at,
+          ]
+        );
+      }
+    }
+
+    // 3. Update Timestamp
+    await db.runAsync(
+      `INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_sync_time', ?)`,
+      [now]
+    );
+
+    return true;
+  } catch (error) {
+    console.error("Fetch Updates Error:", error);
+    return false;
+  }
+};
 
 // Types
 export interface PendingSyncLog {
@@ -469,7 +643,9 @@ TaskManager.defineTask(SYNC_TASK_NAME, async () => {
   console.log("[SyncEngine] Background task running...");
 
   try {
-    const db = await SQLite.openDatabaseAsync("snapko.db");
+    // Use shared DB instance to prevent conflicts
+    const { getDB } = await import("../db");
+    const db = await getDB();
     await initSyncSchema(db);
 
     const state = await NetInfo.fetch();

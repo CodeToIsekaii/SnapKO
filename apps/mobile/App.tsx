@@ -52,28 +52,7 @@ const colors = {
 
 // ================== DATABASE INIT ==================
 
-async function initLocalDb() {
-  const db = await SQLite.openDatabaseAsync("snapko.db");
-  await db.execAsync(`
-    PRAGMA journal_mode = WAL;
-    CREATE TABLE IF NOT EXISTS local_profiles (
-      id TEXT PRIMARY KEY NOT NULL,
-      business_id TEXT,
-      role TEXT NOT NULL,
-      status TEXT NOT NULL,
-      full_name TEXT,
-      phone_number TEXT,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS local_inventory_logs (
-      id TEXT PRIMARY KEY NOT NULL,
-      ai_raw_json TEXT,
-      confirmed_json TEXT,
-      created_at TEXT NOT NULL
-    );
-  `);
-  return db;
-}
+// DB Init handled in src/db/index.ts
 
 // ================== APP NAVIGATOR ==================
 
@@ -91,6 +70,7 @@ type Screen =
   | "RECIPE_EDIT"
   | "RECIPE_SCAN"
   | "INGREDIENTS_LIST"
+  | "INGREDIENT_EDIT"
   | "PROFILE_EDIT"
   | "TRANSFER"
   | "QUICK_OUT";
@@ -122,6 +102,9 @@ function AppNavigator() {
   const [editingRecipeId, setEditingRecipeId] = React.useState<string | null>(
     null
   );
+  const [editingIngredientId, setEditingIngredientId] = React.useState<
+    string | null
+  >(null);
   const [inventoryParams, setInventoryParams] = React.useState<InventoryParams>(
     {
       mode: "stock",
@@ -133,7 +116,8 @@ function AppNavigator() {
     let mounted = true;
     (async () => {
       try {
-        const db = await initLocalDb();
+        const { getDB } = await import("./src/db");
+        const db = await getDB();
         if (mounted) {
           await initSyncEngine(db);
           setDbReady(true);
@@ -352,7 +336,29 @@ function AppNavigator() {
 
     case "INGREDIENTS_LIST":
       return (
-        <IngredientsListScreen onBack={() => setCurrentScreen("DASHBOARD")} />
+        <IngredientsListScreen
+          onBack={() => setCurrentScreen("DASHBOARD")}
+          onAddNew={() => {
+            setEditingIngredientId(null);
+            setCurrentScreen("INGREDIENT_EDIT");
+          }}
+          onEdit={(id) => {
+            setEditingIngredientId(id);
+            setCurrentScreen("INGREDIENT_EDIT");
+          }}
+        />
+      );
+
+    case "INGREDIENT_EDIT":
+      return (
+        <IngredientEditScreen
+          ingredientId={editingIngredientId ?? undefined}
+          onBack={() => setCurrentScreen("INGREDIENTS_LIST")}
+          onSave={() => {
+            setEditingIngredientId(null);
+            setCurrentScreen("INGREDIENTS_LIST");
+          }}
+        />
       );
 
     case "QUICK_OUT":
@@ -387,6 +393,10 @@ function AppNavigator() {
 }
 
 // ================== ROOT COMPONENT ==================
+
+// import { SafeAreaProvider } from "react-native-safe-area-context";
+
+// ... existing code ...
 
 export default function App() {
   const queryClient = useMemo(

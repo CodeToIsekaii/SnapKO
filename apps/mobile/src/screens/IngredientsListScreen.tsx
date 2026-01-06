@@ -29,11 +29,13 @@ interface LocalIngredient {
 interface IngredientsListScreenProps {
   onBack: () => void;
   onAddNew?: () => void;
+  onEdit?: (id: string) => void;
 }
 
 export default function IngredientsListScreen({
   onBack,
   onAddNew,
+  onEdit,
 }: IngredientsListScreenProps) {
   const [ingredients, setIngredients] = useState<LocalIngredient[]>([]);
   const [search, setSearch] = useState("");
@@ -68,8 +70,11 @@ export default function IngredientsListScreen({
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
+      const { fetchMasterDataUpdates } = await import("../sync/syncEngine");
+      // Also pull inventory logs if needed
       const { pullAllData } = await import("../sync/pullSync");
-      await pullAllData();
+
+      await Promise.all([fetchMasterDataUpdates(), pullAllData()]);
       await loadIngredients();
     } catch (err) {
       console.log("Refresh error:", err);
@@ -95,12 +100,26 @@ export default function IngredientsListScreen({
           text: showArchived ? "Khôi phục" : "Ẩn",
           style: showArchived ? "default" : "destructive",
           onPress: async () => {
+            // Optimistic Update handled by reload or local state update
             try {
               const db = await getDB();
+
+              const newArchivedState = showArchived ? 0 : 1;
+
+              // 1. Local Update
               await db.runAsync(
                 "UPDATE local_ingredients SET archived = ? WHERE id = ?",
-                [showArchived ? 0 : 1, id]
+                [newArchivedState, id]
               );
+
+              // 2. Queue Sync
+              const { addToSyncQueue } = await import("../sync/syncEngine");
+              await addToSyncQueue("ingredients", "UPSERT", {
+                id,
+                archived: newArchivedState === 1,
+                updated_at: new Date().toISOString(),
+              });
+
               loadIngredients();
             } catch (err) {
               Alert.alert("Lỗi", "Không thể cập nhật nguyên liệu");
@@ -347,17 +366,28 @@ export default function IngredientsListScreen({
               </View>
 
               {isOwner && (
-                <Pressable onPress={() => handleArchive(item.id, item.name)}>
-                  <Text
-                    style={{
-                      color: showArchived ? "#E07A2F" : "#E63946",
-                      fontSize: 12,
-                      textAlign: "right",
-                    }}
-                  >
-                    {showArchived ? "Khôi phục" : "Ẩn nguyên liệu"}
-                  </Text>
-                </Pressable>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "flex-end",
+                    gap: 16,
+                  }}
+                >
+                  <Pressable onPress={() => onEdit?.(item.id)}>
+                    <Text style={{ color: "#E07A2F", fontSize: 12 }}>Sửa</Text>
+                  </Pressable>
+                  <Pressable onPress={() => handleArchive(item.id, item.name)}>
+                    <Text
+                      style={{
+                        color: showArchived ? "#E07A2F" : "#E63946",
+                        fontSize: 12,
+                        textAlign: "right",
+                      }}
+                    >
+                      {showArchived ? "Khôi phục" : "Ẩn"}
+                    </Text>
+                  </Pressable>
+                </View>
               )}
             </View>
           );

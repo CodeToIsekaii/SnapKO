@@ -93,8 +93,12 @@ export default function RecipeListScreen({
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
+      const { fetchMasterDataUpdates } = await import("../sync/syncEngine");
+      // Also pull inventory logs if needed
       const { pullAllData } = await import("../sync/pullSync");
-      await pullAllData();
+
+      await Promise.all([fetchMasterDataUpdates(), pullAllData()]);
+
       await loadRecipes();
     } catch (err) {
       console.error("Refresh error:", err);
@@ -107,23 +111,58 @@ export default function RecipeListScreen({
     loadRecipes();
   }, [loadRecipes]);
 
+  // Soft Delete (Archive)
   const deleteRecipe = (id: string, name: string) => {
-    Alert.alert("Xóa món?", `"${name}" sẽ bị xóa vĩnh viễn.`, [
+    Alert.alert("Ẩn món?", `"${name}" sẽ chuyển vào mục Đã ẩn.`, [
       { text: "Hủy", style: "cancel" },
       {
-        text: "Xóa",
+        text: "Ẩn",
         style: "destructive",
         onPress: async () => {
+          // Optimistic UI Update handled by loadRecipes after DB update
+          // or we can setRecipes locally for faster feedback
+
           const db = await getDB();
-          await db.runAsync("DELETE FROM local_recipes WHERE id = ?", [id]);
+
+          // 1. Local Update
           await db.runAsync(
-            "DELETE FROM local_recipe_ingredients WHERE recipe_id = ?",
+            "UPDATE local_recipes SET is_active = 0 WHERE id = ?",
             [id]
           );
+
+          // 2. Queue Sync
+          const { addToSyncQueue } = await import("../sync/syncEngine");
+          await addToSyncQueue("recipes", "UPSERT", {
+            id,
+            is_active: false,
+            updated_at: new Date().toISOString(),
+          });
+
           loadRecipes();
         },
       },
     ]);
+  };
+
+  // Restore Recipe
+  const restoreRecipe = async (id: string, name: string) => {
+    const db = await getDB();
+
+    // 1. Local Update
+    await db.runAsync("UPDATE local_recipes SET is_active = 1 WHERE id = ?", [
+      id,
+    ]);
+
+    // 2. Queue Sync
+    const { addToSyncQueue } = await import("../sync/syncEngine");
+    await addToSyncQueue("recipes", "UPSERT", {
+      id,
+      is_active: true,
+      updated_at: new Date().toISOString(),
+    });
+
+    Alert.alert("Đã khôi phục", `Món "${name}" đã quay lại menu bán.`);
+    loadRecipes();
   };
 
   // Quick Sell - Deduct inventory immediately
@@ -165,8 +204,8 @@ export default function RecipeListScreen({
           Menu
         </Text>
         <View style={{ flexDirection: "row", gap: 12 }}>
-          {/* AI and Add buttons - Owner only */}
-          {isOwner && (
+          {/* AI and Add buttons - Owner only - Active Tab only */}
+          {isOwner && activeTab === "active" && (
             <>
               {onScanRecipe && (
                 <Pressable onPress={onScanRecipe}>
@@ -303,8 +342,12 @@ export default function RecipeListScreen({
         contentContainerStyle={{ padding: 16, paddingTop: 0 }}
         ListEmptyComponent={
           <View style={{ padding: 40, alignItems: "center" }}>
-            <Text style={{ color: "#64748B" }}>Chưa có món nào</Text>
-            {isOwner && (
+            <Text style={{ color: "#64748B" }}>
+              {activeTab === "active"
+                ? "Chưa có món nào"
+                : "Không có món nào đã ẩn"}
+            </Text>
+            {isOwner && activeTab === "active" && (
               <Pressable onPress={onAddRecipe} style={{ marginTop: 16 }}>
                 <Text style={{ color: "#E07A2F" }}>+ Thêm món đầu tiên</Text>
               </Pressable>
@@ -317,13 +360,20 @@ export default function RecipeListScreen({
 
           return (
             <Pressable
-              onPress={() => isOwner && onEditRecipe(item.id)}
-              onLongPress={() => isOwner && deleteRecipe(item.id, item.name)}
+              onPress={() =>
+                isOwner && activeTab === "active" && onEditRecipe(item.id)
+              }
+              onLongPress={() =>
+                isOwner &&
+                activeTab === "active" &&
+                deleteRecipe(item.id, item.name)
+              }
               style={{
                 backgroundColor: "#1A1A1A",
                 borderRadius: 12,
                 padding: 16,
                 marginBottom: 12,
+                opacity: activeTab === "hidden" ? 0.7 : 1,
               }}
             >
               <View
@@ -338,6 +388,8 @@ export default function RecipeListScreen({
                     fontWeight: "600",
                     fontSize: 16,
                     flex: 1,
+                    textDecorationLine:
+                      activeTab === "hidden" ? "line-through" : "none",
                   }}
                 >
                   {item.name}
@@ -380,22 +432,41 @@ export default function RecipeListScreen({
                 </Text>
               )}
 
-              {/* Quick Sell Button - Owner only */}
+              {/* isOwner Actions */}
               {isOwner && (
-                <Pressable
-                  onPress={() => quickSell(item)}
-                  style={{
-                    marginTop: 12,
-                    backgroundColor: "#6B8E23",
-                    borderRadius: 8,
-                    paddingVertical: 10,
-                    alignItems: "center",
-                  }}
-                >
-                  <Text style={{ color: "white", fontWeight: "600" }}>
-                    🛒 Bán 1 ly
-                  </Text>
-                </Pressable>
+                <View style={{ marginTop: 12 }}>
+                  {activeTab === "active" ? (
+                    /* QUICK SELL - Only in Active Tab */
+                    <Pressable
+                      onPress={() => quickSell(item)}
+                      style={{
+                        backgroundColor: "#6B8E23",
+                        borderRadius: 8,
+                        paddingVertical: 10,
+                        alignItems: "center",
+                      }}
+                    >
+                      <Text style={{ color: "white", fontWeight: "600" }}>
+                        🛒 Bán 1 ly
+                      </Text>
+                    </Pressable>
+                  ) : (
+                    /* RESTORE - Only in Hidden Tab */
+                    <Pressable
+                      onPress={() => restoreRecipe(item.id, item.name)}
+                      style={{
+                        backgroundColor: "#E07A2F",
+                        borderRadius: 8,
+                        paddingVertical: 10,
+                        alignItems: "center",
+                      }}
+                    >
+                      <Text style={{ color: "white", fontWeight: "600" }}>
+                        ♻️ Khôi phục
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
               )}
             </Pressable>
           );

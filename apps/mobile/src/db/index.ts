@@ -302,6 +302,22 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
     CREATE INDEX IF NOT EXISTS idx_recipes_business ON local_recipes(business_id);
     CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON local_recipe_ingredients(recipe_id);
     CREATE INDEX IF NOT EXISTS idx_batch_recipes_output ON local_batch_recipes(output_ingredient_id);
+
+    -- Sync Queue for Master Data (Mobile -> Cloud)
+    CREATE TABLE IF NOT EXISTS local_sync_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action TEXT NOT NULL,       -- 'UPSERT' or 'DELETE'
+      table_name TEXT NOT NULL,   -- 'recipes' or 'ingredients'
+      payload TEXT NOT NULL,      -- JSON
+      status TEXT DEFAULT 'PENDING',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- App Settings for Sync Timestamps
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
   `);
 
     return db;
@@ -359,8 +375,30 @@ export async function getDB(): Promise<SQLite.SQLiteDatabase> {
     }
   }
 
+  // If retries failed, try to recover by deleting the corrupted DB
+  if (!isReinitializing) {
+    console.error("[DB] FATAL: Failed to init DB. Attempting HARD RESET...");
+    try {
+      await SQLite.deleteDatabaseAsync("snapko.db");
+      console.log("[DB] Corrupted database deleted. Retrying init...");
+
+      // Reset flags
+      db = null;
+      initPromise = null;
+      isReinitializing = false; // Reset lock for recursive call
+
+      // One last try
+      return await getDB();
+    } catch (cleanupErr) {
+      console.error("[DB] Failed to delete corrupted DB:", cleanupErr);
+    }
+  }
+
   isReinitializing = false;
-  throw lastError || new Error("Failed to initialize database after retries");
+  throw (
+    lastError ||
+    new Error("Failed to initialize database after retries and recovery")
+  );
 }
 
 /**

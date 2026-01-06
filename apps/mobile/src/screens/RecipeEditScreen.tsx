@@ -244,6 +244,22 @@ export default function RecipeEditScreen({
         );
       }
 
+      // --- QUEUE SYNC ---
+      const { addToSyncQueue } = await import("../sync/syncEngine");
+      await addToSyncQueue("recipes", "UPSERT", {
+        id,
+        business_id: (
+          await db.getFirstAsync<{ business_id: string }>(
+            "SELECT business_id FROM local_profiles LIMIT 1"
+          )
+        )?.business_id, // Ensure business_id
+        name: name.trim(),
+        price: sellingPrice,
+        category: category.trim(),
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      });
+
       onSave();
     } catch (err) {
       Alert.alert("Lỗi", "Không thể lưu món");
