@@ -49,6 +49,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [ingredients, setIngredients] = useState<LocalIngredient[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -66,25 +67,13 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
   // Load data
   const loadData = useCallback(async () => {
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      setLoading(true);
 
-      // Ensure tables exist
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS local_recipes (
-          id TEXT PRIMARY KEY NOT NULL,
-          name TEXT NOT NULL,
-          price INTEGER NOT NULL DEFAULT 0,
-          category TEXT,
-          created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS local_recipe_ingredients (
-          id TEXT PRIMARY KEY NOT NULL,
-          recipe_id TEXT NOT NULL,
-          ingredient_id TEXT NOT NULL,
-          quantity REAL NOT NULL,
-          unit TEXT
-        );
-      `);
+      // Pull remote data first
+      const { pullAllData } = await import("../sync/pullSync");
+      await pullAllData();
+
+      const db = await SQLite.openDatabaseAsync("snapko.db");
 
       // Load ingredients
       const ings = await db.getAllAsync<LocalIngredient>(
@@ -135,6 +124,20 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
       setLoading(false);
     }
   }, []);
+
+  // Pull-to-refresh: sync from cloud then reload
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const { pullAllData } = await import("../sync/pullSync");
+      await pullAllData();
+      await loadData();
+    } catch (err) {
+      console.error("Refresh error:", err);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadData]);
 
   useEffect(() => {
     loadData();
@@ -290,7 +293,12 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
         data={recipes}
         keyExtractor={(item) => item.id}
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={loadData} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={["#E07A2F"]}
+            tintColor="#E07A2F"
+          />
         }
         contentContainerStyle={{ padding: 16 }}
         ListEmptyComponent={

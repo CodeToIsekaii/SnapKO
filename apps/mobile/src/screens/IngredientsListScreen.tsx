@@ -13,7 +13,7 @@ import {
   Alert,
   RefreshControl,
 } from "react-native";
-import * as SQLite from "expo-sqlite";
+import { getDB } from "../db";
 
 interface LocalIngredient {
   id: string;
@@ -38,17 +38,23 @@ export default function IngredientsListScreen({
   const [ingredients, setIngredients] = useState<LocalIngredient[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [isOwner, setIsOwner] = useState(false);
 
-  // Load ingredients from local DB
+  // Initial load from local DB
   const loadIngredients = useCallback(async () => {
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
+
+      // Check user role
+      const userProfile = await db.getFirstAsync<{ role: string }>(
+        "SELECT role FROM local_profiles LIMIT 1"
+      );
+      setIsOwner(userProfile?.role === "OWNER");
+
       const rows = await db.getAllAsync<LocalIngredient>(
-        `SELECT * FROM local_ingredients 
-         WHERE archived = ? 
-         ORDER BY name ASC`,
-        [showArchived ? 1 : 0]
+        `SELECT * FROM local_ingredients ORDER BY name ASC`
       );
       setIngredients(rows);
     } catch (err) {
@@ -56,7 +62,21 @@ export default function IngredientsListScreen({
     } finally {
       setLoading(false);
     }
-  }, [showArchived]);
+  }, []);
+
+  // Pull-to-refresh: sync from cloud then reload
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const { pullAllData } = await import("../sync/pullSync");
+      await pullAllData();
+      await loadIngredients();
+    } catch (err) {
+      console.log("Refresh error:", err);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadIngredients]);
 
   useEffect(() => {
     loadIngredients();
@@ -76,7 +96,7 @@ export default function IngredientsListScreen({
           style: showArchived ? "default" : "destructive",
           onPress: async () => {
             try {
-              const db = await SQLite.openDatabaseAsync("snapko.db");
+              const db = await getDB();
               await db.runAsync(
                 "UPDATE local_ingredients SET archived = ? WHERE id = ?",
                 [showArchived ? 0 : 1, id]
@@ -91,12 +111,14 @@ export default function IngredientsListScreen({
     );
   };
 
-  // Filter by search
-  const filtered = ingredients.filter(
-    (ing) =>
+  // Filter by tab and search
+  const filtered = ingredients.filter((ing) => {
+    const matchesTab = showArchived ? ing.archived === 1 : !ing.archived;
+    const matchesSearch =
       ing.name.toLowerCase().includes(search.toLowerCase()) ||
-      (ing.aliases && ing.aliases.toLowerCase().includes(search.toLowerCase()))
-  );
+      (ing.aliases && ing.aliases.toLowerCase().includes(search.toLowerCase()));
+    return matchesTab && matchesSearch;
+  });
 
   // Calculate total value
   const totalValue = ingredients.reduce(
@@ -110,105 +132,162 @@ export default function IngredientsListScreen({
       <View
         style={{
           flexDirection: "row",
-          alignItems: "center",
           justifyContent: "space-between",
+          alignItems: "center",
           padding: 16,
           paddingTop: 60,
           borderBottomWidth: 1,
           borderBottomColor: "#2A2A2A",
         }}
       >
-        <Pressable onPress={onBack}>
+        <Pressable onPress={onBack} style={{ flex: 1 }}>
           <Text style={{ color: "#94A3B8", fontSize: 16 }}>← Quay lại</Text>
         </Pressable>
-        <Text style={{ color: "white", fontSize: 18, fontWeight: "600" }}>
+        <Text
+          style={{
+            color: "white",
+            fontSize: 18,
+            fontWeight: "600",
+            flex: 2,
+            textAlign: "center",
+          }}
+        >
           Nguyên liệu
         </Text>
-        {onAddNew && (
-          <Pressable onPress={onAddNew}>
-            <Text style={{ color: "#E07A2F", fontSize: 16 }}>+ Thêm</Text>
-          </Pressable>
-        )}
+        <View
+          style={{
+            flex: 1,
+            flexDirection: "row",
+            justifyContent: "flex-end",
+            gap: 12,
+          }}
+        >
+          {onAddNew && (
+            <Pressable onPress={onAddNew}>
+              <Text style={{ color: "#E07A2F", fontSize: 16 }}>+ Thêm</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
-      {/* Search */}
-      <View style={{ padding: 16, paddingBottom: 8 }}>
+      {/* Stats - Standardized with Menu style */}
+      {!showArchived && (
+        <View
+          style={{
+            flexDirection: "row",
+            padding: 16,
+            gap: 12,
+            paddingBottom: 8,
+          }}
+        >
+          {isOwner && (
+            <View
+              style={{
+                flex: 1,
+                backgroundColor: "#1A1A1A",
+                borderRadius: 12,
+                padding: 16,
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#64748B", fontSize: 12 }}>
+                Tổng giá trị
+              </Text>
+              <Text
+                style={{
+                  color: "#6B8E23",
+                  fontSize: 24,
+                  fontWeight: "700",
+                }}
+              >
+                {totalValue.toLocaleString("vi-VN")} đ
+              </Text>
+            </View>
+          )}
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: "#1A1A1A",
+              borderRadius: 12,
+              padding: 16,
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: "#64748B", fontSize: 12 }}>
+              Nguyên liệu đang dùng
+            </Text>
+            <Text style={{ color: "white", fontSize: 24, fontWeight: "700" }}>
+              {ingredients.filter((i) => !i.archived).length}
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* Search Bar */}
+      <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
         <TextInput
+          placeholder="Tìm nguyên liệu..."
+          placeholderTextColor="#64748B"
           value={search}
           onChangeText={setSearch}
-          placeholder="Tìm kiếm..."
-          placeholderTextColor="#64748B"
           style={{
             backgroundColor: "#1A1A1A",
-            borderRadius: 12,
+            borderRadius: 8,
             padding: 12,
             color: "white",
+            borderWidth: 1,
+            borderColor: "#2A2A2A",
           }}
         />
       </View>
 
-      {/* Toggle archived */}
+      {/* Tabs: Active / Hidden */}
       <View
         style={{
           flexDirection: "row",
           paddingHorizontal: 16,
-          marginBottom: 8,
-          gap: 8,
+          marginBottom: 12,
         }}
       >
         <Pressable
           onPress={() => setShowArchived(false)}
           style={{
-            paddingHorizontal: 16,
-            paddingVertical: 8,
-            borderRadius: 20,
-            backgroundColor: !showArchived ? "#E07A2F" : "#1A1A1A",
+            flex: 1,
+            paddingVertical: 10,
+            borderRadius: 8,
+            backgroundColor: !showArchived ? "#E07A2F" : "#2A2A2A",
+            marginRight: 6,
+            alignItems: "center",
           }}
         >
-          <Text style={{ color: "white" }}>Đang dùng</Text>
+          <Text style={{ color: "white", fontWeight: "600" }}>Đang dùng</Text>
         </Pressable>
         <Pressable
           onPress={() => setShowArchived(true)}
           style={{
-            paddingHorizontal: 16,
-            paddingVertical: 8,
-            borderRadius: 20,
-            backgroundColor: showArchived ? "#E07A2F" : "#1A1A1A",
+            flex: 1,
+            paddingVertical: 10,
+            borderRadius: 8,
+            backgroundColor: showArchived ? "#64748B" : "#2A2A2A",
+            marginLeft: 6,
+            alignItems: "center",
           }}
         >
-          <Text style={{ color: "white" }}>Đã ẩn</Text>
+          <Text style={{ color: "white", fontWeight: "600" }}>Đã ẩn</Text>
         </Pressable>
       </View>
-
-      {/* Summary */}
-      {!showArchived && (
-        <View
-          style={{
-            marginHorizontal: 16,
-            padding: 16,
-            backgroundColor: "#1A1A1A",
-            borderRadius: 12,
-            marginBottom: 16,
-          }}
-        >
-          <Text style={{ color: "#64748B", fontSize: 12 }}>
-            Tổng giá trị tồn kho
-          </Text>
-          <Text style={{ color: "#6B8E23", fontSize: 24, fontWeight: "700" }}>
-            {totalValue.toLocaleString("vi-VN")} đ
-          </Text>
-          <Text style={{ color: "#64748B", fontSize: 12 }}>
-            {ingredients.length} nguyên liệu
-          </Text>
-        </View>
-      )}
 
       {/* List */}
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.id}
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={loadIngredients} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={["#E07A2F"]}
+            tintColor="#E07A2F"
+          />
         }
         contentContainerStyle={{ padding: 16, paddingTop: 0 }}
         ListEmptyComponent={
@@ -245,9 +324,11 @@ export default function IngredientsListScreen({
                 >
                   {item.name}
                 </Text>
-                <Text style={{ color: "#6B8E23", fontWeight: "600" }}>
-                  {value.toLocaleString("vi-VN")} đ
-                </Text>
+                {isOwner && (
+                  <Text style={{ color: "#6B8E23", fontWeight: "600" }}>
+                    {value.toLocaleString("vi-VN")} đ
+                  </Text>
+                )}
               </View>
 
               <View style={{ flexDirection: "row", gap: 16, marginBottom: 8 }}>
@@ -257,23 +338,27 @@ export default function IngredientsListScreen({
                 <Text style={{ color: "#64748B", fontSize: 12 }}>
                   Quầy: {item.bar_qty || 0} {item.base_unit}
                 </Text>
-                <Text style={{ color: "#64748B", fontSize: 12 }}>
-                  Giá: {item.unit_cost.toLocaleString("vi-VN")} đ/
-                  {item.base_unit}
-                </Text>
+                {isOwner && (
+                  <Text style={{ color: "#64748B", fontSize: 12 }}>
+                    Giá: {item.unit_cost.toLocaleString("vi-VN")} đ/
+                    {item.base_unit}
+                  </Text>
+                )}
               </View>
 
-              <Pressable onPress={() => handleArchive(item.id, item.name)}>
-                <Text
-                  style={{
-                    color: showArchived ? "#E07A2F" : "#E63946",
-                    fontSize: 12,
-                    textAlign: "right",
-                  }}
-                >
-                  {showArchived ? "Khôi phục" : "Ẩn nguyên liệu"}
-                </Text>
-              </Pressable>
+              {isOwner && (
+                <Pressable onPress={() => handleArchive(item.id, item.name)}>
+                  <Text
+                    style={{
+                      color: showArchived ? "#E07A2F" : "#E63946",
+                      fontSize: 12,
+                      textAlign: "right",
+                    }}
+                  >
+                    {showArchived ? "Khôi phục" : "Ẩn nguyên liệu"}
+                  </Text>
+                </Pressable>
+              )}
             </View>
           );
         }}

@@ -75,6 +75,7 @@ export default function DashboardScreen({
   const [loading, setLoading] = useState(true);
   const [hasTodaySales, setHasTodaySales] = useState(false);
   const [todayTransfers, setTodayTransfers] = useState<any[]>([]);
+  const [isOwner, setIsOwner] = useState(false); // Role-based UI control
 
   // Debug: Log when Dashboard mounts with current businessId
   useEffect(() => {
@@ -93,6 +94,12 @@ export default function DashboardScreen({
     try {
       const db = await getDB();
       const today = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in local timezone
+
+      // Check user role
+      const userProfile = await db.getFirstAsync<{ role: string }>(
+        "SELECT role FROM local_profiles LIMIT 1"
+      );
+      setIsOwner(userProfile?.role === "OWNER");
 
       // Check if today has any SALES type logs
       const salesLogs = await db.getAllAsync<any>(
@@ -147,8 +154,11 @@ export default function DashboardScreen({
       setTotalValue(total);
       setIngredientCount(ings.length);
 
-      // TODO: Recipe count not yet implemented in InventoryService
-      setRecipeCount(0);
+      setIngredientCount(ings.length);
+
+      // Get Recipe Count
+      const rCount = await InventoryService.getRecipeCount();
+      setRecipeCount(rCount);
 
       // Load low stock items as "recent activity" for now
       const lowStock = await InventoryService.getLowStock();
@@ -228,10 +238,15 @@ export default function DashboardScreen({
     console.log("🔄 Pull-to-refresh triggered...");
 
     try {
-      // Sync model from server
+      // 1. Pull data from Supabase to local DB
+      const { pullAllData } = await import("../sync/pullSync");
+      const pullResult = await pullAllData();
+      console.log("📥 Pull complete:", pullResult);
+
+      // 2. Sync model from server
       await syncModel();
 
-      // Reload all data
+      // 3. Reload all data from local DB
       await InventoryService.init();
       const ings = await InventoryService.getAll();
       const total = ings.reduce(
@@ -241,8 +256,14 @@ export default function DashboardScreen({
       setTotalValue(total);
       setIngredientCount(ings.length);
 
+      // Update recipe count
+      const rCount = await InventoryService.getRecipeCount();
+      setRecipeCount(rCount);
+
       console.log("✅ Refresh complete!");
-      Alert.alert("Cập nhật thành công", "Dữ liệu đã được đồng bộ mới nhất.");
+      console.log("✅ Refresh complete!");
+      // Success alert removed to prevent blocking UI/RefreshControl
+      // Alert.alert("Cập nhật thành công", "Dữ liệu đã được đồng bộ mới nhất.");
     } catch (err) {
       console.error("Refresh error:", err);
       Alert.alert(
@@ -365,22 +386,24 @@ export default function DashboardScreen({
           </Text>
         </Pressable>
 
-        {/* Main Stats */}
-        <View
-          style={{
-            backgroundColor: "#1A1A1A",
-            borderRadius: 16,
-            padding: 20,
-            marginBottom: 16,
-          }}
-        >
-          <Text style={{ color: "#64748B", fontSize: 12, marginBottom: 4 }}>
-            Tổng giá trị tồn kho
-          </Text>
-          <Text style={{ color: "#55A630", fontSize: 32, fontWeight: "700" }}>
-            {formatCurrency(totalValue)}
-          </Text>
-        </View>
+        {/* Main Stats - OWNER ONLY per .script */}
+        {isOwner && (
+          <View
+            style={{
+              backgroundColor: "#1A1A1A",
+              borderRadius: 16,
+              padding: 20,
+              marginBottom: 16,
+            }}
+          >
+            <Text style={{ color: "#64748B", fontSize: 12, marginBottom: 4 }}>
+              Tổng giá trị tồn kho
+            </Text>
+            <Text style={{ color: "#55A630", fontSize: 32, fontWeight: "700" }}>
+              {formatCurrency(totalValue)}
+            </Text>
+          </View>
+        )}
 
         {/* Quick Stats */}
         <View style={{ flexDirection: "row", gap: 12, marginBottom: 16 }}>

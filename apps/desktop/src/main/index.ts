@@ -18,12 +18,14 @@ import {
   closeDatabase,
   registerDatabaseIPC,
   setDatabaseSupabaseClient,
+  setDatabaseBusinessId,
 } from "./database";
 import { registerPrinterIPC } from "./printer";
 import { setAuthToken, pullAll, isSyncReady, getSyncClient } from "./sync";
 import { startRealtimeListener, stopRealtimeListener } from "./realtime";
 import { registerExportIPC } from "./export";
 import { registerStaffIPC, setStaffSupabaseClient } from "./staff";
+import { processQueue } from "./syncWorker";
 
 // Environment variables (validated via Zod in env.ts)
 const SUPABASE_URL = Env.VITE_SUPABASE_URL;
@@ -152,6 +154,18 @@ function registerAuthIPC() {
           // Start Realtime listener after login
           // Note: We need to get businessId from profile - for now use user.id as placeholder
           // In production, fetch profile first to get business_id
+          /* FIXED: Fetch profile to get business_id and set in database */
+          authClient
+            .from("profiles")
+            .select("business_id")
+            .eq("id", data.user.id)
+            .single()
+            .then(({ data: profile }) => {
+              if (profile?.business_id) {
+                setDatabaseBusinessId(profile.business_id);
+              }
+            });
+
           startRealtimeListener(
             data.session.access_token,
             data.user?.id || "", // TODO: Replace with actual business_id
@@ -300,6 +314,20 @@ function registerAuthIPC() {
                 setDatabaseSupabaseClient(client); // For staff profiles Cloud query
               }
 
+              /* FIXED: Fetch profile to get business_id */
+              if (sessionData.session?.user) {
+                authClient
+                  .from("profiles")
+                  .select("business_id")
+                  .eq("id", sessionData.session.user.id)
+                  .single()
+                  .then(({ data: profile }) => {
+                    if (profile?.business_id) {
+                      setDatabaseBusinessId(profile.business_id);
+                    }
+                  });
+              }
+
               // Start Realtime listener
               if (sessionData.session?.user) {
                 startRealtimeListener(
@@ -390,6 +418,12 @@ function registerAuthIPC() {
       };
 
       console.log("[Auth] Profile fetched:", flattenedProfile);
+
+      /* FIXED: Ensure database business_id is set when profile is fetched */
+      if (flattenedProfile.business_id) {
+        setDatabaseBusinessId(flattenedProfile.business_id);
+      }
+
       return { profile: flattenedProfile };
     } catch (err: any) {
       console.error("[Auth] Get profile error:", err);
@@ -560,6 +594,11 @@ function registerSyncIPC() {
       return { success: false, synced: 0, error: "Not authenticated" };
     }
 
+    // CRITICAL: Flush queue FIRST to push DELETE actions before pulling
+    console.log("[Sync] Flushing queue before pull...");
+    await processQueue();
+    console.log("[Sync] Queue flushed, starting pull...");
+
     const result = await pullAll();
     return result;
   });
@@ -582,6 +621,53 @@ app.whenReady().then(async () => {
   registerExportIPC(mainWindow);
   registerStaffIPC();
   console.log("[SnapKO Desktop] All IPC handlers registered");
+
+  // ==================== AUTH STATE LISTENER (MAIN PROCESS) ====================
+  // Ensure Main Process always has fresh token even if Renderer is closed
+  if (authClient) {
+    authClient.auth.onAuthStateChange((event, session) => {
+      console.log(`[Auth-Main] Auth state changed: ${event}`);
+
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        if (session) {
+          currentSession = session;
+
+          // CRITICAL: Update Sync Client Token
+          setAuthToken(session.access_token);
+
+          // Update Sync Clients for other modules
+          const client = getSyncClient();
+          if (client) {
+            setStaffSupabaseClient(client);
+            setDatabaseSupabaseClient(client);
+          }
+
+          // Persist to disk
+          saveSession({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token || "",
+            user: {
+              id: session.user.id,
+              email: session.user.email || "",
+            },
+          });
+        }
+      } else if (event === "SIGNED_OUT") {
+        currentSession = null;
+        setAuthToken(null);
+        clearSession();
+      }
+    });
+  }
+
+  // ==================== SYNC WORKER LOOP ====================
+  // Start background sync worker (offline-first queue)
+  // Optimized: Increased interval from 5s to 15s to reduce CPU/network load
+  setInterval(() => {
+    processQueue().catch((err) =>
+      console.error("[SyncWorker] Loop error:", err)
+    );
+  }, 15000);
 
   // ==================== RESTORE SESSION ====================
   // Try to restore session from disk on startup
@@ -633,6 +719,18 @@ app.whenReady().then(async () => {
           setStaffSupabaseClient(client);
           setDatabaseSupabaseClient(client);
         }
+
+        /* FIXED: Fetch profile to get business_id (Restore Session) */
+        authClient
+          .from("profiles")
+          .select("business_id")
+          .eq("id", data.session.user.id)
+          .single()
+          .then(({ data: profile }) => {
+            if (profile?.business_id) {
+              setDatabaseBusinessId(profile.business_id);
+            }
+          });
 
         // Note: Realtime listener will start after window is created and mainWindow is available
       }

@@ -2,7 +2,7 @@
 // SOLID: Service Layer - Single Responsibility (Database/API operations only)
 // UI and Hooks must NOT call SQLite directly, always through this service
 
-import * as SQLite from "expo-sqlite";
+import { getDB } from "../../../db";
 
 export interface IngredientData {
   id: string;
@@ -14,6 +14,7 @@ export interface IngredientData {
   density: number;
   tare_weight: number;
   business_id?: string;
+  archived?: number;
 }
 
 export interface PendingLogData {
@@ -27,104 +28,6 @@ export interface PendingLogData {
   local_image_path?: string;
   sync_status: "pending" | "syncing" | "synced" | "error";
   created_at: string;
-}
-
-// Database singleton
-let db: SQLite.SQLiteDatabase | null = null;
-
-async function getDB(): Promise<SQLite.SQLiteDatabase> {
-  if (!db) {
-    db = await SQLite.openDatabaseAsync("snapko_mobile.db");
-    await initTables();
-  }
-  return db;
-}
-
-async function initTables(): Promise<void> {
-  if (!db) return;
-
-  // Create tables for new users
-  await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS local_ingredients (
-      id TEXT PRIMARY KEY NOT NULL,
-      name TEXT NOT NULL,
-      base_unit TEXT,
-      warehouse_qty REAL NOT NULL DEFAULT 0,
-      bar_qty REAL NOT NULL DEFAULT 0,
-      unit_cost REAL NOT NULL DEFAULT 0,
-      business_id TEXT,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS pending_sync_logs (
-      id TEXT PRIMARY KEY NOT NULL,
-      ingredient_id TEXT,
-      location TEXT NOT NULL,
-      type TEXT NOT NULL,
-      ai_parsed_quantity REAL,
-      final_confirmed_quantity REAL,
-      diff_percentage REAL,
-      local_image_path TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  // ✅ MIGRATION: Add missing columns for users who installed app before these columns existed
-  // Using try-catch because ALTER TABLE will fail if column already exists (which is OK)
-  try {
-    await db.execAsync(
-      "ALTER TABLE local_ingredients ADD COLUMN warehouse_qty REAL DEFAULT 0;"
-    );
-    console.log("✅ Migration: Added warehouse_qty column");
-  } catch {
-    // Column already exists - this is expected for new installs
-  }
-
-  try {
-    await db.execAsync(
-      "ALTER TABLE local_ingredients ADD COLUMN bar_qty REAL DEFAULT 0;"
-    );
-    console.log("✅ Migration: Added bar_qty column");
-  } catch {
-    // Column already exists
-  }
-
-  try {
-    await db.execAsync(
-      "ALTER TABLE local_ingredients ADD COLUMN unit_cost REAL DEFAULT 0;"
-    );
-    console.log("✅ Migration: Added unit_cost column");
-  } catch {
-    // Column already exists
-  }
-
-  try {
-    await db.execAsync(
-      "ALTER TABLE local_ingredients ADD COLUMN business_id TEXT;"
-    );
-    console.log("✅ Migration: Added business_id column");
-  } catch {
-    // Column already exists
-  }
-
-  try {
-    await db.execAsync(
-      "ALTER TABLE local_ingredients ADD COLUMN density REAL DEFAULT 1;"
-    );
-    console.log("✅ Migration: Added density column");
-  } catch {
-    // Column already exists
-  }
-
-  try {
-    await db.execAsync(
-      "ALTER TABLE local_ingredients ADD COLUMN tare_weight REAL DEFAULT 0;"
-    );
-    console.log("✅ Migration: Added tare_weight column");
-  } catch {
-    // Column already exists
-  }
 }
 
 // ==================== INVENTORY SERVICE ====================
@@ -143,9 +46,20 @@ export const InventoryService = {
   getAll: async (): Promise<IngredientData[]> => {
     const database = await getDB();
     const result = await database.getAllAsync<IngredientData>(
-      "SELECT * FROM local_ingredients ORDER BY name"
+      "SELECT * FROM local_ingredients WHERE archived != 1 OR archived IS NULL ORDER BY name"
     );
     return result;
+  },
+
+  /**
+   * Get recipe count (Active only)
+   */
+  getRecipeCount: async (): Promise<number> => {
+    const database = await getDB();
+    const result = await database.getFirstAsync<{ count: number }>(
+      "SELECT COUNT(*) as count FROM local_recipes WHERE is_active = 1"
+    );
+    return result?.count || 0;
   },
 
   /**

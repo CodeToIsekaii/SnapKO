@@ -33,6 +33,7 @@ import {
   IngredientsListScreen,
   ProfileEditScreen,
   AdHocTransferScreen,
+  QuickOutScreen,
 } from "./src/screens";
 import { InventoryModelProvider } from "./src/contexts/InventoryModelContext";
 import type {
@@ -91,7 +92,8 @@ type Screen =
   | "RECIPE_SCAN"
   | "INGREDIENTS_LIST"
   | "PROFILE_EDIT"
-  | "TRANSFER";
+  | "TRANSFER"
+  | "QUICK_OUT";
 
 // State for ConfirmLog screen
 interface ConfirmLogParams {
@@ -149,12 +151,8 @@ function AppNavigator() {
   // Navigate based on auth state changes
   useEffect(() => {
     if (authState.status === "authenticated") {
-      // Owner goes to dashboard, staff goes to inventory
-      if (authState.profile.role === "OWNER") {
-        setCurrentScreen("DASHBOARD");
-      } else {
-        setCurrentScreen("INVENTORY_CAPTURE");
-      }
+      // Both Owner and Staff go to dashboard first
+      setCurrentScreen("DASHBOARD");
     } else if (authState.status === "needs_setup") {
       // Owner without business -> Profile Setup
       setCurrentScreen("PROFILE_SETUP");
@@ -273,7 +271,7 @@ function AppNavigator() {
           initialMode={inventoryParams.mode}
           areaType={inventoryParams.areaType}
           checkMode={inventoryParams.checkMode}
-          onBack={() => setCurrentScreen(isOwner ? "DASHBOARD" : "SETTINGS")}
+          onBack={() => setCurrentScreen("DASHBOARD")}
           onOpenSettings={() => setCurrentScreen("SETTINGS")}
           onNavigateToConfirm={(items, localImagePath) => {
             setConfirmLogParams({ items, localImagePath });
@@ -357,6 +355,14 @@ function AppNavigator() {
         <IngredientsListScreen onBack={() => setCurrentScreen("DASHBOARD")} />
       );
 
+    case "QUICK_OUT":
+      return (
+        <QuickOutScreen
+          onBack={() => setCurrentScreen("DASHBOARD")}
+          onSuccess={() => setCurrentScreen("DASHBOARD")}
+        />
+      );
+
     case "DASHBOARD":
     default:
       return (
@@ -374,6 +380,7 @@ function AppNavigator() {
           onOpenPendingList={() => setCurrentScreen("OWNER_PENDING_LIST")}
           onOpenRecipes={() => setCurrentScreen("RECIPE_LIST")}
           onOpenIngredients={() => setCurrentScreen("INGREDIENTS_LIST")}
+          onOpenQuickOut={() => setCurrentScreen("QUICK_OUT")}
         />
       );
   }

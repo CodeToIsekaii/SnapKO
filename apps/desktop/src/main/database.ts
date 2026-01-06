@@ -9,10 +9,82 @@ import { join } from "node:path";
 
 let db: Database.Database | null = null;
 let authClient: any = null;
+let currentBusinessId: string | null = null;
 
 // Set Supabase client for Cloud queries (staff profiles)
 export function setDatabaseSupabaseClient(client: any) {
   authClient = client;
+}
+
+// Set Business ID and Backfill Logic
+export function setDatabaseBusinessId(id: string) {
+  currentBusinessId = id;
+  console.log(`[Database] Business ID set to: ${id}`);
+
+  if (!db) return;
+
+  try {
+    const transaction = db.transaction(() => {
+      // --- STEP 1: BACKFILL & FIX DATA ---
+      // Fix Business ID for all tables
+      db.prepare(
+        "UPDATE local_ingredients SET business_id = ? WHERE business_id IS NULL"
+      ).run(id);
+      db.prepare(
+        "UPDATE local_recipes SET business_id = ? WHERE business_id IS NULL"
+      ).run(id);
+      // db.prepare("UPDATE batch_recipes SET business_id = ? WHERE business_id IS NULL").run(id);
+
+      // Fix Aliases (Use '[]' for empty/null)
+      db.prepare(
+        "UPDATE local_ingredients SET aliases = '[]' WHERE aliases IS NULL OR aliases = ''"
+      ).run();
+
+      // --- STEP 2: FLUSH QUEUE ---
+      // Delete all PENDING/FAILED items to avoid conflicts
+      db.prepare("DELETE FROM local_sync_queue WHERE status != 'DONE'").run();
+
+      // Flush Legacy/Bad Queue Items (Double check)
+      db.prepare(
+        "DELETE FROM local_sync_queue WHERE table_name = 'recipes' AND payload LIKE '%\"id\":\"recipe_%'"
+      ).run();
+
+      // --- STEP 3: RE-QUEUE V2 ---
+      const migrationKey = "fix_requeue_v2_done";
+      const checkMig = db
+        .prepare("SELECT value FROM local_system_meta WHERE key = ?")
+        .get(migrationKey);
+
+      if (!checkMig) {
+        console.log("[Database] Starting Re-queue V2...");
+        const ingredients = db
+          .prepare("SELECT * FROM local_ingredients WHERE business_id = ?")
+          .all(id);
+
+        const insertQueue = db.prepare(
+          "INSERT INTO local_sync_queue (action, table_name, payload, status) VALUES (?, ?, ?, ?)"
+        );
+
+        for (const item of ingredients as any[]) {
+          insertQueue.run(
+            "UPSERT",
+            "ingredients",
+            JSON.stringify(item),
+            "PENDING"
+          );
+        }
+
+        // Mark done
+        db.prepare(
+          "INSERT OR REPLACE INTO local_system_meta (key, value) VALUES (?, ?)"
+        ).run(migrationKey, "true");
+      }
+    });
+
+    transaction();
+  } catch (err) {
+    console.error(`[Database] Error setting business ID: ${err}`);
+  }
 }
 
 // Get database path in user data directory
@@ -84,6 +156,7 @@ export function initDatabase(): Database.Database {
       unit_weight REAL,
       unit_weight_unit TEXT,
       aliases TEXT,
+      archived INTEGER DEFAULT 0,
       created_at TEXT NOT NULL
     );
 
@@ -96,9 +169,41 @@ export function initDatabase(): Database.Database {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS local_sync_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action TEXT NOT NULL, -- 'UPSERT', 'DELETE'
+      table_name TEXT NOT NULL, -- 'ingredients', 'recipes', 'batch_recipes'
+      payload TEXT NOT NULL, -- JSON String
+      status TEXT DEFAULT 'PENDING', -- 'PENDING', 'FAILED', 'ERROR'
+      retry_count INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS local_recipes (
+      id TEXT PRIMARY KEY NOT NULL,
+      business_id TEXT,
+      name TEXT NOT NULL,
+      price INTEGER NOT NULL DEFAULT 0,
+      category TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS local_recipe_ingredients (
+      id TEXT PRIMARY KEY NOT NULL,
+      recipe_id TEXT NOT NULL,
+      ingredient_id TEXT,
+      quantity REAL NOT NULL,
+      unit TEXT,
+      FOREIGN KEY (recipe_id) REFERENCES local_recipes(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_pending_synced ON pending_sync_logs(synced);
     CREATE INDEX IF NOT EXISTS idx_ingredients_business ON local_ingredients(business_id);
     CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_inventory_stats(date);
+    CREATE INDEX IF NOT EXISTS idx_recipes_business ON local_recipes(business_id);
+    CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON local_recipe_ingredients(recipe_id);
   `);
 
   // Migration: Add missing columns if table already exists
@@ -145,12 +250,108 @@ export function initDatabase(): Database.Database {
     /* Column already exists */
   }
 
+  // Migration: Add archived column for soft delete
+  try {
+    db.exec(
+      `ALTER TABLE local_ingredients ADD COLUMN archived INTEGER DEFAULT 0`
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  // Create System Meta table for migration flags
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS local_system_meta (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
+    );
+  `);
+
   console.log("[Database] Initialized at:", dbPath);
 
   // Run daily snapshot on startup
   runDailySnapshot(db);
 
+  // Run One-time Migration: Legacy Data -> Sync Queue
+  runQueueMigration(db);
+
+  // Recovery: Reset Dead Letters (ERROR) to PENDING on startup
+  runResetDeadLetters(db);
+
   return db;
+}
+
+/**
+ * Sync Recovery: Retry failed items on startup
+ */
+function runResetDeadLetters(db: Database.Database) {
+  try {
+    const stmt = db.prepare(
+      "UPDATE local_sync_queue SET status = 'PENDING', retry_count = 0 WHERE status = 'ERROR'"
+    );
+    const info = stmt.run();
+    if (info.changes > 0) {
+      console.log(`[Sync] Reset ${info.changes} dead-letter items to PENDING.`);
+    }
+  } catch (err) {
+    console.error("[Sync] Failed to reset dead letters:", err);
+  }
+}
+
+/**
+ * One-time Migration: Push all existing local data to Sync Queue
+ * This ensures data created before the "Queue Update" gets synced to Cloud/Mobile.
+ */
+function runQueueMigration(db: Database.Database) {
+  try {
+    const MIGRATION_KEY = "queue_migration_v1_done";
+
+    // Check if migration already ran
+    const row = db
+      .prepare("SELECT value FROM local_system_meta WHERE key = ?")
+      .get(MIGRATION_KEY) as { value: string };
+    if (row) {
+      return;
+    }
+
+    console.log(
+      "[Migration] Running one-time migration: Local Data -> Sync Queue..."
+    );
+
+    // 1. Migrate Ingredients
+    const ingredients = db
+      .prepare("SELECT * FROM local_ingredients")
+      .all() as any[];
+
+    if (ingredients.length > 0) {
+      const queueStmt = db.prepare(
+        "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+      );
+      const metaStmt = db.prepare(
+        "INSERT INTO local_system_meta (key, value) VALUES (?, ?)"
+      );
+
+      const transaction = db.transaction(() => {
+        let count = 0;
+        for (const ing of ingredients) {
+          queueStmt.run("UPSERT", "ingredients", JSON.stringify(ing));
+          count++;
+        }
+        metaStmt.run(MIGRATION_KEY, "true");
+        console.log(`[Migration] Queued ${count} ingredients for sync.`);
+      });
+
+      transaction();
+      console.log("[Migration] Migration V1 Success!");
+    } else {
+      // Nothing to migrate, mark as done
+      db.prepare(
+        "INSERT INTO local_system_meta (key, value) VALUES (?, ?)"
+      ).run(MIGRATION_KEY, "true");
+    }
+  } catch (err) {
+    console.error("[Migration] Legacy Data Migration Failed:", err);
+  }
 }
 
 /**
@@ -236,7 +437,9 @@ export function registerDatabaseIPC(): void {
   ipcMain.handle("db:getIngredients", () => {
     const database = getDatabase();
     return database
-      .prepare("SELECT * FROM local_ingredients ORDER BY name")
+      .prepare(
+        "SELECT * FROM local_ingredients WHERE archived != 1 OR archived IS NULL ORDER BY name"
+      )
       .all();
   });
 
@@ -261,25 +464,62 @@ export function registerDatabaseIPC(): void {
       }
     ) => {
       const database = getDatabase();
-      const stmt = database.prepare(`
-      INSERT OR REPLACE INTO local_ingredients 
-      (id, business_id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, min_threshold, unit_weight, unit_weight_unit, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `);
-      stmt.run(
-        ingredient.id,
-        ingredient.business_id ?? null,
-        ingredient.name,
-        ingredient.base_unit ?? null,
-        ingredient.warehouse_qty ?? 0,
-        ingredient.bar_qty ?? 0,
-        ingredient.unit_cost ?? 0,
-        ingredient.density ?? 1,
-        ingredient.tare_weight ?? 0,
-        ingredient.min_threshold ?? 0,
-        ingredient.unit_weight ?? null,
-        ingredient.unit_weight_unit ?? null
-      );
+
+      // SAFETY GUARD
+      if (!ingredient.business_id) {
+        if (!currentBusinessId) {
+          throw new Error(
+            "CRITICAL: Cannot save data. Missing Business ID (Not logged in?)."
+          );
+        }
+        ingredient.business_id = currentBusinessId;
+      }
+
+      const transaction = database.transaction(() => {
+        // 1. Local Upsert
+        const stmt = database.prepare(`
+          INSERT OR REPLACE INTO local_ingredients 
+          (id, business_id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, min_threshold, unit_weight, unit_weight_unit, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `);
+
+        stmt.run(
+          ingredient.id,
+          ingredient.business_id ?? null,
+          ingredient.name,
+          ingredient.base_unit ?? null,
+          ingredient.warehouse_qty ?? 0,
+          ingredient.bar_qty ?? 0,
+          ingredient.unit_cost ?? 0,
+          ingredient.density ?? 1,
+          ingredient.tare_weight ?? 0,
+          ingredient.min_threshold ?? 0,
+          ingredient.unit_weight ?? null,
+          ingredient.unit_weight_unit ?? null
+        );
+
+        // 2. Add to Sync Queue
+        const queueStmt = database.prepare(`
+          INSERT INTO local_sync_queue (action, table_name, payload)
+          VALUES (?, ?, ?)
+        `);
+
+        // Payload needs to match Supabase schema exactly
+        // Convert camelCase to snake_case if needed (Supabase usually handles raw update if columns match)
+        // Check database.ts schema vs Supabase schema
+        // local: warehouse_qty, bar_qty. Supabase: same.
+        // It seems safer to pass the ingredient object directly as payload,
+        // SyncWorker will handle transformation if needed.
+        queueStmt.run("UPSERT", "ingredients", JSON.stringify(ingredient));
+      });
+
+      try {
+        transaction();
+        return { success: true };
+      } catch (err: any) {
+        console.error("Upsert ingredient failed:", err);
+        return { success: false, error: err.message };
+      }
       return { success: true };
     }
   );
@@ -328,6 +568,47 @@ export function registerDatabaseIPC(): void {
       return { success: true };
     }
   );
+
+  // Fix Missing Business ID (Legacy Data Migration Fix)
+  ipcMain.handle("db:fix-missing-business-id", (_event, businessId) => {
+    if (!businessId) return { success: false, error: "Missing business_id" };
+
+    const db = getDatabase();
+    try {
+      console.log(`[Database] Fixing missing business_id: ${businessId}`);
+
+      const transaction = db.transaction(() => {
+        // 1. Update null business_id
+        const info = db
+          .prepare(
+            "UPDATE local_ingredients SET business_id = ? WHERE business_id IS NULL"
+          )
+          .run(businessId);
+        console.log(
+          `[Database] Updated ${info.changes} ingredients with business_id.`
+        );
+
+        // 2. Clear Sync Queue (remove bad payloads)
+        db.prepare("DELETE FROM local_sync_queue").run();
+        console.log("[Database] Cleared sync queue.");
+
+        // 3. Reset Migration Flag
+        db.prepare(
+          "DELETE FROM local_system_meta WHERE key = 'queue_migration_v1_done'"
+        ).run();
+      });
+
+      transaction();
+
+      // 4. Re-run Migration immediately
+      runQueueMigration(db);
+
+      return { success: true };
+    } catch (err: any) {
+      console.error("[Database] Fix failed:", err);
+      return { success: false, error: err.message };
+    }
+  });
 
   // Mark logs as synced
   ipcMain.handle("db:markSynced", (_event, ids: string[]) => {
@@ -499,6 +780,186 @@ export function registerDatabaseIPC(): void {
       console.error("[Database] getStaffProfiles error:", err);
       return [];
     }
+  });
+
+  // ==================== RECIPES MANAGEMENT ====================
+  // Get all recipes with their ingredients
+  ipcMain.handle("db:getRecipes", () => {
+    const database = getDatabase();
+    const recipes = database
+      .prepare("SELECT * FROM local_recipes WHERE is_active = 1 ORDER BY name")
+      .all() as any[];
+
+    // Load ingredients for each recipe
+    const getIngredientsStmt = database.prepare(`
+      SELECT ri.*, i.name as ingredient_name, i.base_unit, i.unit_cost
+      FROM local_recipe_ingredients ri
+      LEFT JOIN local_ingredients i ON ri.ingredient_id = i.id
+      WHERE ri.recipe_id = ?
+    `);
+
+    return recipes.map((recipe) => {
+      const ingredients = getIngredientsStmt.all(recipe.id) as any[];
+      return {
+        ...recipe,
+        ingredients: ingredients.map((ing) => ({
+          ingredient_id: ing.ingredient_id,
+          name: ing.ingredient_name || "Unknown",
+          quantity: ing.quantity,
+          unit: ing.unit || ing.base_unit || "g",
+          cost: ing.quantity * (ing.unit_cost || 0),
+        })),
+      };
+    });
+  });
+
+  // Upsert recipe (insert or update)
+  ipcMain.handle(
+    "db:upsertRecipe",
+    (
+      _event,
+      recipe: {
+        id: string;
+        business_id?: string;
+        name: string;
+        price: number;
+        category?: string;
+        ingredients: Array<{
+          ingredient_id: string;
+          quantity: number;
+          unit?: string;
+        }>;
+      }
+    ) => {
+      const database = getDatabase();
+
+      // SAFETY GUARD
+      if (!recipe.business_id) {
+        if (!currentBusinessId) {
+          throw new Error(
+            "CRITICAL: Cannot save data. Missing Business ID (Not logged in?)."
+          );
+        }
+        recipe.business_id = currentBusinessId;
+      }
+
+      const transaction = database.transaction(() => {
+        // Upsert recipe
+        database
+          .prepare(
+            `
+          INSERT OR REPLACE INTO local_recipes 
+          (id, business_id, name, price, category, is_active, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 1, COALESCE((SELECT created_at FROM local_recipes WHERE id = ?), datetime('now')), datetime('now'))
+        `
+          )
+          .run(
+            recipe.id,
+            recipe.business_id || null,
+            recipe.name,
+            recipe.price || 0,
+            recipe.category || null,
+            recipe.id
+          );
+
+        // SAFETY GUARD: Skip sync for legacy IDs (recipe_...)
+        // Only queue standard UUIDs to prevent "invalid input syntax for type uuid" error
+        const isValidUUID = (id: string) =>
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            id
+          );
+
+        if (!isValidUUID(recipe.id)) {
+          console.warn(
+            `[Database] Skipping sync queue for legacy recipe ID: ${recipe.id}`
+          );
+          return;
+        }
+
+        // Add to Sync Queue
+        const queueStmt = database.prepare(`
+          INSERT INTO local_sync_queue (action, table_name, payload)
+          VALUES (?, ?, ?)
+        `);
+
+        // Payload needs to match Supabase schema
+        const payload = {
+          id: recipe.id,
+          business_id: recipe.business_id,
+          name: recipe.name,
+          price: recipe.price,
+          category: recipe.category,
+          is_active: true,
+          updated_at: new Date().toISOString(),
+        };
+
+        queueStmt.run("UPSERT", "recipes", JSON.stringify(payload));
+
+        // Delete existing ingredients for this recipe
+        database
+          .prepare("DELETE FROM local_recipe_ingredients WHERE recipe_id = ?")
+          .run(recipe.id);
+
+        // Insert new ingredients
+        const insertIngStmt = database.prepare(`
+          INSERT INTO local_recipe_ingredients (id, recipe_id, ingredient_id, quantity, unit)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+
+        for (const ing of recipe.ingredients || []) {
+          const ingId = crypto.randomUUID(); // Use proper UUID for Supabase
+          insertIngStmt.run(
+            ingId,
+            recipe.id,
+            ing.ingredient_id,
+            ing.quantity,
+            ing.unit || null
+          );
+        }
+      });
+
+      transaction();
+      console.log("[Database] Recipe saved:", recipe.name);
+      return { success: true };
+    }
+  );
+
+  // Delete recipe (soft delete)
+  ipcMain.handle("db:deleteRecipe", (_event, recipeId: string) => {
+    const database = getDatabase();
+    database
+      .prepare("UPDATE local_recipes SET is_active = 0 WHERE id = ?")
+      .run(recipeId);
+
+    // Also queue for sync (to delete on Supabase)
+    const queueStmt = database.prepare(
+      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+    );
+    queueStmt.run("DELETE", "recipes", JSON.stringify({ id: recipeId }));
+
+    console.log("[Database] Recipe deleted:", recipeId);
+    return { success: true };
+  });
+
+  // Delete ingredient (soft delete using archived flag)
+  ipcMain.handle("db:deleteIngredient", (_event, ingredientId: string) => {
+    const database = getDatabase();
+    database
+      .prepare("UPDATE local_ingredients SET archived = 1 WHERE id = ?")
+      .run(ingredientId);
+
+    // Also queue for sync (to delete on Supabase)
+    const queueStmt = database.prepare(
+      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+    );
+    queueStmt.run(
+      "DELETE",
+      "ingredients",
+      JSON.stringify({ id: ingredientId })
+    );
+
+    console.log("[Database] Ingredient archived:", ingredientId);
+    return { success: true };
   });
 
   console.log("[Database] IPC handlers registered");

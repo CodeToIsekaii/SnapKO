@@ -126,7 +126,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     console.log("[AuthContext] Auth state changed: INITIAL_SESSION");
     checkSession();
+    checkSession();
   }, [fetchProfile]);
+
+  // Listen for token refresh to keep Main Process sync worker alive
+  useEffect(() => {
+    if (!supabase) return;
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log(`[Auth] Auth state change: ${event}`);
+
+      if (event === "TOKEN_REFRESHED" && session) {
+        console.log("[Auth] Token refreshed, updating Main Process...");
+        await window.electronAPI.setAuthToken(session.access_token);
+      }
+
+      if (event === "SIGNED_OUT") {
+        await window.electronAPI.setAuthToken(null);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   // Login function
   const login = useCallback(

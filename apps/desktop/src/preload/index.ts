@@ -48,13 +48,22 @@ export interface ElectronAPI {
     error?: string;
   }>;
 
-  // Database
+  // Database - Ingredients
   getIngredients: () => Promise<any[]>;
   upsertIngredient: (ingredient: any) => Promise<{ success: boolean }>;
   getPendingLogs: () => Promise<any[]>;
   addPendingLog: (log: any) => Promise<{ success: boolean }>;
   markSynced: (ids: string[]) => Promise<{ success: boolean; count: number }>;
   getInventoryLogs: (limit?: number) => Promise<any[]>;
+  fixMissingBusinessId: (
+    businessId: string
+  ) => Promise<{ success: boolean; error?: string }>;
+  deleteIngredient: (ingredientId: string) => Promise<{ success: boolean }>;
+
+  // Database - Recipes
+  getRecipes: () => Promise<any[]>;
+  upsertRecipe: (recipe: any) => Promise<{ success: boolean }>;
+  deleteRecipe: (recipeId: string) => Promise<{ success: boolean }>;
 
   // Week 2: COGS Reports
   getCOGSReport: () => Promise<{
@@ -145,6 +154,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   getInventoryLogs: (limit?: number) =>
     ipcRenderer.invoke("db:getInventoryLogs", limit),
+  fixMissingBusinessId: (businessId: string) =>
+    ipcRenderer.invoke("db:fix-missing-business-id", businessId),
+  deleteIngredient: (ingredientId: string) =>
+    ipcRenderer.invoke("db:deleteIngredient", ingredientId),
+
+  // ==================== DATABASE: RECIPES ====================
+  getRecipes: () => ipcRenderer.invoke("db:getRecipes"),
+
+  upsertRecipe: (recipe: any) => ipcRenderer.invoke("db:upsertRecipe", recipe),
+
+  deleteRecipe: (recipeId: string) =>
+    ipcRenderer.invoke("db:deleteRecipe", recipeId),
 
   // ==================== WEEK 2: COGS REPORTS ====================
   getCOGSReport: () => ipcRenderer.invoke("db:getCOGSReport"),

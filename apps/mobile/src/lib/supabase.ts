@@ -110,14 +110,14 @@ export async function syncBusinessConfig(): Promise<{
       };
     }
 
-    // Fetch profile with inventory_model and business info
-    // Fetch profile with inventory_model and business info
+    // Fetch profile with inventory_model, role and business info
     const { data: profile, error } = await supabase
       .from("profiles")
       .select(
         `
         inventory_model,
         business_id,
+        role,
         businesses (
           name,
           inventory_model
@@ -173,14 +173,22 @@ export async function syncBusinessConfig(): Promise<{
           };
         }
 
+        const userRole = profile?.role || "STAFF"; // Default to STAFF if not set
         await db.runAsync(
           `INSERT OR REPLACE INTO local_profiles 
            (id, business_id, role, status, inventory_model, created_at) 
-           VALUES (?, ?, 'staff', 'active', ?, datetime('now'))`,
-          [session.user.id, profile?.business_id || "", inventoryModel]
+           VALUES (?, ?, ?, 'active', ?, datetime('now'))`,
+          [
+            session.user.id,
+            profile?.business_id || "",
+            userRole,
+            inventoryModel,
+          ]
         );
         console.log(
-          "✅ Local DB updated with inventory_model:",
+          "✅ Local DB updated with role:",
+          userRole,
+          "inventory_model:",
           inventoryModel
         );
       } catch (dbErr: any) {

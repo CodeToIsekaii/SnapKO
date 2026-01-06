@@ -163,10 +163,30 @@ export default function AdHocTransferScreen({
       style={styles.container}
     >
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+        <TouchableOpacity
+          onPress={onBack}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            padding: 8,
+            marginLeft: -8,
+            zIndex: 10,
+          }}
+        >
           <Ionicons name="arrow-back" size={24} color="#E07A2F" />
+          <Text style={{ color: "#E07A2F", marginLeft: 4, fontWeight: "600" }}>
+            Quay lại
+          </Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Cấp hàng khẩn (Warehouse → Bar)</Text>
+        <View
+          style={{
+            flex: 1,
+            alignItems: "center",
+            marginRight: 40, // Balance the back button space
+          }}
+        >
+          <Text style={styles.title}>Cấp hàng khẩn</Text>
+        </View>
       </View>
 
       <View style={styles.searchBar}>

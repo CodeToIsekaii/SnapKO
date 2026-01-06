@@ -11,8 +11,10 @@ import {
   Pressable,
   RefreshControl,
   Alert,
+  TextInput,
 } from "react-native";
-import * as SQLite from "expo-sqlite";
+import { getDB } from "../db";
+// Remove * as SQLite from "expo-sqlite";
 import {
   calculateRecipeCOGS,
   deductInventoryForSale,
@@ -25,6 +27,7 @@ interface RecipeWithCOGS {
   category: string;
   cogs: number;
   ingredientCount: number;
+  is_active: number; // 1 = active, 0 = hidden
 }
 
 interface RecipeListScreenProps {
@@ -42,17 +45,28 @@ export default function RecipeListScreen({
 }: RecipeListScreenProps) {
   const [recipes, setRecipes] = useState<RecipeWithCOGS[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [isOwner, setIsOwner] = useState(false);
+  const [activeTab, setActiveTab] = useState<"active" | "hidden">("active");
+  const [searchQuery, setSearchQuery] = useState("");
 
   const loadRecipes = useCallback(async () => {
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
 
-      // Load recipes
+      // Check user role
+      const userProfile = await db.getFirstAsync<{ role: string }>(
+        "SELECT role FROM local_profiles LIMIT 1"
+      );
+      setIsOwner(userProfile?.role === "OWNER");
+
+      // Load recipes (include is_active for filtering)
       const recipeRows = await db.getAllAsync<{
         id: string;
         name: string;
         price: number;
         category: string;
+        is_active: number;
       }>("SELECT * FROM local_recipes ORDER BY name");
 
       // Calculate COGS for each
@@ -63,6 +77,7 @@ export default function RecipeListScreen({
           ...r,
           cogs,
           ingredientCount,
+          is_active: r.is_active,
         });
       }
 
@@ -73,6 +88,20 @@ export default function RecipeListScreen({
       setLoading(false);
     }
   }, []);
+
+  // Pull-to-refresh: sync from cloud then reload
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const { pullAllData } = await import("../sync/pullSync");
+      await pullAllData();
+      await loadRecipes();
+    } catch (err) {
+      console.error("Refresh error:", err);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadRecipes]);
 
   useEffect(() => {
     loadRecipes();
@@ -85,7 +114,7 @@ export default function RecipeListScreen({
         text: "Xóa",
         style: "destructive",
         onPress: async () => {
-          const db = await SQLite.openDatabaseAsync("snapko.db");
+          const db = await getDB();
           await db.runAsync("DELETE FROM local_recipes WHERE id = ?", [id]);
           await db.runAsync(
             "DELETE FROM local_recipe_ingredients WHERE recipe_id = ?",
@@ -99,7 +128,7 @@ export default function RecipeListScreen({
 
   // Quick Sell - Deduct inventory immediately
   const quickSell = async (recipe: RecipeWithCOGS) => {
-    const db = await SQLite.openDatabaseAsync("snapko.db");
+    const db = await getDB();
     const result = await deductInventoryForSale(db, recipe.id, 1);
 
     if (result.success) {
@@ -136,18 +165,23 @@ export default function RecipeListScreen({
           Menu
         </Text>
         <View style={{ flexDirection: "row", gap: 12 }}>
-          {onScanRecipe && (
-            <Pressable onPress={onScanRecipe}>
-              <Text style={{ color: "#6B8E23", fontSize: 16 }}>🤖 AI</Text>
-            </Pressable>
+          {/* AI and Add buttons - Owner only */}
+          {isOwner && (
+            <>
+              {onScanRecipe && (
+                <Pressable onPress={onScanRecipe}>
+                  <Text style={{ color: "#6B8E23", fontSize: 16 }}>🤖 AI</Text>
+                </Pressable>
+              )}
+              <Pressable onPress={onAddRecipe}>
+                <Text style={{ color: "#E07A2F", fontSize: 16 }}>+ Thêm</Text>
+              </Pressable>
+            </>
           )}
-          <Pressable onPress={onAddRecipe}>
-            <Text style={{ color: "#E07A2F", fontSize: 16 }}>+ Thêm</Text>
-          </Pressable>
         </View>
       </View>
 
-      {/* Stats */}
+      {/* Stats - Staff only sees count */}
       <View style={{ flexDirection: "row", padding: 16, gap: 12 }}>
         <View
           style={{
@@ -155,52 +189,126 @@ export default function RecipeListScreen({
             backgroundColor: "#1A1A1A",
             borderRadius: 12,
             padding: 16,
+            alignItems: "center",
           }}
         >
-          <Text style={{ color: "#64748B", fontSize: 12 }}>Tổng món</Text>
+          <Text style={{ color: "#64748B", fontSize: 12 }}>Món đang bán</Text>
           <Text style={{ color: "white", fontSize: 24, fontWeight: "700" }}>
-            {recipes.length}
+            {recipes.filter((r) => r.is_active === 1).length}
           </Text>
         </View>
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: "#1A1A1A",
-            borderRadius: 12,
-            padding: 16,
-          }}
-        >
-          <Text style={{ color: "#64748B", fontSize: 12 }}>Avg Margin</Text>
-          <Text style={{ color: "#55A630", fontSize: 24, fontWeight: "700" }}>
-            {recipes.length > 0
-              ? Math.round(
-                  recipes.reduce(
-                    (sum, r) =>
-                      sum +
-                      (r.price > 0 ? ((r.price - r.cogs) / r.price) * 100 : 0),
-                    0
-                  ) / recipes.length
-                )
-              : 0}
-            %
-          </Text>
-        </View>
+        {/* Avg Margin - Owner only */}
+        {isOwner && (
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: "#1A1A1A",
+              borderRadius: 12,
+              padding: 16,
+            }}
+          >
+            <Text style={{ color: "#64748B", fontSize: 12 }}>Avg Margin</Text>
+            <Text style={{ color: "#55A630", fontSize: 24, fontWeight: "700" }}>
+              {recipes.length > 0
+                ? Math.round(
+                    recipes.reduce(
+                      (sum, r) =>
+                        sum +
+                        (r.price > 0
+                          ? ((r.price - r.cogs) / r.price) * 100
+                          : 0),
+                      0
+                    ) / recipes.length
+                  )
+                : 0}
+              %
+            </Text>
+          </View>
+        )}
       </View>
 
-      {/* List */}
+      {/* Search Bar */}
+      <View style={{ paddingHorizontal: 16, marginBottom: 12 }}>
+        <TextInput
+          placeholder="Tìm tên món..."
+          placeholderTextColor="#64748B"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          style={{
+            backgroundColor: "#1A1A1A",
+            borderRadius: 8,
+            padding: 12,
+            color: "white",
+            borderWidth: 1,
+            borderColor: "#2A2A2A",
+          }}
+        />
+      </View>
+
+      {/* Tabs: Active / Hidden */}
+      <View
+        style={{
+          flexDirection: "row",
+          paddingHorizontal: 16,
+          marginBottom: 12,
+        }}
+      >
+        <Pressable
+          onPress={() => setActiveTab("active")}
+          style={{
+            flex: 1,
+            paddingVertical: 10,
+            borderRadius: 8,
+            backgroundColor: activeTab === "active" ? "#E07A2F" : "#2A2A2A",
+            marginRight: 6,
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "white", fontWeight: "600" }}>Đang dùng</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setActiveTab("hidden")}
+          style={{
+            flex: 1,
+            paddingVertical: 10,
+            borderRadius: 8,
+            backgroundColor: activeTab === "hidden" ? "#64748B" : "#2A2A2A",
+            marginLeft: 6,
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "white", fontWeight: "600" }}>Đã ẩn</Text>
+        </Pressable>
+      </View>
+
+      {/* List - Filtered by tab */}
       <FlatList
-        data={recipes}
+        data={recipes.filter((r) => {
+          const matchesTab =
+            activeTab === "active" ? r.is_active === 1 : r.is_active === 0;
+          const matchesSearch = r.name
+            .toLowerCase()
+            .includes(searchQuery.toLowerCase());
+          return matchesTab && matchesSearch;
+        })}
         keyExtractor={(item) => item.id}
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={loadRecipes} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={["#E07A2F"]}
+            tintColor="#E07A2F"
+          />
         }
         contentContainerStyle={{ padding: 16, paddingTop: 0 }}
         ListEmptyComponent={
           <View style={{ padding: 40, alignItems: "center" }}>
             <Text style={{ color: "#64748B" }}>Chưa có món nào</Text>
-            <Pressable onPress={onAddRecipe} style={{ marginTop: 16 }}>
-              <Text style={{ color: "#E07A2F" }}>+ Thêm món đầu tiên</Text>
-            </Pressable>
+            {isOwner && (
+              <Pressable onPress={onAddRecipe} style={{ marginTop: 16 }}>
+                <Text style={{ color: "#E07A2F" }}>+ Thêm món đầu tiên</Text>
+              </Pressable>
+            )}
           </View>
         }
         renderItem={({ item }) => {
@@ -209,8 +317,8 @@ export default function RecipeListScreen({
 
           return (
             <Pressable
-              onPress={() => onEditRecipe(item.id)}
-              onLongPress={() => deleteRecipe(item.id, item.name)}
+              onPress={() => isOwner && onEditRecipe(item.id)}
+              onLongPress={() => isOwner && deleteRecipe(item.id, item.name)}
               style={{
                 backgroundColor: "#1A1A1A",
                 borderRadius: 12,
@@ -234,33 +342,37 @@ export default function RecipeListScreen({
                 >
                   {item.name}
                 </Text>
-                <Text style={{ color: "#55A630", fontWeight: "600" }}>
-                  {item.price.toLocaleString("vi-VN")} đ
-                </Text>
+                {isOwner && (
+                  <Text style={{ color: "#55A630", fontWeight: "600" }}>
+                    {item.price.toLocaleString("vi-VN")} đ
+                  </Text>
+                )}
               </View>
 
-              <View style={{ flexDirection: "row", gap: 16, marginTop: 8 }}>
-                <Text style={{ color: "#94A3B8", fontSize: 12 }}>
-                  COGS: {item.cogs.toLocaleString("vi-VN")} đ
-                </Text>
-                <Text style={{ color: "#94A3B8", fontSize: 12 }}>
-                  Lãi: {profit.toLocaleString("vi-VN")} đ
-                </Text>
-                <Text
-                  style={{
-                    color:
-                      margin >= 50
-                        ? "#55A630"
-                        : margin >= 30
-                        ? "#F59E0B"
-                        : "#EF4444",
-                    fontSize: 12,
-                    fontWeight: "600",
-                  }}
-                >
-                  {margin.toFixed(0)}%
-                </Text>
-              </View>
+              {isOwner && (
+                <View style={{ flexDirection: "row", gap: 16, marginTop: 8 }}>
+                  <Text style={{ color: "#94A3B8", fontSize: 12 }}>
+                    COGS: {item.cogs.toLocaleString("vi-VN")} đ
+                  </Text>
+                  <Text style={{ color: "#94A3B8", fontSize: 12 }}>
+                    Lãi: {profit.toLocaleString("vi-VN")} đ
+                  </Text>
+                  <Text
+                    style={{
+                      color:
+                        margin >= 50
+                          ? "#55A630"
+                          : margin >= 30
+                          ? "#F59E0B"
+                          : "#EF4444",
+                      fontSize: 12,
+                      fontWeight: "600",
+                    }}
+                  >
+                    {margin.toFixed(0)}%
+                  </Text>
+                </View>
+              )}
 
               {item.category && (
                 <Text style={{ color: "#64748B", fontSize: 11, marginTop: 4 }}>
@@ -268,21 +380,23 @@ export default function RecipeListScreen({
                 </Text>
               )}
 
-              {/* Quick Sell Button */}
-              <Pressable
-                onPress={() => quickSell(item)}
-                style={{
-                  marginTop: 12,
-                  backgroundColor: "#6B8E23",
-                  borderRadius: 8,
-                  paddingVertical: 10,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "white", fontWeight: "600" }}>
-                  🛒 Bán 1 ly
-                </Text>
-              </Pressable>
+              {/* Quick Sell Button - Owner only */}
+              {isOwner && (
+                <Pressable
+                  onPress={() => quickSell(item)}
+                  style={{
+                    marginTop: 12,
+                    backgroundColor: "#6B8E23",
+                    borderRadius: 8,
+                    paddingVertical: 10,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text style={{ color: "white", fontWeight: "600" }}>
+                    🛒 Bán 1 ly
+                  </Text>
+                </Pressable>
+              )}
             </Pressable>
           );
         }}

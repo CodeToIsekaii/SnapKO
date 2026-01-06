@@ -54,7 +54,9 @@ export default function RecipesPage() {
   async function loadData() {
     const ings = (await (window as any).electronAPI?.getIngredients?.()) ?? [];
     setIngredients(ings);
-    // TODO: Load recipes from IPC
+    // Load recipes from IPC
+    const recs = (await (window as any).electronAPI?.getRecipes?.()) ?? [];
+    setRecipes(recs);
   }
 
   // Toast notification state
@@ -258,9 +260,45 @@ export default function RecipesPage() {
   }
 
   async function saveRecipe() {
-    // TODO: Save via IPC
-    console.log("Saving recipe:", newRecipe);
-    setNewRecipe({ name: "", price: 0, category: "", ingredients: [] });
+    if (!newRecipe.name.trim()) {
+      setToast({ message: "Vui lòng nhập tên món", type: "error" });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+
+    try {
+      const recipeData = {
+        id: editing?.id || crypto.randomUUID(),
+        name: newRecipe.name,
+        price: newRecipe.price,
+        category: newRecipe.category,
+        cogs: calculateCOGS(newRecipe.ingredients),
+        ingredients: newRecipe.ingredients,
+      };
+
+      // Save via IPC
+      await (window as any).electronAPI?.upsertRecipe(recipeData);
+
+      setToast({
+        message: editing
+          ? "✅ Đã cập nhật công thức!"
+          : "✅ Đã thêm công thức mới!",
+        type: "success",
+      });
+      setTimeout(() => setToast(null), 3000);
+
+      // Reset form
+      setNewRecipe({ name: "", price: 0, category: "", ingredients: [] });
+      setEditing(null);
+      setScannedRecipes([]);
+
+      // Reload from database
+      await loadData();
+    } catch (err) {
+      console.error("Failed to save recipe:", err);
+      setToast({ message: "❌ Lỗi khi lưu công thức", type: "error" });
+      setTimeout(() => setToast(null), 3000);
+    }
   }
 
   const cogs = calculateCOGS(newRecipe.ingredients);
@@ -611,10 +649,74 @@ export default function RecipesPage() {
           ) : (
             recipes.map((r) => (
               <div key={r.id} style={styles.recipeItem}>
-                <span>{r.name}</span>
-                <span style={{ color: "#55A630" }}>
-                  {r.price.toLocaleString("vi-VN")} đ
-                </span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontWeight: 500 }}>{r.name}</span>
+                  <span
+                    style={{ marginLeft: 8, color: "#55A630", fontSize: 13 }}
+                  >
+                    {r.price.toLocaleString("vi-VN")} đ
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => {
+                      setEditing(r);
+                      setNewRecipe({
+                        name: r.name,
+                        price: r.price,
+                        category: r.category,
+                        ingredients: r.ingredients,
+                      });
+                    }}
+                    style={{
+                      padding: "4px 10px",
+                      fontSize: 12,
+                      backgroundColor: COLORS.primary,
+                      color: "white",
+                      border: "none",
+                      borderRadius: 4,
+                      cursor: "pointer",
+                    }}
+                  >
+                    ✏️ Sửa
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (confirm(`Xóa công thức "${r.name}"?`)) {
+                        try {
+                          if ((window as any).electronAPI?.deleteRecipe) {
+                            await (window as any).electronAPI.deleteRecipe(
+                              r.id
+                            );
+                            await loadData(); // Reload from DB
+                          } else {
+                            setRecipes((prev) =>
+                              prev.filter((x) => x.id !== r.id)
+                            );
+                          }
+                          setToast({
+                            message: "🗑️ Đã xóa công thức",
+                            type: "success",
+                          });
+                          setTimeout(() => setToast(null), 3000);
+                        } catch (err) {
+                          console.error("Delete failed:", err);
+                        }
+                      }
+                    }}
+                    style={{
+                      padding: "4px 10px",
+                      fontSize: 12,
+                      backgroundColor: "#EF4444",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 4,
+                      cursor: "pointer",
+                    }}
+                  >
+                    🗑️
+                  </button>
+                </div>
               </div>
             ))
           )}

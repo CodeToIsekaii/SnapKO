@@ -41,7 +41,10 @@ interface BatchRecipeInput {
   displayUnit: string; // For UI only, saved in base unit
 }
 
+import { useAuth } from "../hooks/AuthContext";
+
 export default function IngredientsPage() {
+  const { profile } = useAuth();
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -110,6 +113,7 @@ export default function IngredientsPage() {
     try {
       const ingredientData = {
         id: editingIngredient?.id || crypto.randomUUID(),
+        business_id: profile?.business_id || null, // CRITICAL: Required for RLS
         name: newIngredient.name.trim(),
         base_unit: newIngredient.base_unit,
         unit_cost: newIngredient.unit_cost,
@@ -211,6 +215,25 @@ export default function IngredientsPage() {
 
   const isLowStock = (ing: Ingredient) => {
     return ing.warehouse_qty + ing.bar_qty < ing.min_threshold;
+  };
+
+  // Handle delete with confirmation
+  const handleDelete = async (ing: Ingredient) => {
+    const confirmed = window.confirm(
+      `Bạn có chắc muốn xóa "${ing.name}"?\n\nNguyên liệu sẽ được lưu trữ (archive) và không hiển thị trong danh sách.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await (window as any).electronAPI?.deleteIngredient?.(ing.id);
+      setToast({ message: `✅ Đã xóa "${ing.name}"`, type: "success" });
+      setTimeout(() => setToast(null), 3000);
+      await loadIngredients();
+    } catch (err) {
+      console.error("Failed to delete ingredient:", err);
+      setToast({ message: "❌ Lỗi khi xóa nguyên liệu", type: "error" });
+      setTimeout(() => setToast(null), 3000);
+    }
   };
 
   return (
@@ -378,9 +401,14 @@ export default function IngredientsPage() {
                 <tr key={ing.id} style={styles.tableRow}>
                   <td style={styles.td}>
                     <div style={styles.ingredientName}>{ing.name}</div>
-                    {ing.aliases && (
-                      <div style={styles.aliases}>Cũng gọi: {ing.aliases}</div>
-                    )}
+                    {/* Only show aliases if it's not empty or just '[]' */}
+                    {ing.aliases &&
+                      ing.aliases !== "[]" &&
+                      ing.aliases.length > 2 && (
+                        <div style={styles.aliases}>
+                          Cũng gọi: {ing.aliases}
+                        </div>
+                      )}
                   </td>
                   <td style={styles.td}>
                     <span style={styles.unitBadge}>{ing.base_unit}</span>
@@ -403,6 +431,16 @@ export default function IngredientsPage() {
                       onClick={() => handleEdit(ing)}
                     >
                       Sửa
+                    </button>
+                    <button
+                      style={{
+                        ...styles.editButton,
+                        color: "#EF4444",
+                        marginLeft: 8,
+                      }}
+                      onClick={() => handleDelete(ing)}
+                    >
+                      Xóa
                     </button>
                   </td>
                 </tr>

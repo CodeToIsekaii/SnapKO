@@ -8,8 +8,9 @@ let db: SQLite.SQLiteDatabase | null = null;
 let initPromise: Promise<SQLite.SQLiteDatabase> | null = null; // Mutex lock
 
 // Schema version - INCREMENT THIS to force database reset
-// v5: Added business_id, inventory_model to local_profiles + density/tare_weight to ingredients
-const SCHEMA_VERSION = 5;
+// v8: Fixed InventoryService to use shared getDB
+// v9: Added archived column to local_ingredients for soft delete sync
+const SCHEMA_VERSION = 9;
 
 /**
  * Initialize local SQLite database with all tables
@@ -57,6 +58,9 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       DROP TABLE IF EXISTS local_import_logs;
       DROP TABLE IF EXISTS local_sales_logs;
       DROP TABLE IF EXISTS local_metadata;
+      DROP TABLE IF EXISTS local_recipes;
+      DROP TABLE IF EXISTS local_recipe_ingredients;
+      DROP TABLE IF EXISTS local_batch_recipes;
     `);
 
       // Update version
@@ -66,6 +70,16 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       );
 
       console.log(`[DB] Migration complete!`);
+    }
+
+    // Dynamic migration: Add archived column if missing (for users who already have DB)
+    try {
+      await db.runAsync(
+        "ALTER TABLE local_ingredients ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+      );
+      console.log("[DB] Added archived column to local_ingredients");
+    } catch {
+      // Column already exists, ignore error
     }
 
     // Create all tables (will be no-op if they exist)
@@ -176,7 +190,7 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       sync_error TEXT
     );
 
-    -- Local ingredients cache
+    -- Local ingredients cache (with batch item support)
     CREATE TABLE IF NOT EXISTS local_ingredients (
       id TEXT PRIMARY KEY NOT NULL,
       business_id TEXT,
@@ -189,7 +203,47 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       tare_weight REAL,
       aliases TEXT,
       archived INTEGER NOT NULL DEFAULT 0,
+      warehouse_qty REAL NOT NULL DEFAULT 0,
+      bar_qty REAL NOT NULL DEFAULT 0,
+      is_batch_item INTEGER NOT NULL DEFAULT 0,
+      batch_yield_qty REAL,
+      batch_yield_unit TEXT,
       created_at TEXT NOT NULL
+    );
+
+    -- Recipes (menu items)
+    CREATE TABLE IF NOT EXISTS local_recipes (
+      id TEXT PRIMARY KEY NOT NULL,
+      business_id TEXT,
+      name TEXT NOT NULL,
+      price INTEGER NOT NULL DEFAULT 0,
+      category TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS local_recipe_ingredients (
+      id TEXT PRIMARY KEY NOT NULL,
+      recipe_id TEXT NOT NULL,
+      ingredient_id TEXT,
+      quantity REAL NOT NULL,
+      unit TEXT,
+      FOREIGN KEY (recipe_id) REFERENCES local_recipes(id) ON DELETE CASCADE
+    );
+
+    -- Batch Recipes (semi-finished products / pre-made syrups)
+    CREATE TABLE IF NOT EXISTS local_batch_recipes (
+      id TEXT PRIMARY KEY NOT NULL,
+      business_id TEXT,
+      output_ingredient_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      yield_qty REAL NOT NULL,
+      yield_unit TEXT NOT NULL,
+      instructions TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (output_ingredient_id) REFERENCES local_ingredients(id)
     );
 
     -- Import logs (Snap 1)
@@ -237,6 +291,9 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
     CREATE INDEX IF NOT EXISTS idx_stock_levels_ingredient ON local_stock_levels(ingredient_id);
     CREATE INDEX IF NOT EXISTS idx_stock_levels_area ON local_stock_levels(area_id);
     CREATE INDEX IF NOT EXISTS idx_storage_areas_business ON local_storage_areas(business_id);
+    CREATE INDEX IF NOT EXISTS idx_recipes_business ON local_recipes(business_id);
+    CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON local_recipe_ingredients(recipe_id);
+    CREATE INDEX IF NOT EXISTS idx_batch_recipes_output ON local_batch_recipes(output_ingredient_id);
   `);
 
     return db;
@@ -267,7 +324,12 @@ export function getDb(): SQLite.SQLiteDatabase | null {
  */
 export async function closeDb(): Promise<void> {
   if (db) {
-    await db.closeAsync();
+    try {
+      await db.closeAsync();
+    } catch (e) {
+      console.warn("DB Close error", e);
+    }
     db = null;
+    initPromise = null;
   }
 }
