@@ -18,7 +18,9 @@ import {
   Platform,
   ScrollView,
   Alert,
+  Image,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { loginSchema, registerSchema, getFirstError } from "@snapko/shared";
 import { useAuth } from "../contexts/AuthContext";
 import { useGoogleAuth } from "../features/auth/hooks/useGoogleAuth";
@@ -46,6 +48,9 @@ interface LoginScreenProps {
 export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
   const { signIn, signUp } = useAuth();
   const { state: googleState, signInWithGoogle } = useGoogleAuth();
+  const [isSubmitPressed, setIsSubmitPressed] = useState(false);
+  const [isGooglePressed, setIsGooglePressed] = useState(false);
+  const [isStaffPressed, setIsStaffPressed] = useState(false);
 
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
@@ -160,32 +165,23 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
       >
         {/* Logo & Header */}
         <View style={{ alignItems: "center", marginBottom: 40 }}>
-          <View
+          <Image
+            source={require("../../assets/icon.png")}
             style={{
               width: 80,
               height: 80,
-              borderRadius: 20,
-              backgroundColor: colors.primary,
-              alignItems: "center",
-              justifyContent: "center",
+              borderRadius: 16,
               marginBottom: 20,
-              shadowColor: colors.primary,
-              shadowOffset: { width: 0, height: 6 },
-              shadowOpacity: 0.35,
-              shadowRadius: 10,
-              elevation: 6,
             }}
-          >
-            <Text style={{ color: "white", fontSize: 32, fontWeight: "bold" }}>
-              SK
-            </Text>
-          </View>
+            resizeMode="contain"
+          />
           <Text
             style={{
               color: colors.textPrimary,
               fontSize: 28,
               fontWeight: "bold",
               marginBottom: 8,
+              textAlign: "center",
             }}
           >
             SnapKO
@@ -227,7 +223,7 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
                 padding: 16,
                 color: colors.textPrimary,
                 fontSize: 16,
-                borderWidth: 2,
+                borderWidth: 1,
                 borderColor: colors.border,
               }}
             />
@@ -269,7 +265,7 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
                 padding: 16,
                 color: colors.textPrimary,
                 fontSize: 16,
-                borderWidth: 2,
+                borderWidth: 1,
                 borderColor: colors.border,
               }}
             />
@@ -320,63 +316,91 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
           {/* Submit Button */}
           <Pressable
             onPress={handleSubmit}
+            onPressIn={() => setIsSubmitPressed(true)}
+            onPressOut={() => setIsSubmitPressed(false)}
             disabled={loading}
-            style={({ pressed }) => ({
-              backgroundColor: pressed ? colors.primaryMuted : colors.primary,
+            style={{
+              backgroundColor: isSubmitPressed
+                ? colors.primaryMuted
+                : "#E07A2F",
               borderRadius: 12,
               padding: 16,
               alignItems: "center",
-              flexDirection: "row",
               justifyContent: "center",
-              gap: 8,
+              width: "100%",
+              minHeight: 56,
               opacity: loading ? 0.7 : 1,
-              transform: [{ scale: pressed && !loading ? 0.98 : 1 }],
-            })}
+              transform: [{ scale: isSubmitPressed && !loading ? 0.98 : 1 }],
+            }}
           >
-            {loading && <ActivityIndicator color="white" />}
-            <Text style={{ color: "white", fontSize: 16, fontWeight: "600" }}>
-              {loading
-                ? "Đang xử lý..."
-                : mode === "login"
-                ? "Đăng nhập"
-                : "Đăng ký"}
-            </Text>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {loading && (
+                <ActivityIndicator color="white" style={{ marginRight: 8 }} />
+              )}
+              <Text style={{ color: "white", fontSize: 16, fontWeight: "600" }}>
+                {loading
+                  ? "Đang xử lý..."
+                  : mode === "login"
+                  ? "Đăng nhập"
+                  : "Đăng ký"}
+              </Text>
+            </View>
           </Pressable>
 
           {/* Google Login Button */}
           {mode === "login" && (
             <Pressable
               onPress={handleGoogleSignIn}
+              onPressIn={() => setIsGooglePressed(true)}
+              onPressOut={() => setIsGooglePressed(false)}
               disabled={isAnyLoading}
-              style={({ pressed }) => ({
+              style={{
                 backgroundColor: colors.surface,
                 borderRadius: 12,
                 padding: 16,
                 alignItems: "center",
-                flexDirection: "row",
                 justifyContent: "center",
-                gap: 10,
-                borderWidth: 2,
+                borderWidth: 1,
                 borderColor: colors.border,
-                opacity: pressed || isAnyLoading ? 0.7 : 1,
-              })}
+                width: "100%",
+                opacity: isGooglePressed || isAnyLoading ? 0.7 : 1,
+              }}
             >
-              {googleState.isLoading ? (
-                <ActivityIndicator color={colors.textPrimary} />
-              ) : (
-                <>
-                  <Text style={{ fontSize: 20 }}>🔵</Text>
-                  <Text
-                    style={{
-                      color: colors.textPrimary,
-                      fontSize: 16,
-                      fontWeight: "500",
-                    }}
-                  >
-                    Đăng nhập với Google
-                  </Text>
-                </>
-              )}
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {googleState.isLoading ? (
+                  <ActivityIndicator color={colors.textPrimary} />
+                ) : (
+                  <>
+                    <Ionicons
+                      name="logo-google"
+                      size={24}
+                      color={colors.textPrimary}
+                      style={{ marginRight: 12 }}
+                    />
+                    <Text
+                      style={{
+                        color: colors.textPrimary,
+                        fontSize: 16,
+                        fontWeight: "500",
+                      }}
+                    >
+                      Đăng nhập với Google
+                    </Text>
+                  </>
+                )}
+              </View>
             </Pressable>
           )}
 
@@ -418,24 +442,36 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
         {/* Staff Join Button */}
         <Pressable
           onPress={onStaffJoin}
-          style={({ pressed }) => ({
+          onPressIn={() => setIsStaffPressed(true)}
+          onPressOut={() => setIsStaffPressed(false)}
+          style={{
             backgroundColor: colors.surface,
             borderRadius: 12,
             padding: 16,
             alignItems: "center",
+            justifyContent: "center",
             borderWidth: 2,
             borderColor: colors.brand,
-            opacity: pressed ? 0.8 : 1,
-          })}
+            opacity: isStaffPressed ? 0.8 : 1,
+          }}
         >
-          <Text
-            style={{ color: colors.brand, fontSize: 16, fontWeight: "600" }}
-          >
-            🆕 Nhân viên MỚI (có mã mời)
-          </Text>
-          <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 4 }}>
-            Đã đăng ký trước đó? Đăng nhập bằng SĐT phía trên
-          </Text>
+          <View style={{ alignItems: "center", justifyContent: "center" }}>
+            <Text
+              style={{ color: colors.brand, fontSize: 16, fontWeight: "600" }}
+            >
+              Nhân viên MỚI (có mã mời)
+            </Text>
+            <Text
+              style={{
+                color: colors.textMuted,
+                fontSize: 11,
+                marginTop: 4,
+                textAlign: "center",
+              }}
+            >
+              Đã đăng ký trước đó? Đăng nhập bằng SĐT phía trên
+            </Text>
+          </View>
         </Pressable>
 
         {/* Footer */}

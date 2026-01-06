@@ -47,7 +47,10 @@
               "scheme": "snapko"
             }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
@@ -67,7 +70,9 @@
           "photosPermission": "SnapKO cần truy cập thư viện ảnh để chọn hóa đơn có sẵn."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-router",
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {

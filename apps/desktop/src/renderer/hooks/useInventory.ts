@@ -3,11 +3,19 @@
 // UI components MUST use this hook, NOT call electronAPI directly
 
 import { useState, useEffect, useCallback } from "react";
-import { Ingredient, PendingLog, SyncStatus, COGSReport } from "../types";
+
+import {
+  Ingredient,
+  PendingLog,
+  SyncStatus,
+  COGSReport,
+  ActivityLog,
+} from "../types";
 
 interface InventoryState {
   ingredients: Ingredient[];
   pendingLogs: PendingLog[];
+  logs: ActivityLog[];
   cogsReport: COGSReport | null;
   syncStatus: SyncStatus;
   loading: boolean;
@@ -17,6 +25,7 @@ export function useInventory() {
   const [state, setState] = useState<InventoryState>({
     ingredients: [],
     pendingLogs: [],
+    logs: [],
     cogsReport: null,
     syncStatus: {
       pending: 0,
@@ -39,20 +48,23 @@ export function useInventory() {
   // Load all data
   const loadData = useCallback(async () => {
     try {
-      const [ingredients, logs, cogsReport] = await Promise.all([
+      const results = await Promise.all([
         window.electronAPI.getIngredients?.() || [],
         window.electronAPI.getPendingLogs?.() || [],
+        window.electronAPI.getInventoryLogs?.(50) || [],
         window.electronAPI.getCOGSReport?.() || null,
       ]);
+      const [ingredients, pendingLogs, logs, cogsReport] = results;
 
       setState((s) => ({
         ...s,
         ingredients,
-        pendingLogs: logs,
+        pendingLogs,
+        logs,
         cogsReport,
         syncStatus: {
           ...s.syncStatus,
-          pending: logs.length,
+          pending: pendingLogs.length,
         },
         loading: false,
       }));
@@ -62,9 +74,19 @@ export function useInventory() {
     }
   }, []);
 
-  // Initial load
+  // Initial load & Realtime Listeners
   useEffect(() => {
     loadData();
+
+    // Listen for new logs from Mobile
+    const removeLogListener = window.electronAPI.onNewLog?.(() => {
+      console.log("🔔 [Inventory] New log received, refreshing...");
+      loadData();
+    });
+
+    return () => {
+      removeLogListener?.();
+    };
   }, [loadData]);
 
   // Sync from server
@@ -138,5 +160,6 @@ export function useInventory() {
     syncFromServer,
     exportToExcel,
     exportCOGSReport,
+    logs: state.logs,
   };
 }

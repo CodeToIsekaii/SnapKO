@@ -313,10 +313,54 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
 /**
  * Get database instance (async, ensures initialized)
  * Use this instead of openDatabaseAsync directly!
+ * Includes mutex lock and retry logic to handle NullPointerException cases
  */
+let isReinitializing = false;
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 500;
+
 export async function getDB(): Promise<SQLite.SQLiteDatabase> {
-  if (db) return db;
-  return await initLocalDb();
+  // Wait if another call is already re-initializing
+  while (isReinitializing) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  // If we have an existing db, verify it's still valid
+  if (db) {
+    try {
+      // Quick health check - this will throw if db handle is invalid
+      await db.getFirstAsync("SELECT 1");
+      return db;
+    } catch (err) {
+      console.warn("[DB] Existing handle invalid, re-initializing...", err);
+      // Reset state to force re-init
+      db = null;
+      initPromise = null;
+    }
+  }
+
+  // Try to init with retries
+  isReinitializing = true;
+  let lastError: Error | null = null;
+
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    try {
+      const result = await initLocalDb();
+      isReinitializing = false;
+      return result;
+    } catch (err) {
+      lastError = err as Error;
+      console.warn(`[DB] Init attempt ${i + 1}/${MAX_RETRIES} failed:`, err);
+      // Wait before retry
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      // Force reset
+      db = null;
+      initPromise = null;
+    }
+  }
+
+  isReinitializing = false;
+  throw lastError || new Error("Failed to initialize database after retries");
 }
 
 /**

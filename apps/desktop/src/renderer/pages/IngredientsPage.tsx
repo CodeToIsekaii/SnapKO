@@ -204,7 +204,48 @@ export default function IngredientsPage() {
   };
 
   useEffect(() => {
-    loadIngredients(true); // Initial load shows loading state
+    loadIngredients(true); // Initial load
+
+    // 🔔 REALTIME LISTENERS
+    // Listen for Signal (Stock & Master Data updates from Sync Signals)
+    const removeSignalListener = (window as any).electronAPI?.on?.(
+      "ingredients-updated",
+      () => {
+        console.log("🔔 [UI] Received ingredients-updated signal");
+        loadIngredients(false);
+        setToast({
+          message: "🔄 Dữ liệu đã được cập nhật từ thiết bị khác",
+          type: "success",
+        });
+        setTimeout(() => setToast(null), 3000);
+      }
+    );
+
+    // Listen for direct ingredient updates (from other sessions)
+    const removeUpdateListener = (
+      window as any
+    ).electronAPI?.onIngredientUpdate?.(() => {
+      console.log("🔔 [UI] Received direct ingredient update");
+      loadIngredients(false);
+    });
+
+    // Listen for stock updates specifically
+    const removeStockListener = (window as any).electronAPI?.on?.(
+      "stock-updated",
+      () => {
+        console.log("🔔 [UI] Received stock-updated signal");
+        loadIngredients(false);
+        setToast({ message: "📦 Tồn kho vừa thay đổi", type: "success" });
+        setTimeout(() => setToast(null), 3000);
+      }
+    );
+
+    return () => {
+      // Cleanup listeners
+      (window as any).electronAPI?.off?.("ingredients-updated");
+      (window as any).electronAPI?.off?.("stock-updated");
+      removeUpdateListener?.();
+    };
   }, []);
 
   async function loadIngredients(isInitial = false) {

@@ -53,3 +53,12 @@ export interface COGSReport {
   monthly: Array<{ month: string; warehouse: number; bar: number }>;
   losses: Array<{ name: string; value: number; color: string }>;
 }
+
+export interface ActivityLog {
+  id: string;
+  created_at: string;
+  staff_name: string;
+  action: string;
+  details: string;
+  quantity_change?: number;
+}

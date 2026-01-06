@@ -64,14 +64,10 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
   // Ingredient picker
   const [showIngredientPicker, setShowIngredientPicker] = useState(false);
 
-  // Load data
+  // Load data from LOCAL SQLite (Dashboard already synced from server)
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-
-      // Pull remote data first
-      const { pullAllData } = await import("../sync/pullSync");
-      await pullAllData();
 
       const db = await SQLite.openDatabaseAsync("snapko.db");
 

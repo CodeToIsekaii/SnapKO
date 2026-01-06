@@ -28,6 +28,7 @@ import { getDB } from "../../../db";
 import { supabase } from "../../../lib/supabase";
 import * as SecureStore from "expo-secure-store";
 import InviteCodeGeneratorModal from "../../../components/InviteCodeGeneratorModal";
+import { useAuth } from "../../../contexts/AuthContext";
 import { Env } from "../../../env";
 
 const COLORS = {
@@ -57,7 +58,9 @@ interface LocalProfile {
 }
 
 export default function SettingsScreen() {
+  console.log("⚙️ [Settings] Component rendering...");
   const router = useRouter();
+  const { signOut } = useAuth();
 
   // State
   const [profile, setProfile] = useState<LocalProfile | null>(null);
@@ -67,8 +70,22 @@ export default function SettingsScreen() {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Derived
-  const isOwner = profile?.role === "OWNER";
+  // Derived - Use AuthContext as primary source (more reliable than local DB)
+  const { authState } = useAuth();
+  const isOwner =
+    (authState.status === "authenticated" &&
+      authState.profile?.role === "OWNER") ||
+    profile?.role === "OWNER";
+
+  // Debug log
+  console.log(
+    "[Settings] isOwner:",
+    isOwner,
+    "authState:",
+    authState.status,
+    "role:",
+    authState.status === "authenticated" ? authState.profile?.role : "N/A"
+  );
 
   // Load profile on screen focus
   useFocusEffect(
@@ -104,8 +121,18 @@ export default function SettingsScreen() {
 
   // Toggle inventory model (Owner only) with Optimistic UI
   const handleToggleModel = async () => {
+    console.log(
+      "[Settings] handleToggleModel called, business_id:",
+      profile?.business_id,
+      "profile:",
+      profile?.id
+    );
+
     if (!profile?.business_id) {
-      Alert.alert("Lỗi", "Không tìm thấy thông tin cửa hàng");
+      Alert.alert(
+        "Lỗi",
+        "Không tìm thấy thông tin cửa hàng. Vui lòng đăng xuất và đăng nhập lại."
+      );
       return;
     }
 
@@ -159,14 +186,15 @@ export default function SettingsScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            await supabase.auth.signOut();
-            const db = await getDB();
-            await db.runAsync("DELETE FROM local_profiles");
-            await SecureStore.deleteItemAsync("session_token");
-            await SecureStore.deleteItemAsync("refresh_token");
-            router.replace("/(auth)/login");
+            await signOut();
+            // AuthContext handles DB cleanup and state update
+            // Router redirect happens automatically via AuthStack logic or we can force it
+            // router.replace("/(auth)/login");
           } catch (err) {
             console.error("[Settings] Logout error:", err);
+            // Force basic cleanup if context fails
+            await supabase.auth.signOut();
+            router.replace("/(auth)/login");
           }
         },
       },

@@ -4,11 +4,14 @@
 import React from "react";
 import { COGSReport } from "../../types";
 import { COGSDashboard } from "../../components/COGSChart";
+import { ActivityLogTable } from "../../components/ActivityLogTable";
 import { COLORS } from "../../styles/theme";
+import { ActivityLog } from "../../types";
 
 interface DashboardTabProps {
   cogsReport: COGSReport | null;
   loading: boolean;
+  logs: ActivityLog[];
   onExport: () => Promise<any>;
   onRefresh: () => Promise<void>;
 }
@@ -16,6 +19,7 @@ interface DashboardTabProps {
 export function DashboardTab({
   cogsReport,
   loading,
+  logs,
   onExport,
   onRefresh,
 }: DashboardTabProps) {
@@ -75,6 +79,9 @@ export function DashboardTab({
           monthlyChange: 0,
         }}
       />
+
+      {/* Activity Logs */}
+      <ActivityLogTable logs={logs} />
     </div>
   );
 }

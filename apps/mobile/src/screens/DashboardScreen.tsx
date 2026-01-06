@@ -17,9 +17,14 @@ import {
   Alert,
   Platform,
   ToastAndroid,
+  ScrollView,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { StatCard } from "../components/StatCard";
+import { NotificationModal } from "../components/NotificationModal";
 import { InventoryService } from "../features/inventory/services/inventory.service";
 import { useInventoryModel } from "../contexts/InventoryModelContext";
+import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase";
 import { getDB } from "../db";
 import AreaSelectorModal, {
@@ -65,6 +70,7 @@ export default function DashboardScreen({
   onOpenQuickOut,
 }: DashboardScreenProps) {
   const { model, businessId, isStandard, syncModel } = useInventoryModel();
+  const { authState } = useAuth();
   const [showAreaModal, setShowAreaModal] = useState(false);
   const [currentSnapMode, setCurrentSnapMode] = useState<string>("stock");
   const [totalValue, setTotalValue] = useState(0);
@@ -75,11 +81,37 @@ export default function DashboardScreen({
   const [loading, setLoading] = useState(true);
   const [hasTodaySales, setHasTodaySales] = useState(false);
   const [todayTransfers, setTodayTransfers] = useState<any[]>([]);
-  const [isOwner, setIsOwner] = useState(false); // Role-based UI control
+  // Initialize isOwner directly from AuthContext to prevent UI flicker
+  // Using lazy initializer ensures we check authState at mount time
+  const [isOwner, setIsOwner] = useState(() => {
+    return (
+      authState.status === "authenticated" &&
+      authState.profile?.role === "OWNER"
+    );
+  });
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [lowStockCount, setLowStockCount] = useState(0);
+
+  // Mock notifications (replace with real data later)
+  const mockNotifications = [
+    {
+      id: "1",
+      type: "warning" as const,
+      message: "5 nguyên liệu sắp hết hàng",
+      time: "5 phút trước",
+    },
+    {
+      id: "2",
+      type: "info" as const,
+      message: "Đã đồng bộ dữ liệu thành công",
+      time: "1 giờ trước",
+    },
+  ];
 
   // Debug: Log when Dashboard mounts with current businessId
   useEffect(() => {
     console.log("🏠 [Dashboard] Component mounted, businessId:", businessId);
+    // FAILSAFE: Access role from AuthContext/Storage if needed later
   }, []);
 
   // Debug: Log when businessId changes
@@ -95,11 +127,32 @@ export default function DashboardScreen({
       const db = await getDB();
       const today = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in local timezone
 
-      // Check user role
-      const userProfile = await db.getFirstAsync<{ role: string }>(
-        "SELECT role FROM local_profiles LIMIT 1"
-      );
-      setIsOwner(userProfile?.role === "OWNER");
+      // Check user role - USE AUTHCONTEXT AS SOURCE OF TRUTH
+      // DB local_profiles may have stale data from previous accounts
+      let isOwnerRole = false;
+
+      if (
+        authState.status === "authenticated" &&
+        authState.profile?.role === "OWNER"
+      ) {
+        isOwnerRole = true;
+        console.log("[Dashboard] isOwner from AuthContext: true");
+      } else {
+        // Fallback to DB only if AuthContext is not ready yet
+        const userProfile = await db.getFirstAsync<{ role: string }>(
+          "SELECT role FROM local_profiles ORDER BY created_at DESC LIMIT 1"
+        );
+        isOwnerRole = userProfile?.role === "OWNER";
+        console.log(
+          "[Dashboard] isOwner from DB fallback:",
+          isOwnerRole,
+          "(Role:",
+          userProfile?.role,
+          ")"
+        );
+      }
+
+      setIsOwner(isOwnerRole);
 
       // Check if today has any SALES type logs
       const salesLogs = await db.getAllAsync<any>(
@@ -135,7 +188,7 @@ export default function DashboardScreen({
     } catch (err) {
       console.log("[Dashboard] loadTodayData error:", err);
     }
-  }, []);
+  }, [authState]);
 
   const loadData = useCallback(async () => {
     try {
@@ -162,6 +215,7 @@ export default function DashboardScreen({
 
       // Load low stock items as "recent activity" for now
       const lowStock = await InventoryService.getLowStock();
+      setLowStockCount(lowStock.length);
       setRecentLogs(
         lowStock.map((ing) => ({
           id: ing.id,
@@ -355,6 +409,44 @@ export default function DashboardScreen({
         <Pressable onPress={onOpenPendingList}>
           <Text style={{ color: "#F59E0B", fontSize: 16 }}>👥</Text>
         </Pressable>
+
+        {/* Notification Bell - Owner Only */}
+        {isOwner && (
+          <Pressable
+            onPress={() => setShowNotifications(true)}
+            style={{
+              padding: 8,
+              backgroundColor: "#1C1C1E",
+              borderRadius: 20,
+              marginLeft: 8,
+            }}
+          >
+            <Ionicons name="notifications-outline" size={20} color="white" />
+            {mockNotifications.length > 0 && (
+              <View
+                style={{
+                  position: "absolute",
+                  top: -2,
+                  right: -2,
+                  backgroundColor: "#EF4444",
+                  width: 16,
+                  height: 16,
+                  borderRadius: 8,
+                  justifyContent: "center",
+                  alignItems: "center",
+                  borderWidth: 2,
+                  borderColor: "#121212",
+                }}
+              >
+                <Text
+                  style={{ color: "white", fontSize: 9, fontWeight: "bold" }}
+                >
+                  {mockNotifications.length}
+                </Text>
+              </View>
+            )}
+          </Pressable>
+        )}
       </View>
 
       {/* Content with padding */}
@@ -388,54 +480,92 @@ export default function DashboardScreen({
 
         {/* Main Stats - OWNER ONLY per .script */}
         {isOwner && (
-          <View
-            style={{
-              backgroundColor: "#1A1A1A",
-              borderRadius: 16,
-              padding: 20,
-              marginBottom: 16,
-            }}
-          >
-            <Text style={{ color: "#64748B", fontSize: 12, marginBottom: 4 }}>
-              Tổng giá trị tồn kho
+          <View style={{ marginBottom: 16 }}>
+            <Text
+              style={{
+                color: "#64748B",
+                fontSize: 12,
+                marginBottom: 8,
+                textTransform: "uppercase",
+              }}
+            >
+              Tổng quan hôm nay
             </Text>
-            <Text style={{ color: "#55A630", fontSize: 32, fontWeight: "700" }}>
-              {formatCurrency(totalValue)}
-            </Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingRight: 16 }}
+            >
+              <StatCard
+                title="Giá trị kho"
+                value={formatCurrency(totalValue)}
+                icon="wallet-outline"
+                color="#FF9500"
+              />
+              <StatCard
+                title="Sắp hết hàng"
+                value={`${lowStockCount} món`}
+                icon="alert-circle-outline"
+                color="#EF4444"
+                isAlert={lowStockCount > 0}
+              />
+              <StatCard
+                title="Tổng nguyên liệu"
+                value={ingredientCount}
+                icon="cube-outline"
+                color="#3B82F6"
+                onPress={onOpenIngredients}
+              />
+              <StatCard
+                title="Công thức"
+                value={recipeCount}
+                icon="restaurant-outline"
+                color="#6B8E23"
+                onPress={onOpenRecipes}
+              />
+            </ScrollView>
           </View>
         )}
 
-        {/* Quick Stats */}
-        <View style={{ flexDirection: "row", gap: 12, marginBottom: 16 }}>
-          <Pressable
-            onPress={onOpenIngredients}
-            style={{
-              flex: 1,
-              backgroundColor: "#1A1A1A",
-              borderRadius: 12,
-              padding: 16,
-            }}
-          >
-            <Text style={{ color: "#E07A2F", fontSize: 24, fontWeight: "700" }}>
-              {ingredientCount}
-            </Text>
-            <Text style={{ color: "#64748B", fontSize: 12 }}>Nguyên liệu</Text>
-          </Pressable>
-          <Pressable
-            onPress={onOpenRecipes}
-            style={{
-              flex: 1,
-              backgroundColor: "#1A1A1A",
-              borderRadius: 12,
-              padding: 16,
-            }}
-          >
-            <Text style={{ color: "#F59E0B", fontSize: 24, fontWeight: "700" }}>
-              {recipeCount}
-            </Text>
-            <Text style={{ color: "#64748B", fontSize: 12 }}>Món</Text>
-          </Pressable>
-        </View>
+        {/* Quick Stats - HIDE FOR OWNER (already in StatCards above) */}
+        {!isOwner && (
+          <View style={{ flexDirection: "row", gap: 12, marginBottom: 16 }}>
+            <Pressable
+              onPress={onOpenIngredients}
+              style={{
+                flex: 1,
+                backgroundColor: "#1A1A1A",
+                borderRadius: 12,
+                padding: 16,
+              }}
+            >
+              <Text
+                style={{ color: "#E07A2F", fontSize: 24, fontWeight: "700" }}
+              >
+                {ingredientCount}
+              </Text>
+              <Text style={{ color: "#64748B", fontSize: 12 }}>
+                Nguyên liệu
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={onOpenRecipes}
+              style={{
+                flex: 1,
+                backgroundColor: "#1A1A1A",
+                borderRadius: 12,
+                padding: 16,
+              }}
+            >
+              <Text
+                style={{ color: "#F59E0B", fontSize: 24, fontWeight: "700" }}
+              >
+                {recipeCount}
+              </Text>
+              <Text style={{ color: "#64748B", fontSize: 12 }}>Món</Text>
+            </Pressable>
+          </View>
+        )}
 
         {/* 🔔 LOAN REMINDER WIDGET */}
         {pendingReminders.length > 0 && (
@@ -789,29 +919,38 @@ export default function DashboardScreen({
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#121212" }}>
-      <FlatList
-        data={recentLogs.slice(0, 5)}
-        renderItem={renderLogItem}
-        keyExtractor={(item) => item.id}
-        ListHeaderComponent={DashboardHeader}
-        ListEmptyComponent={EmptyLogs}
-        ListFooterComponent={() => <View style={{ height: 150 }} />}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={["#E07A2F"]}
-            tintColor="#E07A2F"
-            progressBackgroundColor="#1A1A1A"
-          />
-        }
-        contentContainerStyle={{
-          flexGrow: 1,
-          paddingBottom: 100,
-        }}
-        showsVerticalScrollIndicator={false}
+    <>
+      <View style={{ flex: 1, backgroundColor: "#121212" }}>
+        <FlatList
+          data={recentLogs.slice(0, 5)}
+          renderItem={renderLogItem}
+          keyExtractor={(item) => item.id}
+          ListHeaderComponent={DashboardHeader}
+          ListEmptyComponent={EmptyLogs}
+          ListFooterComponent={() => <View style={{ height: 150 }} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={["#E07A2F"]}
+              tintColor="#E07A2F"
+              progressBackgroundColor="#1A1A1A"
+            />
+          }
+          contentContainerStyle={{
+            flexGrow: 1,
+            paddingBottom: 100,
+          }}
+          showsVerticalScrollIndicator={false}
+        />
+      </View>
+
+      {/* Notification Modal */}
+      <NotificationModal
+        visible={showNotifications}
+        onClose={() => setShowNotifications(false)}
+        notifications={mockNotifications}
       />
-    </View>
+    </>
   );
 }

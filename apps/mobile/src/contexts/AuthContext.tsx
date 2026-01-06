@@ -320,6 +320,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Sign out
   const signOut = useCallback(async () => {
+    // Reset local SQLite database - CLEAR DATA ONLY, DO NOT CLOSE CONNECTION
+    // Closing connection causing Native NullPointerException on re-open
+    try {
+      const { getDB } = await import("../db");
+      const db = await getDB();
+
+      // Clear all user-specific tables
+      await db.runAsync("DELETE FROM local_profiles");
+      await db.runAsync("DELETE FROM local_stock_levels");
+
+      console.log("[AuthContext] Cleared all local data for account switch");
+    } catch (e) {
+      console.warn("[AuthContext] Failed to clear database:", e);
+    }
+
     await supabase.auth.signOut();
     await SecureStore.deleteItemAsync("pending_profile_id");
     setAuthState({ status: "unauthenticated" });

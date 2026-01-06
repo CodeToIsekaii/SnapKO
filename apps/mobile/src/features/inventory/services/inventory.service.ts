@@ -140,11 +140,12 @@ export const InventoryService = {
 
   /**
    * Get low stock items (less than 10 units)
+   * Excludes archived/deleted ingredients
    */
   getLowStock: async (): Promise<IngredientData[]> => {
     const database = await getDB();
     return await database.getAllAsync<IngredientData>(
-      "SELECT * FROM local_ingredients WHERE (warehouse_qty + bar_qty) < 10"
+      "SELECT * FROM local_ingredients WHERE (warehouse_qty + bar_qty) < 10 AND (archived != 1 OR archived IS NULL)"
     );
   },
 

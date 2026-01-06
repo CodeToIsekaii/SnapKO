@@ -36,10 +36,27 @@ export function Dashboard({ user }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [editingProfile, setEditingProfile] = useState(false);
 
-  // Load data on mount
+  // Load data on mount + Auto-sync from server (Local-First pattern)
   useEffect(() => {
+    // 1. Load local data immediately (fast startup)
     inventory.loadData();
     staff.loadStaff();
+
+    // 2. Background sync from server (if online)
+    const autoSync = async () => {
+      try {
+        console.log("🔄 [Dashboard] Auto-syncing from server...");
+        await inventory.syncFromServer();
+        console.log("✅ [Dashboard] Auto-sync completed");
+      } catch (err) {
+        console.log("⚠️ [Dashboard] Auto-sync failed (offline?):", err);
+      }
+    };
+
+    // Delay sync slightly to not block initial render
+    const syncTimer = setTimeout(autoSync, 1000);
+
+    return () => clearTimeout(syncTimer);
   }, []);
 
   // Tab definitions - Updated with Settings
@@ -143,6 +160,7 @@ export function Dashboard({ user }: DashboardProps) {
           <DashboardTab
             cogsReport={inventory.cogsReport}
             loading={inventory.loading}
+            logs={inventory.logs} // Pass logs data
             onExport={inventory.exportCOGSReport}
             onRefresh={inventory.loadData}
           />

@@ -667,18 +667,50 @@ export function registerDatabaseIPC(): void {
     return { success: true, count: ids.length };
   });
 
-  // Get inventory logs for report/print
-  ipcMain.handle("db:getInventoryLogs", (_event, limit = 50) => {
-    const database = getDatabase();
-    return database
-      .prepare(
-        `
-      SELECT * FROM local_inventory_logs 
-      ORDER BY created_at DESC 
-      LIMIT ?
-    `
-      )
-      .all(limit);
+  // Get inventory logs (Cloud-first for Desktop Dashboard)
+  ipcMain.handle("db:getInventoryLogs", async (_event, limit = 50) => {
+    // 1. Try fetching from Cloud (Supabase) if authenticated
+    if (authClient) {
+      try {
+        const { data, error } = await authClient
+          .from("inventory_logs")
+          .select(
+            `
+            id,
+            type,
+            staff_note,
+            quantity_change_base,
+            created_at,
+            created_by,
+            profiles:created_by ( full_name )
+          `
+          )
+          .eq("business_id", currentBusinessId) // Ensure RLS
+          .order("created_at", { ascending: false })
+          .limit(limit);
+
+        if (error) {
+          console.error("[Database] Failed to fetch cloud logs:", error);
+          return [];
+        }
+
+        // Format for UI
+        return data.map((log: any) => ({
+          id: log.id,
+          created_at: log.created_at,
+          action: log.type || "UNKNOWN",
+          staff_name: log.profiles?.full_name || "Unknown Staff",
+          details: log.staff_note || "Không có chi tiết",
+          quantity_change: log.quantity_change_base,
+        }));
+      } catch (err) {
+        console.error("[Database] Cloud log fetch exception:", err);
+        return [];
+      }
+    }
+
+    // 2. Fallback
+    return [];
   });
 
   // ==================== WEEK 2: COGS REPORT ====================
