@@ -259,6 +259,40 @@ export function initDatabase(): Database.Database {
     /* Column already exists */
   }
 
+  // Migration: Add type column for ingredient categorization
+  try {
+    db.exec(
+      `ALTER TABLE local_ingredients ADD COLUMN type TEXT NOT NULL DEFAULT 'raw_material'`
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  // Migration: Add inventory config columns
+  try {
+    db.exec(
+      `ALTER TABLE local_ingredients ADD COLUMN item_type TEXT NOT NULL DEFAULT 'STOCK'`
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  try {
+    db.exec(
+      `ALTER TABLE local_ingredients ADD COLUMN tracking_mode TEXT NOT NULL DEFAULT 'STRICT'`
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  try {
+    db.exec(
+      `ALTER TABLE local_ingredients ADD COLUMN allowable_variance REAL NOT NULL DEFAULT 0`
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+
   // Create System Meta table for migration flags
   db.exec(`
     CREATE TABLE IF NOT EXISTS local_system_meta (
@@ -461,6 +495,10 @@ export function registerDatabaseIPC(): void {
         min_threshold?: number;
         unit_weight?: number;
         unit_weight_unit?: string;
+        type?: "raw_material" | "supply" | "semi_product";
+        item_type?: "STOCK" | "PHANTOM";
+        tracking_mode?: "STRICT" | "LOOSE";
+        allowable_variance?: number;
       }
     ) => {
       const database = getDatabase();
@@ -476,11 +514,11 @@ export function registerDatabaseIPC(): void {
       }
 
       const transaction = database.transaction(() => {
-        // 1. Local Upsert
+        // 1. Local Upsert (includes type and inventory config)
         const stmt = database.prepare(`
           INSERT OR REPLACE INTO local_ingredients 
-          (id, business_id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, min_threshold, unit_weight, unit_weight_unit, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+          (id, business_id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, min_threshold, unit_weight, unit_weight_unit, type, item_type, tracking_mode, allowable_variance, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         `);
 
         stmt.run(
@@ -495,7 +533,11 @@ export function registerDatabaseIPC(): void {
           ingredient.tare_weight ?? 0,
           ingredient.min_threshold ?? 0,
           ingredient.unit_weight ?? null,
-          ingredient.unit_weight_unit ?? null
+          ingredient.unit_weight_unit ?? null,
+          ingredient.type ?? "raw_material",
+          ingredient.item_type ?? "STOCK",
+          ingredient.tracking_mode ?? "STRICT",
+          ingredient.allowable_variance ?? 0
         );
 
         // 2. Add to Sync Queue
@@ -643,15 +685,16 @@ export function registerDatabaseIPC(): void {
   ipcMain.handle("db:getCOGSReport", () => {
     const database = getDatabase();
 
-    // Get summary data
+    // Get summary data (exclude archived, use min_threshold for low stock)
     const summaryRow = database
       .prepare(
         `
         SELECT 
           COUNT(*) as itemCount,
           SUM((warehouse_qty + bar_qty) * unit_cost) as totalValue,
-          SUM(CASE WHEN (warehouse_qty + bar_qty) < 10 THEN 1 ELSE 0 END) as lowStockCount
+          SUM(CASE WHEN (warehouse_qty + bar_qty) < min_threshold AND min_threshold > 0 THEN 1 ELSE 0 END) as lowStockCount
         FROM local_ingredients
+        WHERE archived != 1 OR archived IS NULL
       `
       )
       .get() as {

@@ -1,9 +1,11 @@
-// src/pages/tabs/InventoryTab.tsx - Inventory Tab
+// src/pages/tabs/InventoryTab.tsx - Inventory Tab with Category Tabs
 // SOLID: Presentational component - receives data via props
 
-import React from "react";
+import React, { useState, useMemo } from "react";
 import { Ingredient } from "../../types";
 import { COLORS, dashboardStyles } from "../../styles/theme";
+
+type IngredientCategory = "raw_material" | "supply";
 
 interface InventoryTabProps {
   ingredients: Ingredient[];
@@ -22,6 +24,35 @@ export function InventoryTab({
   onExport,
   onRefresh,
 }: InventoryTabProps) {
+  const [activeTab, setActiveTab] =
+    useState<IngredientCategory>("raw_material");
+
+  // Filter ingredients based on active tab
+  const filteredIngredients = useMemo(() => {
+    return ingredients.filter((item) => {
+      const itemType = item.type || "raw_material"; // Default to raw_material
+      if (activeTab === "raw_material") {
+        // Show raw_material and semi_product in "Nguyên liệu" tab
+        return itemType === "raw_material" || itemType === "semi_product";
+      }
+      return itemType === "supply";
+    });
+  }, [ingredients, activeTab]);
+
+  // Calculate stats for current tab
+  const tabStats = useMemo(() => {
+    const total = filteredIngredients.reduce(
+      (sum, item) => sum + (item.warehouse_qty + item.bar_qty) * item.unit_cost,
+      0
+    );
+    const lowStock = filteredIngredients.filter((item) => {
+      const qty = item.warehouse_qty + item.bar_qty;
+      const threshold = item.min_threshold || 0;
+      return threshold > 0 && qty < threshold;
+    }).length;
+    return { totalValue: total, lowStockCount: lowStock };
+  }, [filteredIngredients]);
+
   const handleExport = async () => {
     const result = await onExport();
     if (result?.success) {
@@ -56,27 +87,63 @@ export function InventoryTab({
         </div>
       </div>
 
-      {/* Summary Cards */}
+      {/* Category Tabs */}
+      <div style={styles.tabsContainer}>
+        <button
+          onClick={() => setActiveTab("raw_material")}
+          style={{
+            ...styles.tabButton,
+            ...(activeTab === "raw_material" ? styles.tabButtonActive : {}),
+          }}
+        >
+          🧪 Nguyên liệu
+          <span style={styles.tabBadge}>
+            {
+              ingredients.filter((i) => {
+                const t = i.type || "raw_material";
+                return t === "raw_material" || t === "semi_product";
+              }).length
+            }
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab("supply")}
+          style={{
+            ...styles.tabButton,
+            ...(activeTab === "supply" ? styles.tabButtonActive : {}),
+          }}
+        >
+          🧻 Vật dụng
+          <span style={styles.tabBadge}>
+            {ingredients.filter((i) => i.type === "supply").length}
+          </span>
+        </button>
+      </div>
+
+      {/* Summary Cards - for current tab */}
       <div style={styles.summaryRow}>
         <div style={dashboardStyles.summaryCard}>
           <span style={styles.summaryLabel}>Tổng giá trị</span>
           <span style={styles.summaryValue}>
-            {totalValue.toLocaleString("vi-VN")} đ
+            {tabStats.totalValue.toLocaleString("vi-VN")} đ
           </span>
         </div>
         <div style={dashboardStyles.summaryCard}>
           <span style={styles.summaryLabel}>Số mặt hàng</span>
-          <span style={styles.summaryValueSmall}>{ingredients.length}</span>
+          <span style={styles.summaryValueSmall}>
+            {filteredIngredients.length}
+          </span>
         </div>
         <div style={dashboardStyles.summaryCard}>
           <span style={styles.summaryLabel}>Sắp hết hàng</span>
           <span
             style={{
               ...styles.summaryValueSmall,
-              color: lowStockCount > 0 ? COLORS.warning : COLORS.positive,
+              color:
+                tabStats.lowStockCount > 0 ? COLORS.warning : COLORS.positive,
             }}
           >
-            {lowStockCount}
+            {tabStats.lowStockCount}
           </span>
         </div>
       </div>
@@ -94,17 +161,20 @@ export function InventoryTab({
           </tr>
         </thead>
         <tbody>
-          {ingredients.length === 0 ? (
+          {filteredIngredients.length === 0 ? (
             <tr>
               <td colSpan={6} style={styles.emptyRow}>
-                Chưa có dữ liệu tồn kho
+                {activeTab === "raw_material"
+                  ? "Chưa có nguyên liệu nào"
+                  : "Chưa có vật dụng nào"}
               </td>
             </tr>
           ) : (
-            ingredients.map((item) => {
+            filteredIngredients.map((item) => {
               const totalQty = item.warehouse_qty + item.bar_qty;
               const rowValue = totalQty * item.unit_cost;
-              const isLowStock = totalQty < 10;
+              const threshold = item.min_threshold || 0;
+              const isLowStock = threshold > 0 && totalQty < threshold;
 
               return (
                 <tr key={item.id}>
@@ -138,7 +208,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 24,
+    marginBottom: 16,
   },
   title: {
     color: COLORS.textPrimary,
@@ -168,6 +238,37 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     fontWeight: 500,
     cursor: "pointer",
+  },
+  tabsContainer: {
+    display: "flex",
+    gap: 8,
+    marginBottom: 20,
+    borderBottom: `1px solid ${COLORS.border}`,
+    paddingBottom: 12,
+  },
+  tabButton: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "10px 20px",
+    backgroundColor: "transparent",
+    color: COLORS.textSecondary,
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 8,
+    fontSize: 14,
+    cursor: "pointer",
+    transition: "all 0.2s ease",
+  },
+  tabButtonActive: {
+    backgroundColor: COLORS.primary,
+    color: "white",
+    borderColor: COLORS.primary,
+  },
+  tabBadge: {
+    padding: "2px 8px",
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 12,
+    fontSize: 12,
   },
   summaryRow: {
     display: "flex",

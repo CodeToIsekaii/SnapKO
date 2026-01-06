@@ -124,7 +124,7 @@ export async function pullLatestIngredients(): Promise<{ synced: number }> {
       return { synced: 0 };
     }
 
-    // Upsert to local SQLite (with new batch item columns)
+    // Upsert to local SQLite (with new batch item columns + inventory config)
     // FIX: Use ON CONFLICT to preserve local-only fields when server doesn't return them
     for (const ing of ingredients) {
       const aliases = ing.aliases ? JSON.stringify(ing.aliases) : "[]";
@@ -133,8 +133,10 @@ export async function pullLatestIngredients(): Promise<{ synced: number }> {
         `INSERT INTO local_ingredients 
         (id, business_id, name, base_unit, min_threshold, average_unit_cost, unit_cost,
          density, tare_weight, aliases, archived, warehouse_qty, bar_qty, 
-         is_batch_item, batch_yield_qty, batch_yield_unit, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         is_batch_item, batch_yield_qty, batch_yield_unit,
+         type, item_type, tracking_mode, allowable_variance, unit_weight, unit_weight_unit,
+         created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           business_id = excluded.business_id,
           name = excluded.name,
@@ -152,7 +154,14 @@ export async function pullLatestIngredients(): Promise<{ synced: number }> {
           average_unit_cost = excluded.average_unit_cost,
           is_batch_item = excluded.is_batch_item,
           batch_yield_qty = excluded.batch_yield_qty,
-          batch_yield_unit = excluded.batch_yield_unit
+          batch_yield_unit = excluded.batch_yield_unit,
+          -- Inventory config fields:
+          type = COALESCE(excluded.type, type),
+          item_type = COALESCE(excluded.item_type, item_type),
+          tracking_mode = COALESCE(excluded.tracking_mode, tracking_mode),
+          allowable_variance = COALESCE(excluded.allowable_variance, allowable_variance),
+          unit_weight = COALESCE(excluded.unit_weight, unit_weight),
+          unit_weight_unit = COALESCE(excluded.unit_weight_unit, unit_weight_unit)
         `,
         [
           ing.id,
@@ -171,6 +180,13 @@ export async function pullLatestIngredients(): Promise<{ synced: number }> {
           ing.is_batch_item ? 1 : 0,
           ing.batch_yield_qty ?? null,
           ing.batch_yield_unit ?? null,
+          // New inventory config fields:
+          ing.type ?? "raw_material",
+          ing.item_type ?? "STOCK",
+          ing.tracking_mode ?? "STRICT",
+          ing.allowable_variance ?? 0,
+          ing.unit_weight ?? null,
+          ing.unit_weight_unit ?? null,
           ing.created_at,
         ]
       );

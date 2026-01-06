@@ -70,10 +70,15 @@ export default function IngredientsPage() {
     unit_weight_unit: "g" as string | null,
     item_type: "STOCK" as "STOCK" | "PHANTOM",
     tracking_mode: "STRICT" as "STRICT" | "LOOSE",
-    allowable_variance: 5,
+    allowable_variance: 0,
     // Batch Recipe
     is_batch_item: false,
     batch_yield_qty: null as number | null,
+    // Ingredient Category
+    ingredient_type: "raw_material" as
+      | "raw_material"
+      | "supply"
+      | "semi_product",
   });
 
   // Batch recipe inputs (for PHANTOM items)
@@ -96,9 +101,10 @@ export default function IngredientsPage() {
       unit_weight_unit: ing.unit_weight_unit || "g",
       item_type: ing.item_type || "STOCK",
       tracking_mode: ing.tracking_mode || "STRICT",
-      allowable_variance: (ing.allowable_variance || 0.05) * 100,
+      allowable_variance: (ing.allowable_variance ?? 0) * 100,
       is_batch_item: ing.is_batch_item || false,
       batch_yield_qty: ing.batch_yield_qty || null,
+      ingredient_type: (ing as any).type || "raw_material",
     });
     setShowAddModal(true);
   };
@@ -128,7 +134,9 @@ export default function IngredientsPage() {
         // Inventory Config
         item_type: newIngredient.item_type || "STOCK",
         tracking_mode: newIngredient.tracking_mode || "STRICT",
-        allowable_variance: (newIngredient.allowable_variance || 5) / 100, // Convert 5% -> 0.05
+        allowable_variance: (newIngredient.allowable_variance ?? 0) / 100, // Convert % -> decimal
+        // Ingredient Category (for filtering)
+        type: newIngredient.ingredient_type,
       };
 
       await (window as any).electronAPI?.upsertIngredient?.(ingredientData);
@@ -150,9 +158,10 @@ export default function IngredientsPage() {
         unit_weight_unit: "g",
         item_type: "STOCK",
         tracking_mode: "STRICT",
-        allowable_variance: 5,
+        allowable_variance: 0,
         is_batch_item: false,
         batch_yield_qty: null,
+        ingredient_type: "raw_material",
       });
       setEditingIngredient(null);
       setShowAddModal(false);
@@ -187,9 +196,10 @@ export default function IngredientsPage() {
       unit_weight_unit: "g",
       item_type: "STOCK",
       tracking_mode: "STRICT",
-      allowable_variance: 5,
+      allowable_variance: 0,
       is_batch_item: false,
       batch_yield_qty: null,
+      ingredient_type: "raw_material",
     });
   };
 
@@ -494,6 +504,46 @@ export default function IngredientsPage() {
                     }
                   />
                 </div>
+
+                {/* Ingredient Type Selector */}
+                <div style={styles.field}>
+                  <label style={styles.label}>Phân loại</label>
+                  <select
+                    style={styles.selectModern}
+                    value={newIngredient.ingredient_type}
+                    onChange={(e) => {
+                      const newType = e.target.value as
+                        | "raw_material"
+                        | "supply"
+                        | "semi_product";
+                      setNewIngredient({
+                        ...newIngredient,
+                        ingredient_type: newType,
+                        // Auto-set item_type: semi_product = PHANTOM, others = STOCK
+                        item_type:
+                          newType === "semi_product" ? "PHANTOM" : "STOCK",
+                      });
+                    }}
+                  >
+                    <option value="raw_material">
+                      🧪 Nguyên liệu (Dùng trong công thức)
+                    </option>
+                    <option value="supply">
+                      🧻 Vật dụng (Chi phí vận hành)
+                    </option>
+                    <option value="semi_product">
+                      🔧 Bán thành phẩm (Tự nấu)
+                    </option>
+                  </select>
+                  <span style={styles.hint}>
+                    {newIngredient.ingredient_type === "raw_material" &&
+                      "Cà phê, Sữa, Đường - Tính vào giá vốn món"}
+                    {newIngredient.ingredient_type === "supply" &&
+                      "Giấy ăn, Ly nhựa, Ống hút - Chi phí cửa hàng"}
+                    {newIngredient.ingredient_type === "semi_product" &&
+                      "Cốt trà, Sốt đặc biệt - Nấu từ nguyên liệu gốc"}
+                  </span>
+                </div>
               </div>
 
               {/* Section 2: Pricing & Units */}
@@ -727,12 +777,22 @@ export default function IngredientsPage() {
                     <label style={styles.label}>Loại hàng hóa</label>
                     <select
                       value={newIngredient.item_type}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const newItemType = e.target.value as
+                          | "STOCK"
+                          | "PHANTOM";
                         setNewIngredient({
                           ...newIngredient,
-                          item_type: e.target.value as any,
-                        })
-                      }
+                          item_type: newItemType,
+                          // Auto-set ingredient_type: PHANTOM = semi_product
+                          ingredient_type:
+                            newItemType === "PHANTOM"
+                              ? "semi_product"
+                              : newIngredient.ingredient_type === "semi_product"
+                              ? "raw_material"
+                              : newIngredient.ingredient_type,
+                        });
+                      }}
                       style={styles.selectModern}
                     >
                       <option value="STOCK">📦 Hàng Tồn Kho (Stock)</option>

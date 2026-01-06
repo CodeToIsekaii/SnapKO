@@ -10,7 +10,8 @@ let initPromise: Promise<SQLite.SQLiteDatabase> | null = null; // Mutex lock
 // Schema version - INCREMENT THIS to force database reset
 // v8: Fixed InventoryService to use shared getDB
 // v9: Added archived column to local_ingredients for soft delete sync
-const SCHEMA_VERSION = 9;
+// v10: Added type, item_type, tracking_mode, allowable_variance, unit_weight, unit_weight_unit
+const SCHEMA_VERSION = 10;
 
 /**
  * Initialize local SQLite database with all tables
@@ -190,7 +191,7 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       sync_error TEXT
     );
 
-    -- Local ingredients cache (with batch item support)
+    -- Local ingredients cache (with batch item support + inventory config)
     CREATE TABLE IF NOT EXISTS local_ingredients (
       id TEXT PRIMARY KEY NOT NULL,
       business_id TEXT,
@@ -208,6 +209,13 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       is_batch_item INTEGER NOT NULL DEFAULT 0,
       batch_yield_qty REAL,
       batch_yield_unit TEXT,
+      -- New columns for inventory config (synced from Desktop)
+      type TEXT NOT NULL DEFAULT 'raw_material',
+      item_type TEXT NOT NULL DEFAULT 'STOCK',
+      tracking_mode TEXT NOT NULL DEFAULT 'STRICT',
+      allowable_variance REAL NOT NULL DEFAULT 0,
+      unit_weight REAL,
+      unit_weight_unit TEXT,
       created_at TEXT NOT NULL
     );
 

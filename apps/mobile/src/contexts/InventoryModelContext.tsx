@@ -122,15 +122,21 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Initial load: try to sync from server first, fallback to local
+  // Initial load: Offline-First approach
+  // Loads from local DB IMMEDIATELY, then syncs from server in background
   useEffect(() => {
     const init = async () => {
+      // 1. Load from local DB FIRST (near-instant)
+      await loadModel();
+
+      // 2. Then try to sync from server to get fresh data (background)
+      // This won't block the UI since isLoaded will be set by loadModel()
       try {
-        // Try server sync first for fresh data
         await syncModel();
-      } catch {
-        // Fallback to local DB
-        await loadModel();
+      } catch (err) {
+        console.log(
+          "[InventoryModelContext] Background sync failed (offline?), using local data."
+        );
       }
     };
     init();

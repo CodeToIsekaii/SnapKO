@@ -13,6 +13,8 @@ export interface Ingredient {
   warehouse_qty: number;
   bar_qty: number;
   unit_cost: number;
+  min_threshold?: number;
+  type?: "raw_material" | "supply" | "semi_product";
 }
 
 export interface PendingLog {
