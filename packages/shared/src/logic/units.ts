@@ -15,7 +15,20 @@
 export const UNIT_TYPES = {
   WEIGHT: ["g", "kg"] as const,
   VOLUME: ["ml", "l", "lít"] as const,
-  COUNT: ["cái", "lon", "chai", "hộp", "quả", "thùng", "gói"] as const,
+  COUNT: [
+    "cái",
+    "lon",
+    "chai",
+    "hộp",
+    "quả",
+    "thùng",
+    "gói",
+    "hũ",
+    "bịch",
+    "túi",
+    "cây",
+    "bó",
+  ] as const,
 } as const;
 
 export type WeightUnit = (typeof UNIT_TYPES.WEIGHT)[number];
@@ -364,4 +377,115 @@ export function convertToIngredientBase(
 
   // Incompatible units (e.g., kg to chai)
   return inputValue;
+}
+
+// =============================================
+// COUNT TO WEIGHT/VOLUME CONVERSION
+// =============================================
+
+/**
+ * Convert COUNT units (hộp, chai, lon) to WEIGHT/VOLUME using unit_weight
+ *
+ * Example: Ingredient has base_unit = "hộp", unit_weight = 500, unit_weight_unit = "g"
+ * Recipe uses 100g → 100 / 500 = 0.2 hộp
+ *
+ * @param value - Value in target unit (e.g., 100)
+ * @param targetUnit - Target unit (e.g., "g")
+ * @param baseUnit - Ingredient's base unit (e.g., "hộp")
+ * @param unitWeight - Weight/volume per 1 COUNT unit (e.g., 500)
+ * @param unitWeightUnit - Unit of unitWeight (e.g., "g")
+ * @returns Value in base unit, or null if conversion not possible
+ */
+export function convertToCountUnit(
+  value: number,
+  targetUnit: string,
+  baseUnit: string,
+  unitWeight: number | null,
+  unitWeightUnit: string | null
+): number | null {
+  // If same unit, no conversion needed
+  if (targetUnit === baseUnit) return value;
+
+  // If base unit is not COUNT, can't use this function
+  if (getUnitGroup(baseUnit) !== "COUNT") return null;
+
+  // If no unit_weight defined, can't convert
+  if (!unitWeight || !unitWeightUnit) return null;
+
+  // Check if target unit is compatible with unit_weight_unit
+  const targetGroup = getUnitGroup(targetUnit);
+  const weightGroup = getUnitGroup(unitWeightUnit);
+
+  if (targetGroup !== weightGroup) {
+    // Different groups - might need density conversion first
+    return null;
+  }
+
+  // Convert target to unit_weight_unit first (e.g., 1kg → 1000g)
+  const normalizedValue = convertUnit(value, targetUnit, unitWeightUnit);
+
+  // Then divide by unit_weight to get COUNT units
+  // Example: 100g / 500g per hộp = 0.2 hộp
+  return normalizedValue / unitWeight;
+}
+
+/**
+ * Calculate cost for an ingredient in a recipe
+ * Handles all conversion scenarios: same family, cross-family (density), and COUNT (unit_weight)
+ *
+ * @param recipeQty - Quantity in recipe
+ * @param recipeUnit - Unit used in recipe
+ * @param ingredient - Full ingredient object with base_unit, unit_cost, density, unit_weight, unit_weight_unit
+ * @returns Cost in currency units
+ */
+export function calculateIngredientCost(
+  recipeQty: number,
+  recipeUnit: string,
+  ingredient: {
+    base_unit: string;
+    unit_cost: number;
+    density?: number | null;
+    unit_weight?: number | null;
+    unit_weight_unit?: string | null;
+  }
+): number {
+  // Same unit - simple multiplication
+  if (recipeUnit === ingredient.base_unit) {
+    return recipeQty * ingredient.unit_cost;
+  }
+
+  // Check if base unit is COUNT (hộp, chai, lon)
+  if (getUnitGroup(ingredient.base_unit) === "COUNT") {
+    // Try to convert using unit_weight
+    const countQty = convertToCountUnit(
+      recipeQty,
+      recipeUnit,
+      ingredient.base_unit,
+      ingredient.unit_weight ?? null,
+      ingredient.unit_weight_unit ?? null
+    );
+    if (countQty !== null) {
+      return countQty * ingredient.unit_cost;
+    }
+    // Can't convert - return 0 or original
+    return 0;
+  }
+
+  // Check for cross-family conversion (weight ↔ volume)
+  if (isCrossFamilyConversion(recipeUnit, ingredient.base_unit)) {
+    const result = crossFamilyConvert(
+      recipeQty,
+      recipeUnit,
+      ingredient.base_unit,
+      ingredient.density || 1
+    );
+    if (typeof result === "number") {
+      return result * ingredient.unit_cost;
+    }
+    return 0;
+  }
+
+  // Same family conversion (g ↔ kg, ml ↔ l)
+  const baseQty = convertUnit(recipeQty, recipeUnit, ingredient.base_unit);
+  return baseQty * ingredient.unit_cost;
 }

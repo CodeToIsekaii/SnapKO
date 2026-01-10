@@ -31,6 +31,7 @@ import {
   RecipeEditScreen,
   RecipeScanScreen,
   IngredientsListScreen,
+  IngredientEditScreen,
   ProfileEditScreen,
   AdHocTransferScreen,
   QuickOutScreen,
@@ -222,9 +223,7 @@ function AppNavigator() {
           onLogout={signOut}
           userName={profile.fullName || undefined}
           userRole={profile.role}
-          onEditProfile={
-            isOwner ? () => setCurrentScreen("PROFILE_EDIT") : undefined
-          }
+          onEditProfile={() => setCurrentScreen("PROFILE_EDIT")}
         />
       );
 

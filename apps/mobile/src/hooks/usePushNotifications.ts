@@ -7,7 +7,7 @@ import { useState, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import * as SecureStore from "expo-secure-store";
+import { supabase } from "../lib/supabase";
 import { Env } from "../env";
 
 // Configure notification handler
@@ -97,28 +97,21 @@ export function usePushNotifications() {
         projectId: Env.EAS_PROJECT_ID,
       });
 
-      const token = tokenData.data;
+      const pushToken = tokenData.data;
 
-      // Save token to profile in Supabase
-      const sessionToken = await SecureStore.getItemAsync("session_token");
-      if (sessionToken) {
-        await fetch(
-          `${
-            Env.SUPABASE_URL
-          }/rest/v1/profiles?id=eq.${await SecureStore.getItemAsync(
-            "profile_id"
-          )}`,
-          {
-            method: "PATCH",
-            headers: {
-              "Content-Type": "application/json",
-              apikey: Env.SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${sessionToken}`,
-              Prefer: "return=minimal",
-            },
-            body: JSON.stringify({ expo_push_token: token }),
-          }
-        );
+      // Save push token to profile in Supabase using our client
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        const { error } = await supabase
+          .from("profiles")
+          .update({ expo_push_token: pushToken })
+          .eq("id", session.user.id);
+
+        if (error) {
+          console.warn("Failed to save push token:", error.message);
+        }
       }
 
       // Android channel setup
@@ -131,8 +124,8 @@ export function usePushNotifications() {
         });
       }
 
-      setState({ token, permission: true, loading: false });
-      console.log("Push token:", token);
+      setState({ token: pushToken, permission: true, loading: false });
+      console.log("Push token:", pushToken);
     } catch (err) {
       console.error("Push registration error:", err);
       setState({ token: null, permission: false, loading: false });

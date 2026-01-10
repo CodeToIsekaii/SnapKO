@@ -159,6 +159,28 @@ export function startRealtimeListener(
       console.log("[Realtime] Logs subscription status:", status);
     });
 
+  // ============ BUSINESS SETTINGS: Listen to businesses table for Inventory Model changes ============
+  businessChannel = supabaseClient
+    .channel("business_settings_changes")
+    .on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "businesses",
+        filter: `id=eq.${businessId}`,
+      },
+      (payload) => {
+        console.log("🔔 [Realtime] Business settings updated:", payload.new);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("business-updated", payload.new);
+        }
+      }
+    )
+    .subscribe((status) => {
+      console.log("[Realtime] Business subscription status:", status);
+    });
+
   console.log(`[Realtime] Listening for business: ${businessId}`);
 }
 

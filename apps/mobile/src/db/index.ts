@@ -164,8 +164,6 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
     );
 
     -- Pending sync queue with area_id
-    -- Drop old table to reset schema (temporary fix for NOT NULL constraint)
-    DROP TABLE IF EXISTS pending_sync_logs;
     CREATE TABLE IF NOT EXISTS pending_sync_logs (
       id TEXT PRIMARY KEY NOT NULL,
       log_type TEXT NOT NULL DEFAULT 'inventory',
@@ -320,6 +318,24 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
     );
   `);
 
+    // LOG RETENTION: Prune old logs on startup
+    try {
+      let retentionDays = await getLogRetentionDays(db);
+
+      // If not set, use role-based default
+      if (!retentionDays) {
+        const profile = await db.getFirstAsync<{ role: string }>(
+          "SELECT role FROM local_profiles LIMIT 1"
+        );
+        // Staff: 10 days default (lighter). Owner: 30 days.
+        retentionDays = profile?.role === "STAFF" ? 10 : 30;
+      }
+
+      await pruneOldLogs(db, retentionDays);
+    } catch (err) {
+      console.warn("[DB] Failed to prune old logs:", err);
+    }
+
     return db;
   })();
 
@@ -421,5 +437,59 @@ export async function closeDb(): Promise<void> {
     }
     db = null;
     initPromise = null;
+  }
+}
+
+// ============================================
+// LOG RETENTION LOGIC
+// ============================================
+
+export async function getLogRetentionDays(
+  database?: SQLite.SQLiteDatabase
+): Promise<number> {
+  const dbInstance = database || (await getDB());
+  try {
+    const row = await dbInstance.getFirstAsync<{ value: string }>(
+      "SELECT value FROM app_settings WHERE key = 'log_retention_days'"
+    );
+    return row ? parseInt(row.value) : 30; // Default 30 days
+  } catch (e) {
+    return 30;
+  }
+}
+
+export async function setLogRetentionDays(days: number): Promise<void> {
+  const dbInstance = await getDB();
+  await dbInstance.runAsync(
+    "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('log_retention_days', ?)",
+    [days.toString()]
+  );
+}
+
+export async function pruneOldLogs(
+  database: SQLite.SQLiteDatabase,
+  days: number
+): Promise<void> {
+  if (days <= 0) return; // Keep forever if 0 or negative
+
+  try {
+    console.log(`[DB] Pruning logs older than ${days} days...`);
+
+    // Calculate cutoff date in JS to avoid SQLite binding issues
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+    const cutoffStr = cutoffDate.toISOString();
+
+    // SQLite query: Delete logs synced AND older than X days
+    await database.runAsync(
+      `DELETE FROM pending_sync_logs 
+       WHERE synced = 1 
+       AND created_at < ?`,
+      [cutoffStr]
+    );
+
+    console.log(`[DB] Log pruning complete. Cutoff: ${cutoffStr}`);
+  } catch (error) {
+    console.error("[DB] Failed to prune logs:", error);
   }
 }

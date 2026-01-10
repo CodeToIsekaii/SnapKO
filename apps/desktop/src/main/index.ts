@@ -16,6 +16,7 @@ import { Env } from "../env";
 import {
   initDatabase,
   closeDatabase,
+  clearLocalData,
   registerDatabaseIPC,
   setDatabaseSupabaseClient,
   setDatabaseBusinessId,
@@ -192,6 +193,9 @@ function registerAuthIPC() {
   ipcMain.handle("auth:logout", async () => {
     // Stop Realtime listener before logout
     stopRealtimeListener();
+
+    // Clear local SQLite data to prevent stale data for next user
+    clearLocalData();
 
     if (authClient) {
       await authClient.auth.signOut();

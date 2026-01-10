@@ -39,9 +39,12 @@ export interface ParsedInvoice {
 
 export interface StockItem {
   ingredient_name: string;
-  stock_qty: number; // Closing stock
+  stock_qty: number; // Main quantity (e.g., 2 hộp)
   import_qty: number; // Import from warehouse
-  unit?: string;
+  unit?: string; // Main unit (e.g., hộp)
+  partial_qty?: number; // Partial quantity (e.g., 150 from "150g")
+  partial_unit?: string; // Partial unit (e.g., "g")
+  merged_qty?: number; // Final merged quantity in base unit (calculated)
   confidence: number;
   needs_review: boolean;
   raw_text?: string;

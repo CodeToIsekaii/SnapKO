@@ -140,13 +140,21 @@ export default function QuickOutScreen({
         }
       );
 
-      // Log the QUICK_OUT transaction
+      // Map reason to type for sync logs (Dashboard queries use these types)
+      const typeMapping: Record<string, string> = {
+        DAMAGED: "WASTE",
+        LOAN: "LOAN",
+        MARKETING: "MARKETING",
+      };
+      const logType = typeMapping[reason] || "QUICK_OUT";
+
+      // Log the QUICK_OUT transaction with proper type for Dashboard display
       await db.runAsync(
         `INSERT INTO pending_sync_logs (id, type, location, ai_parsed_json, created_at, synced)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [
           id,
-          "QUICK_OUT",
+          logType, // Use mapped type instead of generic QUICK_OUT
           "mobile",
           JSON.stringify({
             items: itemsArr,

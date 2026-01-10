@@ -3,7 +3,7 @@
  * Following .UXUIrules Light Mode palette
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { COLORS } from "../styles/theme";
 
 interface SettingsPageProps {
@@ -34,6 +34,20 @@ export default function SettingsPage({
     "idle" | "syncing" | "success" | "error"
   >("idle");
   const [changingModel, setChangingModel] = useState(false);
+  const [retentionDays, setRetentionDays] = useState(30);
+
+  useEffect(() => {
+    loadRetention();
+  }, []);
+
+  const loadRetention = async () => {
+    try {
+      const days = await (window as any).electronAPI?.getRetentionDays?.();
+      if (days) setRetentionDays(days);
+    } catch (e) {
+      console.error("Failed to load retention days", e);
+    }
+  };
 
   const isOwner = userRole === "OWNER";
 
@@ -209,6 +223,57 @@ export default function SettingsPage({
                 ⏳ Đang cập nhật...
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Log Retention - Owner Only (Device Specific) */}
+      {isOwner && (
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
+            <span style={styles.cardTitle}>
+              ⏱️ Cấu hình lưu trữ (Thiết bị này)
+            </span>
+          </div>
+          <div style={styles.cardContent}>
+            <p style={styles.hint}>
+              Tự động xóa nhật ký cũ (đã đồng bộ) để giải phóng dung lượng máy
+              tính.
+            </p>
+
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              {[3, 7, 30, 90].map((days) => (
+                <button
+                  key={days}
+                  style={{
+                    ...styles.modelButton,
+                    flex: "none",
+                    width: "auto",
+                    padding: "8px 16px",
+                    minWidth: "80px",
+                    backgroundColor:
+                      retentionDays === days
+                        ? COLORS.primary
+                        : COLORS.surfaceHover,
+                    borderColor:
+                      retentionDays === days ? COLORS.primary : COLORS.border,
+                    color:
+                      retentionDays === days ? "white" : COLORS.textPrimary,
+                  }}
+                  onClick={async () => {
+                    setRetentionDays(days);
+                    await (window as any).electronAPI?.setRetentionDays?.(days);
+                    alert(
+                      `Đã lưu. Nhật ký cũ hơn ${days} ngày sẽ tự động bị xóa.`
+                    );
+                  }}
+                >
+                  <span style={{ fontSize: "14px", fontWeight: "600" }}>
+                    {days} ngày
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

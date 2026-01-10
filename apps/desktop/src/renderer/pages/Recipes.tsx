@@ -1,13 +1,21 @@
 import React, { useState, useEffect } from "react";
 import { COLORS } from "../styles/theme";
 import GuideModal from "../components/GuideModal";
-import { UNIT_TYPES, getUnitGroup, convertUnit } from "@snapko/shared/logic";
+import {
+  UNIT_TYPES,
+  getUnitGroup,
+  convertUnit,
+  calculateIngredientCost,
+} from "@snapko/shared/logic";
 
 interface Ingredient {
   id: string;
   name: string;
   base_unit: string;
   unit_cost: number;
+  density?: number;
+  unit_weight?: number;
+  unit_weight_unit?: string;
 }
 
 interface Recipe {
@@ -24,12 +32,14 @@ interface Recipe {
   }>;
 }
 
-// Helper to get available units for a given unit type
+// Helper to get available units - always include weight + volume for cross-family conversion
 function getAvailableUnits(unit: string): readonly string[] {
-  const group = getUnitGroup(unit);
-  if (group === "WEIGHT") return UNIT_TYPES.WEIGHT;
-  if (group === "VOLUME") return UNIT_TYPES.VOLUME;
-  return [unit];
+  const allUnits = new Set<string>([
+    unit,
+    ...UNIT_TYPES.WEIGHT,
+    ...UNIT_TYPES.VOLUME.filter((u) => u !== "lít"),
+  ]);
+  return Array.from(allUnits);
 }
 
 export default function RecipesPage() {
@@ -241,8 +251,14 @@ export default function RecipesPage() {
 
         let newCost = i.cost;
         if (matched) {
-          const baseQty = convertUnit(newQty, newUnit, matched.base_unit);
-          newCost = baseQty * matched.unit_cost;
+          // Use centralized cost calculation (handles all conversion scenarios)
+          newCost = calculateIngredientCost(newQty, newUnit, {
+            base_unit: matched.base_unit,
+            unit_cost: matched.unit_cost,
+            density: matched.density,
+            unit_weight: matched.unit_weight,
+            unit_weight_unit: matched.unit_weight_unit,
+          });
         }
 
         return { ...i, ...updates, cost: newCost };

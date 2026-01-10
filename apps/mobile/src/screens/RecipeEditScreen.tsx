@@ -23,6 +23,7 @@ import {
   areUnitsCompatible,
   calculateGrossProfit,
   calculateGrossProfitMargin,
+  calculateIngredientCost as sharedCalculateIngredientCost,
 } from "@snapko/shared";
 
 // UXUIrules Color Palette
@@ -58,6 +59,9 @@ interface LocalIngredient {
   name: string;
   base_unit: string;
   unit_cost: number;
+  density?: number;
+  unit_weight?: number;
+  unit_weight_unit?: string;
 }
 
 interface RecipeIngredient {
@@ -65,9 +69,12 @@ interface RecipeIngredient {
   name: string;
   quantity: number;
   unit: string;
-  base_unit: string; // Original ingredient unit
+  base_unit: string;
   unit_cost: number;
-  isCompatible: boolean; // For unit compatibility highlighting
+  density?: number;
+  unit_weight?: number;
+  unit_weight_unit?: string;
+  isCompatible: boolean;
 }
 
 interface RecipeEditScreenProps {
@@ -98,7 +105,7 @@ export default function RecipeEditScreen({
   const loadIngredients = async () => {
     const db = await SQLite.openDatabaseAsync("snapko.db");
     const rows = await db.getAllAsync<LocalIngredient>(
-      "SELECT id, name, base_unit, unit_cost FROM local_ingredients WHERE archived = 0"
+      "SELECT id, name, base_unit, unit_cost, density, unit_weight, unit_weight_unit FROM local_ingredients WHERE archived = 0"
     );
     setAllIngredients(rows);
   };
@@ -132,8 +139,11 @@ export default function RecipeEditScreen({
         name: string;
         base_unit: string;
         unit_cost: number;
+        density: number | null;
+        unit_weight: number | null;
+        unit_weight_unit: string | null;
       }>(
-        "SELECT name, base_unit, unit_cost FROM local_ingredients WHERE id = ?",
+        "SELECT name, base_unit, unit_cost, density, unit_weight, unit_weight_unit FROM local_ingredients WHERE id = ?",
         [item.ingredient_id]
       );
       if (ing) {
@@ -145,6 +155,9 @@ export default function RecipeEditScreen({
           unit: selectedUnit,
           base_unit: ing.base_unit,
           unit_cost: ing.unit_cost,
+          density: ing.density ?? undefined,
+          unit_weight: ing.unit_weight ?? undefined,
+          unit_weight_unit: ing.unit_weight_unit ?? undefined,
           isCompatible: areUnitsCompatible(selectedUnit, ing.base_unit),
         });
       }
@@ -165,7 +178,10 @@ export default function RecipeEditScreen({
         unit: ing.base_unit,
         base_unit: ing.base_unit,
         unit_cost: ing.unit_cost,
-        isCompatible: true, // Same unit, always compatible
+        density: ing.density,
+        unit_weight: ing.unit_weight,
+        unit_weight_unit: ing.unit_weight_unit,
+        isCompatible: true,
       },
     ]);
     setShowPicker(false);
@@ -194,16 +210,15 @@ export default function RecipeEditScreen({
     setIngredients((prev) => prev.filter((i) => i.ingredient_id !== id));
   };
 
-  // Calculate COGS with unit conversion
+  // Calculate COGS with unit conversion (using shared logic)
   const calculateIngredientCost = (ing: RecipeIngredient): number => {
-    // If units are same, simple multiplication
-    if (ing.unit === ing.base_unit) {
-      return ing.quantity * ing.unit_cost;
-    }
-    // Convert quantity to base unit for correct cost calculation
-    const converted = convertUnits(ing.quantity, ing.unit, ing.base_unit);
-    if (converted === null) return 0; // Incompatible units
-    return converted * ing.unit_cost;
+    return sharedCalculateIngredientCost(ing.quantity, ing.unit, {
+      base_unit: ing.base_unit,
+      unit_cost: ing.unit_cost,
+      density: ing.density,
+      unit_weight: ing.unit_weight,
+      unit_weight_unit: ing.unit_weight_unit,
+    });
   };
 
   const cogs = ingredients.reduce(

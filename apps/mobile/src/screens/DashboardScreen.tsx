@@ -57,6 +57,7 @@ interface DashboardScreenProps {
   onOpenIngredients?: () => void;
   onOpenTransfer?: () => void;
   onOpenQuickOut?: () => void; // New: For quick out/disposal
+  refreshKey?: number; // Increment to trigger refresh from parent
 }
 
 export default function DashboardScreen({
@@ -67,6 +68,7 @@ export default function DashboardScreen({
   onOpenIngredients,
   onOpenTransfer,
   onOpenQuickOut,
+  refreshKey = 0,
 }: DashboardScreenProps) {
   const { model, businessId, isStandard, syncModel } = useInventoryModel();
   const { authState } = useAuth();
@@ -79,6 +81,8 @@ export default function DashboardScreen({
   const [loading, setLoading] = useState(true);
   const [hasTodaySales, setHasTodaySales] = useState(false);
   const [todayTransfers, setTodayTransfers] = useState<any[]>([]);
+  const [todayActivity, setTodayActivity] = useState<any[]>([]); // Unified activity list
+  const [todayQuickOuts, setTodayQuickOuts] = useState<any[]>([]); // WASTE/LOAN/MARKETING
 
   // New LowStock Hook
   const {
@@ -100,27 +104,104 @@ export default function DashboardScreen({
   });
   const [showNotifications, setShowNotifications] = useState(false);
 
-  // Mock notifications (replace with real data later)
-  const mockNotifications = [
+  // Real notifications state
+  const [notifications, setNotifications] = useState<
     {
-      id: "1",
-      type: "warning" as const,
-      message: "5 nguyên liệu sắp hết hàng",
-      time: "5 phút trước",
-    },
-    {
-      id: "2",
-      type: "info" as const,
-      message: "Đã đồng bộ dữ liệu thành công",
-      time: "1 giờ trước",
-    },
-  ];
+      id: string;
+      type: "warning" | "info" | "error";
+      message: string;
+      time: string;
+    }[]
+  >([]);
+
+  // Load real notifications from database
+  const loadNotifications = useCallback(async () => {
+    try {
+      const db = await getDB();
+      const notifs: {
+        id: string;
+        type: "warning" | "info" | "error";
+        message: string;
+        time: string;
+      }[] = [];
+
+      // 1. Low stock items (quantity < min_threshold)
+      const lowStockItems = await db.getAllAsync<{
+        name: string;
+        count: number;
+      }>(`
+        SELECT i.name, COUNT(*) as count
+        FROM local_stock_levels sl
+        JOIN local_ingredients i ON sl.ingredient_id = i.id
+        WHERE sl.quantity < COALESCE(i.min_threshold, 0)
+          AND (i.archived = 0 OR i.archived IS NULL)
+        GROUP BY i.id
+        LIMIT 10
+      `);
+
+      if (lowStockItems && lowStockItems.length > 0) {
+        notifs.push({
+          id: "low_stock",
+          type: "warning",
+          message: `${lowStockItems.length} nguyên liệu sắp hết hàng`,
+          time: "Hiện tại",
+        });
+      }
+
+      // 2. Pending sync items
+      const pendingSync = await db.getFirstAsync<{ count: number }>(
+        "SELECT COUNT(*) as count FROM pending_sync_logs WHERE synced = 0"
+      );
+
+      if (pendingSync && pendingSync.count > 0) {
+        notifs.push({
+          id: "pending_sync",
+          type: "info",
+          message: `${pendingSync.count} bản ghi đang chờ đồng bộ`,
+          time: "Hiện tại",
+        });
+      }
+
+      // 3. Variance alerts (check for flagged inventory logs in last 24h)
+      // Note: local_inventory_logs has is_flagged column, not variance_pct
+      const flaggedLogs = await db.getFirstAsync<{ count: number }>(`
+        SELECT COUNT(*) as count 
+        FROM local_inventory_logs 
+        WHERE is_flagged = 1
+          AND created_at > datetime('now', '-1 day')
+      `);
+
+      if (flaggedLogs && flaggedLogs.count > 0) {
+        notifs.push({
+          id: "variance",
+          type: "error",
+          message: `${flaggedLogs.count} cảnh báo kiểm kho đáng ngờ`,
+          time: "Trong 24h qua",
+        });
+      }
+
+      // If no notifications, show a success message
+      if (notifs.length === 0) {
+        notifs.push({
+          id: "all_good",
+          type: "info",
+          message: "Mọi thứ ổn định, không có cảnh báo",
+          time: "Hiện tại",
+        });
+      }
+
+      setNotifications(notifs);
+    } catch (err) {
+      console.error("[Dashboard] Failed to load notifications:", err);
+    }
+  }, []);
 
   // Debug: Log when Dashboard mounts with current businessId
   useEffect(() => {
     console.log("🏠 [Dashboard] Component mounted, businessId:", businessId);
-    // FAILSAFE: Access role from AuthContext/Storage if needed later
-  }, []);
+    // Load notifications on mount
+    loadNotifications();
+  }, [loadNotifications]);
 
   // Debug: Log when businessId changes
   useEffect(() => {
@@ -179,6 +260,37 @@ export default function DashboardScreen({
         [today]
       );
       setTodayTransfers(transfers);
+
+      // Load ALL today's activities for unified section (Transfers + QuickOuts)
+      // Use datetime range to handle timezone correctly (SQLite stores as UTC)
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+      const allActivities = await db.getAllAsync<any>(
+        `SELECT psl.*, li.name as ingredient_name 
+         FROM pending_sync_logs psl 
+         LEFT JOIN local_ingredients li ON psl.ingredient_id = li.id
+         WHERE psl.type IN ('TRANSFER', 'WASTE', 'LOAN', 'MARKETING', 'IMPORT', 'STOCK_CHECK') 
+           AND psl.created_at >= ? AND psl.created_at <= ?
+         ORDER BY psl.created_at DESC
+         LIMIT 20`,
+        [todayStart.toISOString(), todayEnd.toISOString()]
+      );
+      setTodayActivity(allActivities);
+
+      // Load today's Quick Outs (WASTE/LOAN/MARKETING) for dedicated widget
+      const quickOuts = await db.getAllAsync<any>(
+        `SELECT psl.*, li.name as ingredient_name 
+         FROM pending_sync_logs psl 
+         LEFT JOIN local_ingredients li ON psl.ingredient_id = li.id
+         WHERE psl.type IN ('WASTE', 'LOAN', 'MARKETING') 
+           AND psl.created_at >= ? AND psl.created_at <= ?
+         ORDER BY psl.created_at DESC`,
+        [todayStart.toISOString(), todayEnd.toISOString()]
+      );
+      setTodayQuickOuts(quickOuts);
 
       // Load pending LOAN reminders (due today or earlier, not done)
       try {
@@ -239,6 +351,17 @@ export default function DashboardScreen({
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Note: useFocusEffect unavailable since Dashboard is not inside NavigationContainer
+  // Refresh is triggered via pull-to-refresh or when refreshKey changes
+
+  // Watch refreshKey to reload activities when parent triggers (after Quick Out, Transfer)
+  useEffect(() => {
+    if (refreshKey > 0) {
+      console.log("📋 [Dashboard] refreshKey changed, reloading today data...");
+      loadTodayData();
+    }
+  }, [refreshKey, loadTodayData]);
 
   // SALES → STOCK GUARD: Check if user has done Sales Snap today before Stock Snap
   const handleStockSnapPress = () => {
@@ -419,7 +542,7 @@ export default function DashboardScreen({
               }}
             >
               <Ionicons name="notifications-outline" size={20} color="white" />
-              {mockNotifications.length > 0 && (
+              {notifications.length > 0 && (
                 <View
                   style={{
                     position: "absolute",
@@ -438,7 +561,7 @@ export default function DashboardScreen({
                   <Text
                     style={{ color: "white", fontSize: 9, fontWeight: "bold" }}
                   >
-                    {mockNotifications.length}
+                    {notifications.length}
                   </Text>
                 </View>
               )}
@@ -741,6 +864,119 @@ export default function DashboardScreen({
           </View>
         )}
 
+        {/* 📤 QUICK OUT WIDGET - WASTE/LOAN/MARKETING */}
+        {todayQuickOuts.length > 0 && (
+          <View
+            style={{
+              backgroundColor: "#2A1A1A",
+              borderRadius: 12,
+              padding: 12,
+              marginBottom: 16,
+              borderWidth: 1,
+              borderColor: "#EF444440",
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                marginBottom: 8,
+              }}
+            >
+              <Text style={{ fontSize: 16, marginRight: 6 }}>📤</Text>
+              <Text
+                style={{
+                  color: "#EF4444",
+                  fontSize: 12,
+                  fontWeight: "700",
+                  flex: 1,
+                }}
+              >
+                XUẤT KHÁC HÔM NAY
+              </Text>
+              <Text style={{ color: "#64748B", fontSize: 10 }}>
+                {todayQuickOuts.length} mục
+              </Text>
+            </View>
+            {todayQuickOuts.slice(0, 3).map((q, idx) => {
+              const typeEmoji =
+                q.type === "WASTE" ? "❌" : q.type === "LOAN" ? "🤝" : "🎁";
+              const typeLabel =
+                q.type === "WASTE"
+                  ? "Vỡ/Hỏng"
+                  : q.type === "LOAN"
+                  ? "Cho mượn"
+                  : "Mời khách";
+              const time = new Date(q.created_at).toLocaleTimeString("vi-VN", {
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+
+              // Parse ai_parsed_json to get item names (Quick Out saves items array in JSON)
+              let itemsText = "";
+              try {
+                const parsed =
+                  typeof q.ai_parsed_json === "string"
+                    ? JSON.parse(q.ai_parsed_json)
+                    : q.ai_parsed_json;
+                const items = parsed?.items || [];
+                itemsText = items
+                  .map((i: any) => `${i.ingredient_name}: ${i.quantity}`)
+                  .join(", ");
+              } catch {
+                itemsText = q.ingredient_name || "?";
+              }
+
+              return (
+                <View
+                  key={q.id || idx}
+                  style={{
+                    flexDirection: "row",
+                    paddingVertical: 4,
+                    borderTopWidth: idx > 0 ? 1 : 0,
+                    borderTopColor: "#3A2A2A",
+                  }}
+                >
+                  <Text style={{ fontSize: 14, marginRight: 6 }}>
+                    {typeEmoji}
+                  </Text>
+                  <Text style={{ color: "#64748B", fontSize: 11, width: 45 }}>
+                    {time}
+                  </Text>
+                  <Text
+                    style={{ color: "#B8B3A8", fontSize: 11, flex: 1 }}
+                    numberOfLines={1}
+                  >
+                    {itemsText} • {typeLabel}
+                  </Text>
+                </View>
+              );
+            })}
+            {todayQuickOuts.length > 3 && (
+              <Text
+                style={{
+                  color: "#64748B",
+                  fontSize: 10,
+                  textAlign: "center",
+                  marginTop: 4,
+                }}
+              >
+                +{todayQuickOuts.length - 3} mục khác
+              </Text>
+            )}
+            <Text
+              style={{
+                color: "#F59E0B",
+                fontSize: 10,
+                marginTop: 8,
+                textAlign: "center",
+              }}
+            >
+              ⚠️ Không ghi lại vào tờ kiểm kê cuối ngày!
+            </Text>
+          </View>
+        )}
+
         {/* 📸 3 SNAPS STRATEGY - Quick Actions */}
         <View style={{ marginBottom: 24 }}>
           <Text
@@ -917,13 +1153,115 @@ export default function DashboardScreen({
     </View>
   );
 
+  // Activity item component
+  const renderActivityItem = (activity: any, index: number) => {
+    const actDate = new Date(activity.created_at);
+    const dateStr = actDate.toLocaleDateString("vi-VN", {
+      day: "2-digit",
+      month: "2-digit",
+    });
+    const timeStr = actDate.toLocaleTimeString("vi-VN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    // Get current user name from authState (local activities are usually from current user)
+    const userName =
+      authState.status === "authenticated"
+        ? authState.profile?.fullName ||
+          (authState.profile?.role === "OWNER" ? "Chủ quán" : "Nhân viên")
+        : "Nhân viên";
+
+    // Activity type config
+    const typeConfig: Record<
+      string,
+      { icon: string; color: string; label: string }
+    > = {
+      TRANSFER: { icon: "📦", color: "#6B8E23", label: "Chuyển kho" },
+      WASTE: { icon: "❌", color: "#EF4444", label: "Vỡ/Hỏng" },
+      LOAN: { icon: "🤝", color: "#F59E0B", label: "Cho mượn" },
+      MARKETING: { icon: "🎁", color: "#8B5CF6", label: "Mời khách" },
+      IMPORT: { icon: "📥", color: "#E07A2F", label: "Nhập hàng" },
+      STOCK_CHECK: { icon: "📋", color: "#3B82F6", label: "Kiểm kho" },
+    };
+
+    const config = typeConfig[activity.type] || {
+      icon: "📝",
+      color: "#94A3B8",
+      label: activity.type,
+    };
+
+    // Parse quantity info
+    let quantityText = "";
+    if (activity.ai_parsed_json) {
+      try {
+        const parsed =
+          typeof activity.ai_parsed_json === "string"
+            ? JSON.parse(activity.ai_parsed_json)
+            : activity.ai_parsed_json;
+        const items = parsed?.items || [];
+        if (items.length > 0) {
+          quantityText = items
+            .map((i: any) => `${i.ingredient_name || i.name}: ${i.quantity}`)
+            .join(", ");
+        }
+      } catch {}
+    }
+    if (!quantityText && activity.ingredient_name) {
+      quantityText = `${activity.ingredient_name}: ${activity.quantity || 1}`;
+    }
+
+    return (
+      <View
+        key={activity.id || index}
+        style={{
+          backgroundColor: "#1A1A1A",
+          borderRadius: 8,
+          padding: 12,
+          marginBottom: 8,
+          marginHorizontal: 16,
+          flexDirection: "row",
+          alignItems: "center",
+        }}
+      >
+        <Text style={{ fontSize: 20, marginRight: 10 }}>{config.icon}</Text>
+        <View style={{ flex: 1 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginBottom: 2,
+            }}
+          >
+            <Text
+              style={{ color: config.color, fontSize: 12, fontWeight: "600" }}
+            >
+              {config.label}
+            </Text>
+            <Text style={{ color: "#64748B", fontSize: 10, marginLeft: 8 }}>
+              {dateStr} {timeStr}
+            </Text>
+          </View>
+          {quantityText ? (
+            <Text style={{ color: "#B8B3A8", fontSize: 11 }} numberOfLines={1}>
+              {quantityText}
+            </Text>
+          ) : null}
+          <Text style={{ color: "#64748B", fontSize: 10, marginTop: 2 }}>
+            👤 {userName}
+          </Text>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <>
       <View style={{ flex: 1, backgroundColor: "#121212" }}>
         <FlatList
-          data={recentLogs.slice(0, 5)}
-          renderItem={renderLogItem}
-          keyExtractor={(item) => item.id}
+          data={todayActivity}
+          renderItem={({ item, index }) => renderActivityItem(item, index)}
+          keyExtractor={(item, index) => item.id || `activity_${index}`}
           ListHeaderComponent={DashboardHeader}
           ListEmptyComponent={EmptyLogs}
           ListFooterComponent={() => <View style={{ height: 150 }} />}
@@ -948,7 +1286,7 @@ export default function DashboardScreen({
       <NotificationModal
         visible={showNotifications}
         onClose={() => setShowNotifications(false)}
-        notifications={mockNotifications}
+        notifications={notifications}
       />
 
       {/* Low Stock Detailed Modal */}

@@ -33,6 +33,7 @@ interface Ingredient {
   is_batch_item: boolean;
   batch_yield_qty: number | null;
   batch_yield_unit: string | null;
+  archived?: number; // 0 = active, 1 = archived
 }
 
 interface BatchRecipeInput {
@@ -86,6 +87,9 @@ export default function IngredientsPage() {
 
   // Search filter for ingredient dropdown
   const [ingredientSearch, setIngredientSearch] = useState<string>("");
+
+  // Restore feature state
+  const [showHidden, setShowHidden] = useState(false);
 
   // Open edit modal with ingredient data
   const handleEdit = (ing: Ingredient) => {
@@ -168,7 +172,7 @@ export default function IngredientsPage() {
 
       // Reload list after a small delay to let React settle
       setTimeout(async () => {
-        await loadIngredients();
+        await loadIngredients(false, showHidden);
       }, 100);
 
       // Show toast notification (non-blocking, no focus loss)
@@ -204,7 +208,7 @@ export default function IngredientsPage() {
   };
 
   useEffect(() => {
-    loadIngredients(true); // Initial load
+    loadIngredients(true, showHidden); // Initial load
 
     // 🔔 REALTIME LISTENERS
     // Listen for Signal (Stock & Master Data updates from Sync Signals)
@@ -212,7 +216,7 @@ export default function IngredientsPage() {
       "ingredients-updated",
       () => {
         console.log("🔔 [UI] Received ingredients-updated signal");
-        loadIngredients(false);
+        loadIngredients(false, showHidden);
         setToast({
           message: "🔄 Dữ liệu đã được cập nhật từ thiết bị khác",
           type: "success",
@@ -226,7 +230,7 @@ export default function IngredientsPage() {
       window as any
     ).electronAPI?.onIngredientUpdate?.(() => {
       console.log("🔔 [UI] Received direct ingredient update");
-      loadIngredients(false);
+      loadIngredients(false, showHidden);
     });
 
     // Listen for stock updates specifically
@@ -234,7 +238,7 @@ export default function IngredientsPage() {
       "stock-updated",
       () => {
         console.log("🔔 [UI] Received stock-updated signal");
-        loadIngredients(false);
+        loadIngredients(false, showHidden);
         setToast({ message: "📦 Tồn kho vừa thay đổi", type: "success" });
         setTimeout(() => setToast(null), 3000);
       }
@@ -246,13 +250,39 @@ export default function IngredientsPage() {
       (window as any).electronAPI?.off?.("stock-updated");
       removeUpdateListener?.();
     };
-  }, []);
+  }, [showHidden]);
 
-  async function loadIngredients(isInitial = false) {
+  // Handle Restore
+  const handleRestore = async (ing: Ingredient) => {
+    const confirmed = window.confirm(
+      `Bạn có chắc muốn khôi phục "${ing.name}"?`
+    );
+    if (!confirmed) return;
+
+    try {
+      await (window as any).electronAPI?.restoreIngredient?.(ing.id);
+      setToast({ message: `✅ Đã khôi phục "${ing.name}"`, type: "success" });
+      setTimeout(() => setToast(null), 3000);
+      await loadIngredients(false, showHidden);
+    } catch (err) {
+      console.error("Failed to restore ingredient:", err);
+      setToast({ message: "❌ Lỗi khi khôi phục nguyên liệu", type: "error" });
+      setTimeout(() => setToast(null), 3000);
+    }
+  };
+
+  async function loadIngredients(isInitial = false, includeArchived = false) {
     if (isInitial) setLoading(true);
     try {
+      // Use "invoke" directly if type definition is missing in preload, or update preload.
+      // Assuming preload handles args dynamically or we invoke specifically.
+      // Wait, preload usually exposes explicit functions. If I didn't update preload, simple .getIngredients?.() might fail to pass args.
+      // However, usually we can use ipcRenderer.invoke via a generic expose, OR the preload maps args.
+      // Let's assume standard contextBridge passes args.
       const data =
-        (await (window as any).electronAPI?.getIngredients?.()) ?? [];
+        (await (window as any).electronAPI?.getIngredients?.({
+          includeArchived,
+        })) ?? [];
       setIngredients(data);
     } catch (err) {
       console.error("Failed to load ingredients:", err);
@@ -279,7 +309,7 @@ export default function IngredientsPage() {
       await (window as any).electronAPI?.deleteIngredient?.(ing.id);
       setToast({ message: `✅ Đã xóa "${ing.name}"`, type: "success" });
       setTimeout(() => setToast(null), 3000);
-      await loadIngredients();
+      await loadIngredients(false, showHidden);
     } catch (err) {
       console.error("Failed to delete ingredient:", err);
       setToast({ message: "❌ Lỗi khi xóa nguyên liệu", type: "error" });
@@ -289,6 +319,7 @@ export default function IngredientsPage() {
 
   return (
     <div style={styles.container}>
+      {/* ... (keep toast/modal) ... */}
       {/* Toast Notification - Non-blocking, no focus loss */}
       {toast && (
         <div
@@ -396,6 +427,22 @@ export default function IngredientsPage() {
           >
             ❓ Hướng dẫn
           </button>
+          {/* Show Hidden Button */}
+          <button
+            style={{
+              ...styles.secondaryButton,
+              backgroundColor: showHidden
+                ? "#FFC857"
+                : styles.secondaryButton.backgroundColor,
+              color: showHidden ? "#1E293B" : styles.secondaryButton.color,
+              borderColor: showHidden
+                ? "#FFC857"
+                : styles.secondaryButton.borderColor,
+            }}
+            onClick={() => setShowHidden(!showHidden)}
+          >
+            {showHidden ? "👁️ Đang hiện ẩn" : "👁️ Hiện đã ẩn"}
+          </button>
 
           {/* Add Button */}
           <button
@@ -449,9 +496,23 @@ export default function IngredientsPage() {
               </tr>
             ) : (
               ingredients.map((ing) => (
-                <tr key={ing.id} style={styles.tableRow}>
+                <tr
+                  key={ing.id}
+                  style={{
+                    ...styles.tableRow,
+                    opacity: ing.archived ? 0.6 : 1,
+                    backgroundColor: ing.archived ? "#f5f5f5" : "transparent",
+                  }}
+                >
                   <td style={styles.td}>
-                    <div style={styles.ingredientName}>{ing.name}</div>
+                    <div
+                      style={{
+                        ...styles.ingredientName,
+                        textDecoration: ing.archived ? "line-through" : "none",
+                      }}
+                    >
+                      {ing.name}
+                    </div>
                     {/* Only show aliases if it's not empty or just '[]' */}
                     {ing.aliases &&
                       ing.aliases !== "[]" &&
@@ -477,22 +538,37 @@ export default function IngredientsPage() {
                     )}
                   </td>
                   <td style={{ ...styles.td, textAlign: "right" }}>
-                    <button
-                      style={styles.editButton}
-                      onClick={() => handleEdit(ing)}
-                    >
-                      Sửa
-                    </button>
-                    <button
-                      style={{
-                        ...styles.editButton,
-                        color: "#EF4444",
-                        marginLeft: 8,
-                      }}
-                      onClick={() => handleDelete(ing)}
-                    >
-                      Xóa
-                    </button>
+                    {ing.archived ? (
+                      <button
+                        style={{
+                          ...styles.editButton,
+                          color: COLORS.primary,
+                          fontWeight: 600,
+                        }}
+                        onClick={() => handleRestore(ing)}
+                      >
+                        ♻️ Khôi phục
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          style={styles.editButton}
+                          onClick={() => handleEdit(ing)}
+                        >
+                          Sửa
+                        </button>
+                        <button
+                          style={{
+                            ...styles.editButton,
+                            color: "#EF4444",
+                            marginLeft: 8,
+                          }}
+                          onClick={() => handleDelete(ing)}
+                        >
+                          Xóa
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))
@@ -885,11 +961,15 @@ export default function IngredientsPage() {
                             borderRadius: "8px 0 0 8px",
                             borderRight: "none",
                           }}
-                          value={newIngredient.allowable_variance}
+                          value={newIngredient.allowable_variance || ""}
+                          placeholder="0"
                           onChange={(e) =>
                             setNewIngredient({
                               ...newIngredient,
-                              allowable_variance: Number(e.target.value),
+                              allowable_variance:
+                                e.target.value === ""
+                                  ? 0
+                                  : parseFloat(e.target.value),
                             })
                           }
                         />

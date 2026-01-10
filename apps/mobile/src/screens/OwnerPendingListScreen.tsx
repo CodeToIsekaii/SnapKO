@@ -14,8 +14,8 @@ import {
   ActivityIndicator,
   Animated,
 } from "react-native";
-import * as SecureStore from "expo-secure-store";
-import { createClient, RealtimeChannel } from "@supabase/supabase-js";
+import { RealtimeChannel } from "@supabase/supabase-js";
+import { supabase } from "../lib/supabase";
 import { Env } from "../env";
 
 interface PendingProfile {
@@ -41,7 +41,10 @@ export default function OwnerPendingListScreen({
 
   const loadPending = useCallback(async () => {
     try {
-      const token = await SecureStore.getItemAsync("session_token");
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
       if (!token) return;
 
       const res = await fetch(
@@ -73,12 +76,12 @@ export default function OwnerPendingListScreen({
   useEffect(() => {
     const setupRealtime = async () => {
       try {
-        const token = await SecureStore.getItemAsync("session_token");
-        if (!token) return;
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
 
-        const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
-          global: { headers: { Authorization: `Bearer ${token}` } },
-        });
+        // Supabase client already has the session from AuthContext
 
         channelRef.current = supabase
           .channel("pending-staff")
@@ -128,7 +131,10 @@ export default function OwnerPendingListScreen({
   const handleAction = async (profileId: string, approve: boolean) => {
     setActionLoading(profileId);
     try {
-      const token = await SecureStore.getItemAsync("session_token");
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
       if (!token) throw new Error("Not logged in");
 
       const res = await fetch(

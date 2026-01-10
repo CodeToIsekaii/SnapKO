@@ -26,7 +26,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { getDB } from "../../../db";
 import { supabase } from "../../../lib/supabase";
-import * as SecureStore from "expo-secure-store";
+// SecureStore removed - using supabase.auth.getSession() instead
 import InviteCodeGeneratorModal from "../../../components/InviteCodeGeneratorModal";
 import { useAuth } from "../../../contexts/AuthContext";
 import { Env } from "../../../env";
@@ -120,6 +120,7 @@ export default function SettingsScreen() {
   };
 
   // Toggle inventory model (Owner only) with Optimistic UI
+  // IMPORTANT: Must update BOTH profiles table AND businesses table for cross-device sync
   const handleToggleModel = async () => {
     console.log(
       "[Settings] handleToggleModel called, business_id:",
@@ -144,27 +145,39 @@ export default function SettingsScreen() {
     setChangingModel(true);
 
     try {
-      // 1. Update Server (profiles table has inventory_model)
-      const { error } = await supabase
+      // 1. Update profiles table (legacy compatibility)
+      const { error: profileError } = await supabase
         .from("profiles")
         .update({ inventory_model: newModel })
         .eq("id", profile.id);
 
-      if (error) throw error;
+      if (profileError) throw profileError;
 
-      // 2. Update Local SQLite
+      // 2. Update businesses table (CRITICAL for Desktop sync)
+      // Desktop reads inventory_model from businesses table first
+      const { error: businessError } = await supabase
+        .from("businesses")
+        .update({ inventory_model: newModel })
+        .eq("id", profile.business_id);
+
+      if (businessError) {
+        console.warn("[Settings] Failed to sync to businesses:", businessError);
+        // Don't fail the whole operation, but log the warning
+      }
+
+      // 3. Update Local SQLite
       const db = await getDB();
       await db.runAsync(
         "UPDATE local_profiles SET inventory_model = ? WHERE id = ?",
         [newModel, profile.id]
       );
 
-      // 3. Show success message
+      // 4. Show success message
       Alert.alert(
         "Thành công",
         `Đã đổi sang ${
           newModel === "SIMPLE" ? "Kho Đơn" : "Kho Kép"
-        }.\n\nVui lòng khởi động lại App để áp dụng hoàn toàn.`,
+        }.\n\nTất cả thiết bị sẽ tự đồng bộ sau vài giây.`,
         [{ text: "OK" }]
       );
     } catch (err: any) {
@@ -220,8 +233,12 @@ export default function SettingsScreen() {
   const confirmDeleteAccount = async () => {
     setDeleting(true);
     try {
-      const token = await SecureStore.getItemAsync("session_token");
-      if (!token) {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (sessionError || !token) {
         Alert.alert("Lỗi", "Bạn cần đăng nhập lại để thực hiện thao tác này");
         return;
       }
@@ -241,11 +258,10 @@ export default function SettingsScreen() {
       const result = await response.json();
 
       if (response.ok && result.success) {
-        // Clear local data
+        // Clear local data - signOut handles session cleanup
         const db = await getDB();
         await db.runAsync("DELETE FROM local_profiles");
-        await SecureStore.deleteItemAsync("session_token");
-        await SecureStore.deleteItemAsync("refresh_token");
+        await supabase.auth.signOut();
 
         Alert.alert(
           "Đã yêu cầu xóa tài khoản",
@@ -310,26 +326,24 @@ export default function SettingsScreen() {
               </View>
             </View>
           </View>
-          {/* Profile Edit - Owner only for now */}
-          {isOwner && (
-            <>
-              <View style={styles.divider} />
-              <TouchableOpacity
-                style={styles.menuRow}
-                onPress={() => {
-                  // TODO: Navigate to profile edit screen
-                  Alert.alert("Thông báo", "Tính năng đang phát triển");
-                }}
-              >
-                <Text style={styles.menuRowText}>✏️ Chỉnh sửa hồ sơ</Text>
-                <Ionicons
-                  name="chevron-forward"
-                  size={16}
-                  color={COLORS.textSecondary}
-                />
-              </TouchableOpacity>
-            </>
-          )}
+          {/* Profile Edit - All users can edit their own profile */}
+          <>
+            <View style={styles.divider} />
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                // Navigate to profile edit screen
+                router.push("/profile-edit" as any);
+              }}
+            >
+              <Text style={styles.menuRowText}>✏️ Chỉnh sửa hồ sơ</Text>
+              <Ionicons
+                name="chevron-forward"
+                size={16}
+                color={COLORS.textSecondary}
+              />
+            </TouchableOpacity>
+          </>
         </View>
       </View>
 

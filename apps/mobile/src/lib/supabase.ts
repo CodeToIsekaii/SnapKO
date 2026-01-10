@@ -3,45 +3,28 @@
  * Per .antigravityrules: Centralized in lib/supabase.ts
  *
  * Usage: import { supabase } from '@/lib/supabase';
+ *
+ * IMPORTANT: This MUST use the same storage adapter as AuthContext (AsyncStorage)
+ * Using different adapters causes session mismatch issues!
+ *
+ * Why AsyncStorage over SecureStore?
+ * - Supabase sessions can exceed SecureStore's 2KB limit
+ * - AsyncStorage is recommended by Supabase for React Native
+ * - Still secure via App Sandbox isolation
  */
 
 import { createClient } from "@supabase/supabase-js";
-import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Env } from "../env";
-
-// Custom storage adapter for React Native using expo-secure-store
-const ExpoSecureStoreAdapter = {
-  getItem: async (key: string): Promise<string | null> => {
-    try {
-      return await SecureStore.getItemAsync(key);
-    } catch {
-      return null;
-    }
-  },
-  setItem: async (key: string, value: string): Promise<void> => {
-    try {
-      await SecureStore.setItemAsync(key, value);
-    } catch (error) {
-      console.error("SecureStore setItem error:", error);
-    }
-  },
-  removeItem: async (key: string): Promise<void> => {
-    try {
-      await SecureStore.deleteItemAsync(key);
-    } catch (error) {
-      console.error("SecureStore removeItem error:", error);
-    }
-  },
-};
 
 /**
  * Supabase Client Singleton Instance
- * - Auth state persisted in SecureStore
+ * - Auth state persisted in AsyncStorage (same as AuthContext!)
  * - Auto-refresh tokens enabled
  */
 export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
   auth: {
-    storage: ExpoSecureStoreAdapter,
+    storage: AsyncStorage, // MUST match AuthContext to share session!
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false, // Important for React Native

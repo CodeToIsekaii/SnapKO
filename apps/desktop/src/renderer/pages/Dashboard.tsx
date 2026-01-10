@@ -59,6 +59,14 @@ export function Dashboard({ user }: DashboardProps) {
     return () => clearTimeout(syncTimer);
   }, []);
 
+  // Refresh profile when user opens Settings tab (to get latest model from server)
+  useEffect(() => {
+    if (activeTab === "settings") {
+      console.log("[Dashboard] Settings tab opened, refreshing profile...");
+      refreshProfile?.();
+    }
+  }, [activeTab, refreshProfile]);
+
   // Tab definitions - Updated with Settings
   const tabs: { id: TabId; label: string; icon: string }[] = [
     { id: "dashboard", label: "Dashboard", icon: "📊" },

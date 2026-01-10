@@ -11,7 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 interface Notification {
   id: string;
-  type: "warning" | "info" | "success";
+  type: "warning" | "info" | "success" | "error";
   message: string;
   time: string;
 }
@@ -33,7 +33,9 @@ export const NotificationModal = ({
   const getIcon = (type: string) => {
     switch (type) {
       case "warning":
-        return { name: "alert-circle" as const, color: "#EF4444" };
+        return { name: "alert-circle" as const, color: "#F59E0B" }; // Amber for warning
+      case "error":
+        return { name: "close-circle" as const, color: "#EF4444" }; // Red for error
       case "success":
         return { name: "checkmark-circle" as const, color: "#84CC16" };
       default:

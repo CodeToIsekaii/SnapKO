@@ -1,9 +1,20 @@
 import { useRouter } from "expo-router";
+import { useState, useCallback } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import DashboardScreenComponent from "../../../screens/DashboardScreen";
 import { Alert } from "react-native";
 
 export default function DashboardPage() {
   const router = useRouter();
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Increment refreshKey when screen gains focus (after returning from Quick Out, Transfer, etc.)
+  useFocusEffect(
+    useCallback(() => {
+      console.log("📋 [DashboardPage] Screen focused, incrementing refreshKey");
+      setRefreshKey((prev) => prev + 1);
+    }, [])
+  );
 
   return (
     <DashboardScreenComponent
@@ -33,6 +44,7 @@ export default function DashboardPage() {
         // Navigate to Quick Out screen
         router.push("/camera/quickout");
       }}
+      refreshKey={refreshKey}
     />
   );
 }

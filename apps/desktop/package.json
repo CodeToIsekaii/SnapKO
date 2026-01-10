@@ -8,7 +8,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "rebuild-sqlite": "electron-rebuild -f -w better-sqlite3",
+    "rebuild-sqlite": "npx rimraf ../../node_modules/better-sqlite3/build && npx @electron/rebuild -f -w better-sqlite3",
     "postinstall": "pnpm rebuild-sqlite"
   },
   "dependencies": {
@@ -29,8 +29,9 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.1.2",
     "electron": "^34.0.0",
-    "electron-rebuild": "^3.2.9",
+    "@electron/rebuild": "^3.7.1",
     "electron-vite": "^3.1.0",
+    "rimraf": "^6.0.1",
     "typescript": "^5.9.2",
     "vite": "^6.4.1"
   }

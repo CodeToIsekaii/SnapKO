@@ -23,45 +23,57 @@ export function setDatabaseBusinessId(id: string) {
 
   if (!db) return;
 
+  const database = db; // Local ref for TypeScript null-safety in closure
+
   try {
-    const transaction = db.transaction(() => {
+    const transaction = database.transaction(() => {
       // --- STEP 1: BACKFILL & FIX DATA ---
       // Fix Business ID for all tables
-      db.prepare(
-        "UPDATE local_ingredients SET business_id = ? WHERE business_id IS NULL"
-      ).run(id);
-      db.prepare(
-        "UPDATE local_recipes SET business_id = ? WHERE business_id IS NULL"
-      ).run(id);
+      database
+        .prepare(
+          "UPDATE local_ingredients SET business_id = ? WHERE business_id IS NULL"
+        )
+        .run(id);
+      database
+        .prepare(
+          "UPDATE local_recipes SET business_id = ? WHERE business_id IS NULL"
+        )
+        .run(id);
       // db.prepare("UPDATE batch_recipes SET business_id = ? WHERE business_id IS NULL").run(id);
 
       // Fix Aliases (Use '[]' for empty/null)
-      db.prepare(
-        "UPDATE local_ingredients SET aliases = '[]' WHERE aliases IS NULL OR aliases = ''"
-      ).run();
+      database
+        .prepare(
+          "UPDATE local_ingredients SET aliases = '[]' WHERE aliases IS NULL OR aliases = ''"
+        )
+        .run();
 
       // --- STEP 2: FLUSH QUEUE ---
       // Delete all PENDING/FAILED items to avoid conflicts
-      db.prepare("DELETE FROM local_sync_queue WHERE status != 'DONE'").run();
+      database
+        .prepare("DELETE FROM local_sync_queue WHERE status != 'DONE'")
+        .run();
 
       // Flush Legacy/Bad Queue Items (Double check)
-      db.prepare(
-        "DELETE FROM local_sync_queue WHERE table_name = 'recipes' AND payload LIKE '%\"id\":\"recipe_%'"
-      ).run();
+      database
+        .prepare(
+          "DELETE FROM local_sync_queue WHERE table_name = 'recipes' AND payload LIKE '%\"id\":\"recipe_%'"
+        )
+        .run();
 
       // --- STEP 3: RE-QUEUE V2 ---
       const migrationKey = "fix_requeue_v2_done";
-      const checkMig = db
+      const checkMig = database
         .prepare("SELECT value FROM local_system_meta WHERE key = ?")
         .get(migrationKey);
 
       if (!checkMig) {
         console.log("[Database] Starting Re-queue V2...");
-        const ingredients = db
+        const ingredients = database
           .prepare("SELECT * FROM local_ingredients WHERE business_id = ?")
           .all(id);
 
-        const insertQueue = db.prepare(
+        const insertQueue = database.prepare(
           "INSERT INTO local_sync_queue (action, table_name, payload, status) VALUES (?, ?, ?, ?)"
         );
 
@@ -75,9 +87,11 @@ export function setDatabaseBusinessId(id: string) {
         }
 
         // Mark done
-        db.prepare(
-          "INSERT OR REPLACE INTO local_system_meta (key, value) VALUES (?, ?)"
-        ).run(migrationKey, "true");
+        database
+          .prepare(
+            "INSERT OR REPLACE INTO local_system_meta (key, value) VALUES (?, ?)"
+          )
+          .run(migrationKey, "true");
       }
     });
 
@@ -312,6 +326,39 @@ export function initDatabase(): Database.Database {
   // Recovery: Reset Dead Letters (ERROR) to PENDING on startup
   runResetDeadLetters(db);
 
+  // LOG RETENTION: Auto-prune on startup
+  try {
+    const row = db
+      .prepare(
+        "SELECT value FROM local_system_meta WHERE key = 'log_retention_days'"
+      )
+      .get() as { value: string } | undefined;
+    let days = row ? parseInt(row.value) : 0;
+
+    if (!days) {
+      // Check role
+      const profile = db
+        .prepare("SELECT role FROM local_profiles LIMIT 1")
+        .get() as { role: string } | undefined;
+      // Staff: 10 days default (lighter). Owner: 30 days.
+      days = profile?.role === "STAFF" ? 10 : 30;
+    }
+
+    if (days > 0) {
+      console.log(`[Database] Auto-pruning logs older than ${days} days...`);
+      const info = db
+        .prepare(
+          `DELETE FROM pending_sync_logs 
+         WHERE synced = 1 
+         AND created_at < date('now', '-' || ? || ' days')`
+        )
+        .run(days.toString());
+      console.log(`[Database] Pruned ${info.changes} logs.`);
+    }
+  } catch (e) {
+    console.error(`[Database] Auto-prune failed: ${e}`);
+  }
+
   return db;
 }
 
@@ -465,17 +512,63 @@ export function closeDatabase(): void {
   }
 }
 
+/**
+ * Clear all local data on logout
+ * This prevents stale data from appearing when a new user logs in
+ */
+export function clearLocalData(): void {
+  const database = getDatabase();
+  try {
+    console.log("[Database] Clearing local data on logout...");
+
+    const transaction = database.transaction(() => {
+      // Clear all user data tables
+      database.prepare("DELETE FROM local_ingredients").run();
+      database.prepare("DELETE FROM local_recipes").run();
+      database.prepare("DELETE FROM local_recipe_ingredients").run();
+      database.prepare("DELETE FROM local_profiles").run();
+      database.prepare("DELETE FROM local_inventory_logs").run();
+      database.prepare("DELETE FROM pending_sync_logs").run();
+      database.prepare("DELETE FROM local_sync_queue").run();
+      database.prepare("DELETE FROM daily_inventory_stats").run();
+      // Reset migration flags so new user gets fresh sync
+      database.prepare("DELETE FROM local_system_meta").run();
+    });
+
+    transaction();
+
+    // Also reset businessId in memory
+    currentBusinessId = null;
+
+    console.log("[Database] Local data cleared successfully");
+  } catch (err) {
+    console.error("[Database] Failed to clear local data:", err);
+  }
+}
+
 // IPC handlers for renderer process
 export function registerDatabaseIPC(): void {
   // Get all ingredients
-  ipcMain.handle("db:getIngredients", () => {
-    const database = getDatabase();
-    return database
-      .prepare(
-        "SELECT * FROM local_ingredients WHERE archived != 1 OR archived IS NULL ORDER BY name"
-      )
-      .all();
-  });
+  ipcMain.handle(
+    "db:getIngredients",
+    (_event, options?: { includeArchived?: boolean }) => {
+      const database = getDatabase();
+      // If showHidden is true, show ONLY archived items
+      if (options?.includeArchived) {
+        return database
+          .prepare(
+            "SELECT * FROM local_ingredients WHERE archived = 1 ORDER BY name"
+          )
+          .all();
+      }
+      // Default: Show only active items
+      return database
+        .prepare(
+          "SELECT * FROM local_ingredients WHERE archived != 1 OR archived IS NULL ORDER BY name"
+        )
+        .all();
+    }
+  );
 
   // Add/update ingredient
   ipcMain.handle(
@@ -713,6 +806,52 @@ export function registerDatabaseIPC(): void {
     return [];
   });
 
+  // Log Retention
+  ipcMain.handle("db:getRetentionDays", () => {
+    const database = getDatabase();
+    try {
+      const row = database
+        .prepare(
+          "SELECT value FROM local_system_meta WHERE key = 'log_retention_days'"
+        )
+        .get() as { value: string };
+      return row ? parseInt(row.value) : 30;
+    } catch (e) {
+      return 30;
+    }
+  });
+
+  ipcMain.handle("db:setRetentionDays", (_event, days: number) => {
+    const database = getDatabase();
+    database
+      .prepare(
+        "INSERT OR REPLACE INTO local_system_meta (key, value) VALUES ('log_retention_days', ?)"
+      )
+      .run(days.toString());
+    return { success: true };
+  });
+
+  ipcMain.handle("db:pruneLogs", (_event, days: number) => {
+    const database = getDatabase();
+    if (days <= 0) return { success: true };
+
+    try {
+      console.log(`[Database] Pruning logs older than ${days} days...`);
+      const info = database
+        .prepare(
+          `DELETE FROM pending_sync_logs 
+         WHERE synced = 1 
+         AND created_at < date('now', '-' || ? || ' days')`
+        )
+        .run(days.toString());
+      console.log(`[Database] Pruned ${info.changes} old logs.`);
+      return { success: true, count: info.changes };
+    } catch (err: any) {
+      console.error("[Database] Prune logs failed:", err);
+      return { success: false, error: err.message };
+    }
+  });
+
   // ==================== WEEK 2: COGS REPORT ====================
   ipcMain.handle("db:getCOGSReport", () => {
     const database = getDatabase();
@@ -859,34 +998,50 @@ export function registerDatabaseIPC(): void {
 
   // ==================== RECIPES MANAGEMENT ====================
   // Get all recipes with their ingredients
-  ipcMain.handle("db:getRecipes", () => {
-    const database = getDatabase();
-    const recipes = database
-      .prepare("SELECT * FROM local_recipes WHERE is_active = 1 ORDER BY name")
-      .all() as any[];
+  ipcMain.handle(
+    "db:getRecipes",
+    (_event, options?: { includeArchived?: boolean }) => {
+      const database = getDatabase();
+      let recipes;
+      // If showHidden is true, show ONLY archived/inactive items
+      if (options?.includeArchived) {
+        recipes = database
+          .prepare(
+            "SELECT * FROM local_recipes WHERE is_active = 0 ORDER BY name"
+          )
+          .all() as any[];
+      } else {
+        // Default: Show only active items
+        recipes = database
+          .prepare(
+            "SELECT * FROM local_recipes WHERE is_active = 1 ORDER BY name"
+          )
+          .all() as any[];
+      }
 
-    // Load ingredients for each recipe
-    const getIngredientsStmt = database.prepare(`
+      // Load ingredients for each recipe
+      const getIngredientsStmt = database.prepare(`
       SELECT ri.*, i.name as ingredient_name, i.base_unit, i.unit_cost
       FROM local_recipe_ingredients ri
       LEFT JOIN local_ingredients i ON ri.ingredient_id = i.id
       WHERE ri.recipe_id = ?
     `);
 
-    return recipes.map((recipe) => {
-      const ingredients = getIngredientsStmt.all(recipe.id) as any[];
-      return {
-        ...recipe,
-        ingredients: ingredients.map((ing) => ({
-          ingredient_id: ing.ingredient_id,
-          name: ing.ingredient_name || "Unknown",
-          quantity: ing.quantity,
-          unit: ing.unit || ing.base_unit || "g",
-          cost: ing.quantity * (ing.unit_cost || 0),
-        })),
-      };
-    });
-  });
+      return recipes.map((recipe) => {
+        const ingredients = getIngredientsStmt.all(recipe.id) as any[];
+        return {
+          ...recipe,
+          ingredients: ingredients.map((ing) => ({
+            ingredient_id: ing.ingredient_id,
+            name: ing.ingredient_name || "Unknown",
+            quantity: ing.quantity,
+            unit: ing.unit || ing.base_unit || "g",
+            cost: ing.quantity * (ing.unit_cost || 0),
+          })),
+        };
+      });
+    }
+  );
 
   // Upsert recipe (insert or update)
   ipcMain.handle(
@@ -1006,11 +1161,19 @@ export function registerDatabaseIPC(): void {
       .prepare("UPDATE local_recipes SET is_active = 0 WHERE id = ?")
       .run(recipeId);
 
-    // Also queue for sync (to delete on Supabase)
+    // Also queue for sync (Use UPSERT with is_active=false for soft delete)
     const queueStmt = database.prepare(
       "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
     );
-    queueStmt.run("DELETE", "recipes", JSON.stringify({ id: recipeId }));
+    queueStmt.run(
+      "UPSERT",
+      "recipes",
+      JSON.stringify({
+        id: recipeId,
+        is_active: false,
+        updated_at: new Date().toISOString(),
+      })
+    );
 
     console.log("[Database] Recipe deleted:", recipeId);
     return { success: true };
@@ -1023,17 +1186,71 @@ export function registerDatabaseIPC(): void {
       .prepare("UPDATE local_ingredients SET archived = 1 WHERE id = ?")
       .run(ingredientId);
 
-    // Also queue for sync (to delete on Supabase)
+    // Also queue for sync (Use UPSERT with archived=true for soft delete consistency)
     const queueStmt = database.prepare(
       "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
     );
     queueStmt.run(
-      "DELETE",
+      "UPSERT",
       "ingredients",
-      JSON.stringify({ id: ingredientId })
+      JSON.stringify({
+        id: ingredientId,
+        archived: true,
+        updated_at: new Date().toISOString(),
+      })
     );
 
     console.log("[Database] Ingredient archived:", ingredientId);
+    return { success: true };
+  });
+
+  // Restore ingredient
+  ipcMain.handle("db:restoreIngredient", (_event, ingredientId: string) => {
+    const database = getDatabase();
+    database
+      .prepare("UPDATE local_ingredients SET archived = 0 WHERE id = ?")
+      .run(ingredientId);
+
+    // Queue sync
+    const queueStmt = database.prepare(
+      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+    );
+    queueStmt.run(
+      "UPSERT",
+      "ingredients",
+      JSON.stringify({
+        id: ingredientId,
+        archived: false,
+        updated_at: new Date().toISOString(),
+      })
+    );
+
+    console.log("[Database] Ingredient restored:", ingredientId);
+    return { success: true };
+  });
+
+  // Restore recipe
+  ipcMain.handle("db:restoreRecipe", (_event, recipeId: string) => {
+    const database = getDatabase();
+    database
+      .prepare("UPDATE local_recipes SET is_active = 1 WHERE id = ?")
+      .run(recipeId);
+
+    // Queue sync
+    const queueStmt = database.prepare(
+      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+    );
+    queueStmt.run(
+      "UPSERT",
+      "recipes",
+      JSON.stringify({
+        id: recipeId,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      })
+    );
+
+    console.log("[Database] Recipe restored:", recipeId);
     return { success: true };
   });
 

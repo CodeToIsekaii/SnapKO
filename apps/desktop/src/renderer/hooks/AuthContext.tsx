@@ -126,7 +126,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     console.log("[AuthContext] Auth state changed: INITIAL_SESSION");
     checkSession();
-    checkSession();
   }, [fetchProfile]);
 
   // Listen for token refresh to keep Main Process sync worker alive

@@ -16,7 +16,6 @@ import React, {
 } from "react";
 import * as SecureStore from "expo-secure-store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as FileSystem from "expo-file-system";
 import { createClient, type Session, type User } from "@supabase/supabase-js";
 import type { ProfileRoleEnum, ProfileStatusEnum } from "@snapko/ts-types";
 import { Env } from "../env";

@@ -49,7 +49,7 @@ export interface ElectronAPI {
   }>;
 
   // Database - Ingredients
-  getIngredients: () => Promise<any[]>;
+  getIngredients: (options?: { includeArchived?: boolean }) => Promise<any[]>;
   upsertIngredient: (ingredient: any) => Promise<{ success: boolean }>;
   getPendingLogs: () => Promise<any[]>;
   addPendingLog: (log: any) => Promise<{ success: boolean }>;
@@ -59,11 +59,20 @@ export interface ElectronAPI {
     businessId: string
   ) => Promise<{ success: boolean; error?: string }>;
   deleteIngredient: (ingredientId: string) => Promise<{ success: boolean }>;
+  restoreIngredient: (ingredientId: string) => Promise<{ success: boolean }>;
+
+  // Log Retention
+  getRetentionDays: () => Promise<number>;
+  setRetentionDays: (days: number) => Promise<{ success: boolean }>;
+  pruneLogs: (
+    days: number
+  ) => Promise<{ success: boolean; count?: number; error?: string }>;
 
   // Database - Recipes
-  getRecipes: () => Promise<any[]>;
+  getRecipes: (options?: { includeArchived?: boolean }) => Promise<any[]>;
   upsertRecipe: (recipe: any) => Promise<{ success: boolean }>;
   deleteRecipe: (recipeId: string) => Promise<{ success: boolean }>;
+  restoreRecipe: (recipeId: string) => Promise<{ success: boolean }>;
 
   // Week 2: COGS Reports
   getCOGSReport: () => Promise<{
@@ -141,7 +150,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   syncFromServer: () => ipcRenderer.invoke("sync:pull"),
 
   // ==================== DATABASE ====================
-  getIngredients: () => ipcRenderer.invoke("db:getIngredients"),
+  getIngredients: (options?: { includeArchived?: boolean }) =>
+    ipcRenderer.invoke("db:getIngredients", options),
 
   upsertIngredient: (ingredient: any) =>
     ipcRenderer.invoke("db:upsertIngredient", ingredient),
@@ -158,14 +168,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("db:fix-missing-business-id", businessId),
   deleteIngredient: (ingredientId: string) =>
     ipcRenderer.invoke("db:deleteIngredient", ingredientId),
+  restoreIngredient: (ingredientId: string) =>
+    ipcRenderer.invoke("db:restoreIngredient", ingredientId),
+
+  // Log Retention
+  getRetentionDays: () => ipcRenderer.invoke("db:getRetentionDays"),
+  setRetentionDays: (days: number) =>
+    ipcRenderer.invoke("db:setRetentionDays", days),
+  pruneLogs: (days: number) => ipcRenderer.invoke("db:pruneLogs", days),
 
   // ==================== DATABASE: RECIPES ====================
-  getRecipes: () => ipcRenderer.invoke("db:getRecipes"),
+  getRecipes: (options?: { includeArchived?: boolean }) =>
+    ipcRenderer.invoke("db:getRecipes", options),
 
   upsertRecipe: (recipe: any) => ipcRenderer.invoke("db:upsertRecipe", recipe),
 
   deleteRecipe: (recipeId: string) =>
     ipcRenderer.invoke("db:deleteRecipe", recipeId),
+  restoreRecipe: (recipeId: string) =>
+    ipcRenderer.invoke("db:restoreRecipe", recipeId),
 
   // ==================== WEEK 2: COGS REPORTS ====================
   getCOGSReport: () => ipcRenderer.invoke("db:getCOGSReport"),

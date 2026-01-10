@@ -14,12 +14,13 @@ import {
   ScrollView,
   ActivityIndicator,
 } from "react-native";
-import * as SecureStore from "expo-secure-store";
+import { supabase } from "../lib/supabase";
 import { Env } from "../env";
 
 interface ProfileEditScreenProps {
   onBack: () => void;
   onSave: () => void;
+  isOwner?: boolean;
   initialData?: {
     fullName?: string;
     businessName?: string;
@@ -30,6 +31,7 @@ interface ProfileEditScreenProps {
 export default function ProfileEditScreen({
   onBack,
   onSave,
+  isOwner = true,
   initialData,
 }: ProfileEditScreenProps) {
   const [formData, setFormData] = useState({
@@ -38,24 +40,56 @@ export default function ProfileEditScreen({
     phoneNumber: "",
   });
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  // Load initial data
+  // Load initial data and fetch business name for owners
   useEffect(() => {
-    if (initialData) {
-      setFormData({
-        fullName: initialData.fullName || "",
-        businessName: initialData.businessName || "",
-        phoneNumber: initialData.phoneNumber || "",
-      });
-    }
-  }, [initialData]);
+    const loadData = async () => {
+      // Set initial data from props
+      if (initialData) {
+        setFormData({
+          fullName: initialData.fullName || "",
+          businessName: initialData.businessName || "",
+          phoneNumber: initialData.phoneNumber || "",
+        });
+      }
+
+      // For owners, fetch business name from database
+      if (isOwner) {
+        try {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+          if (user) {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("business_id, businesses(name)")
+              .eq("id", user.id)
+              .single();
+
+            if (profile?.businesses) {
+              const businessName = (profile.businesses as any)?.name || "";
+              setFormData((prev) => ({ ...prev, businessName }));
+            }
+          }
+        } catch (err) {
+          console.error("[ProfileEdit] Failed to load business name:", err);
+        }
+      }
+
+      setLoading(false);
+    };
+
+    loadData();
+  }, [initialData, isOwner]);
 
   const handleSave = async () => {
     if (!formData.fullName.trim()) {
       Alert.alert("Lỗi", "Tên không được để trống");
       return;
     }
-    if (!formData.businessName.trim()) {
+    // Only validate businessName for owners
+    if (isOwner && !formData.businessName.trim()) {
       Alert.alert("Lỗi", "Tên cửa hàng không được để trống");
       return;
     }
@@ -63,8 +97,12 @@ export default function ProfileEditScreen({
     setSaving(true);
 
     try {
-      const token = await SecureStore.getItemAsync("session_token");
-      if (!token) {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (sessionError || !token) {
         Alert.alert("Lỗi", "Bạn cần đăng nhập lại");
         return;
       }
@@ -81,7 +119,7 @@ export default function ProfileEditScreen({
           },
           body: JSON.stringify({
             fullName: formData.fullName.trim(),
-            businessName: formData.businessName.trim(),
+            businessName: isOwner ? formData.businessName.trim() : undefined,
             phoneNumber: formData.phoneNumber.trim() || null,
           }),
         }
@@ -103,6 +141,22 @@ export default function ProfileEditScreen({
       setSaving(false);
     }
   };
+
+  // Loading state
+  if (loading) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "#121212",
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
+        <ActivityIndicator size="large" color="#E07A2F" />
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: "#121212" }}>
@@ -159,45 +213,47 @@ export default function ProfileEditScreen({
           />
         </View>
 
-        {/* Business Name */}
-        <View style={{ marginBottom: 20 }}>
-          <Text
-            style={{
-              color: "#B8B3A8",
-              fontSize: 14,
-              fontWeight: "500",
-              marginBottom: 8,
-            }}
-          >
-            Tên cửa hàng *
-          </Text>
-          <TextInput
-            value={formData.businessName}
-            onChangeText={(text) =>
-              setFormData({ ...formData, businessName: text })
-            }
-            placeholder="Cà phê Mê Linh"
-            placeholderTextColor="#666"
-            style={{
-              backgroundColor: "#1A1A1A",
-              borderRadius: 12,
-              padding: 16,
-              color: "white",
-              fontSize: 16,
-              borderWidth: 1,
-              borderColor: "#2A2A2A",
-            }}
-          />
-          <Text
-            style={{
-              color: "#64748B",
-              fontSize: 12,
-              marginTop: 6,
-            }}
-          >
-            Tên này sẽ hiển thị cho nhân viên khi tham gia
-          </Text>
-        </View>
+        {/* Business Name - Owner Only */}
+        {isOwner && (
+          <View style={{ marginBottom: 20 }}>
+            <Text
+              style={{
+                color: "#B8B3A8",
+                fontSize: 14,
+                fontWeight: "500",
+                marginBottom: 8,
+              }}
+            >
+              Tên cửa hàng *
+            </Text>
+            <TextInput
+              value={formData.businessName}
+              onChangeText={(text) =>
+                setFormData({ ...formData, businessName: text })
+              }
+              placeholder="Cà phê Mê Linh"
+              placeholderTextColor="#666"
+              style={{
+                backgroundColor: "#1A1A1A",
+                borderRadius: 12,
+                padding: 16,
+                color: "white",
+                fontSize: 16,
+                borderWidth: 1,
+                borderColor: "#2A2A2A",
+              }}
+            />
+            <Text
+              style={{
+                color: "#64748B",
+                fontSize: 12,
+                marginTop: 6,
+              }}
+            >
+              Tên này sẽ hiển thị cho nhân viên khi tham gia
+            </Text>
+          </View>
+        )}
 
         {/* Phone Number */}
         <View style={{ marginBottom: 20 }}>

@@ -18,7 +18,7 @@ import {
   Alert,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import * as SecureStore from "expo-secure-store";
+import { supabase } from "../lib/supabase";
 import { Env } from "../env";
 
 interface InviteCodeGeneratorModalProps {
@@ -43,7 +43,10 @@ export default function InviteCodeGeneratorModal({
     setCopied(false);
 
     try {
-      const token = await SecureStore.getItemAsync("session_token");
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
       if (!token) {
         throw new Error("Chưa đăng nhập");
       }
