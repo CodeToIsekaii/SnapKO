@@ -243,6 +243,14 @@ export default function DashboardScreen({
 
       setIsOwner(isOwnerRole);
 
+      // FIX: Migrate old logs with incorrect type values (one-time fix)
+      await db.runAsync(
+        `UPDATE pending_sync_logs SET type = 'LENT' WHERE type = 'LOAN'`
+      );
+      await db.runAsync(
+        `UPDATE pending_sync_logs SET type = 'WASTE' WHERE type = 'MARKETING'`
+      );
+
       // Check if today has any SALES type logs
       const salesLogs = await db.getAllAsync<any>(
         `SELECT id FROM pending_sync_logs WHERE type = 'SALES' AND date(created_at) = ?`,
@@ -272,7 +280,7 @@ export default function DashboardScreen({
         `SELECT psl.*, li.name as ingredient_name 
          FROM pending_sync_logs psl 
          LEFT JOIN local_ingredients li ON psl.ingredient_id = li.id
-         WHERE psl.type IN ('TRANSFER', 'WASTE', 'LOAN', 'MARKETING', 'IMPORT', 'STOCK_CHECK') 
+         WHERE psl.type IN ('TRANSFER', 'WASTE', 'LENT', 'IMPORT', 'STOCK_CHECK', 'AUDIT') 
            AND psl.created_at >= ? AND psl.created_at <= ?
          ORDER BY psl.created_at DESC
          LIMIT 20`,
@@ -280,12 +288,13 @@ export default function DashboardScreen({
       );
       setTodayActivity(allActivities);
 
-      // Load today's Quick Outs (WASTE/LOAN/MARKETING) for dedicated widget
+      // Load today's Quick Outs (WASTE/LENT) for dedicated widget
+      // Note: LOAN maps to LENT, MARKETING maps to WASTE in database
       const quickOuts = await db.getAllAsync<any>(
         `SELECT psl.*, li.name as ingredient_name 
          FROM pending_sync_logs psl 
          LEFT JOIN local_ingredients li ON psl.ingredient_id = li.id
-         WHERE psl.type IN ('WASTE', 'LOAN', 'MARKETING') 
+         WHERE psl.type IN ('WASTE', 'LENT') 
            AND psl.created_at >= ? AND psl.created_at <= ?
          ORDER BY psl.created_at DESC`,
         [todayStart.toISOString(), todayEnd.toISOString()]
