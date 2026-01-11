@@ -7,12 +7,19 @@ import { COLORS } from "../styles/theme";
 
 interface HeaderProps {
   user: User;
+  businessId?: string;
   syncStatus: SyncStatus;
   onSync: () => void;
   onLogout: () => void;
 }
 
-export function Header({ user, syncStatus, onSync, onLogout }: HeaderProps) {
+export function Header({
+  user,
+  businessId,
+  syncStatus,
+  onSync,
+  onLogout,
+}: HeaderProps) {
   return (
     <header style={styles.header}>
       {/* Left: Logo */}
@@ -46,7 +53,19 @@ export function Header({ user, syncStatus, onSync, onLogout }: HeaderProps) {
 
       {/* Right: User Info */}
       <div style={styles.userSection}>
-        <span style={styles.userEmail}>{user.email}</span>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-end",
+          }}
+        >
+          <span style={styles.userEmail}>{user.email}</span>
+          {/* Debug: Show Business ID */}
+          <span style={{ fontSize: 10, color: COLORS.textMuted }}>
+            ID: ID: {businessId?.substring(0, 8) || "Loading..."}
+          </span>
+        </div>
         <button onClick={onLogout} style={styles.logoutButton}>
           Đăng xuất
         </button>

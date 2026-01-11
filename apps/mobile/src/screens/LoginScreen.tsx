@@ -19,6 +19,7 @@ import {
   ScrollView,
   Alert,
   Image,
+  Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { loginSchema, registerSchema, getFirstError } from "@snapko/shared";
@@ -46,7 +47,7 @@ interface LoginScreenProps {
 }
 
 export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, resetPassword } = useAuth();
   const { state: googleState, signInWithGoogle } = useGoogleAuth();
   const [isSubmitPressed, setIsSubmitPressed] = useState(false);
   const [isGooglePressed, setIsGooglePressed] = useState(false);
@@ -58,6 +59,11 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Forgot Password State
+  const [forgotPasswordVisible, setForgotPasswordVisible] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
 
   // Handle Google auth state changes
   useEffect(() => {
@@ -148,6 +154,42 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
     setMode(mode === "login" ? "register" : "login");
     setError(null);
     setConfirmPassword("");
+  };
+
+  const handleResetPassword = async () => {
+    if (!forgotEmail) {
+      Alert.alert("Lỗi", "Vui lòng nhập Email hoặc Số điện thoại");
+      return;
+    }
+
+    // Check if phone number
+    const cleanInput = forgotEmail.trim().replace(/\s|-/g, "");
+    const phoneRegex = /^0\d{8,10}$/;
+    if (phoneRegex.test(cleanInput)) {
+      setForgotPasswordVisible(false);
+      Alert.alert(
+        "Nhân viên",
+        "Vui lòng liên hệ với Chủ cửa hàng để được hỗ trợ đặt lại mật khẩu."
+      );
+      return;
+    }
+
+    // Assume Email
+    setResetLoading(true);
+    try {
+      await resetPassword(forgotEmail);
+
+      Alert.alert(
+        "Đã gửi email",
+        "Vui lòng kiểm tra hộp thư (cả mục Spam) để đặt lại mật khẩu."
+      );
+      setForgotPasswordVisible(false);
+      setForgotEmail("");
+    } catch (err: any) {
+      Alert.alert("Lỗi", err.message || "Không thể gửi yêu cầu");
+    } finally {
+      setResetLoading(false);
+    }
   };
 
   return (
@@ -270,6 +312,18 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
               }}
             />
           </View>
+
+          {/* Forgot Password Link */}
+          {mode === "login" && (
+            <Pressable
+              onPress={() => setForgotPasswordVisible(true)}
+              style={{ alignSelf: "flex-end" }}
+            >
+              <Text style={{ color: colors.primary, fontSize: 14 }}>
+                Quên mật khẩu?
+              </Text>
+            </Pressable>
+          )}
 
           {/* Confirm Password (Register only) */}
           {mode === "register" && (
@@ -487,6 +541,106 @@ export default function LoginScreen({ onStaffJoin }: LoginScreenProps) {
           và Chính sách Quyền riêng tư của SnapKO.
         </Text>
       </ScrollView>
+
+      {/* Forgot Password Modal */}
+      <Modal
+        visible={forgotPasswordVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setForgotPasswordVisible(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.8)",
+            justifyContent: "center",
+            padding: 24,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: colors.surface,
+              borderRadius: 16,
+              padding: 24,
+              borderWidth: 1,
+              borderColor: colors.border,
+            }}
+          >
+            <Text
+              style={{
+                color: colors.textPrimary,
+                fontSize: 20,
+                fontWeight: "bold",
+                marginBottom: 8,
+              }}
+            >
+              Quên mật khẩu?
+            </Text>
+            <Text
+              style={{
+                color: colors.textSecondary,
+                marginBottom: 24,
+              }}
+            >
+              Nhập Email hoặc SĐT (đối với Nhân viên) để yêu cầu cấp lại mật
+              khẩu.
+            </Text>
+
+            <TextInput
+              value={forgotEmail}
+              onChangeText={setForgotEmail}
+              placeholder="Nhập Email / SĐT của bạn"
+              placeholderTextColor={colors.textMuted}
+              style={{
+                backgroundColor: "#121212",
+                borderRadius: 12,
+                padding: 16,
+                color: colors.textPrimary,
+                fontSize: 16,
+                borderWidth: 1,
+                borderColor: colors.border,
+                marginBottom: 24,
+              }}
+            />
+
+            <View style={{ flexDirection: "row", gap: 12 }}>
+              <Pressable
+                onPress={() => setForgotPasswordVisible(false)}
+                style={{
+                  flex: 1,
+                  padding: 16,
+                  borderRadius: 12,
+                  backgroundColor: "#2A2A2A",
+                  alignItems: "center",
+                }}
+              >
+                <Text
+                  style={{ color: colors.textSecondary, fontWeight: "600" }}
+                >
+                  Hủy
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={handleResetPassword}
+                disabled={resetLoading}
+                style={{
+                  flex: 1,
+                  padding: 16,
+                  borderRadius: 12,
+                  backgroundColor: colors.primary,
+                  alignItems: "center",
+                }}
+              >
+                {resetLoading ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text style={{ color: "white", fontWeight: "600" }}>Gửi</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }

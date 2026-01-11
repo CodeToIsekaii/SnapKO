@@ -56,12 +56,14 @@ interface SettingsScreenProps {
   onBack?: () => void;
   onLogout?: () => void;
   onEditProfile?: () => void;
+  onManageStaff?: () => void;
 }
 
 export default function SettingsScreen({
   onBack,
   onLogout,
   onEditProfile,
+  onManageStaff,
 }: SettingsScreenProps) {
   // const router = useRouter(); // REMOVE: App.tsx uses manual navigation
   const { signOut, authState } = useAuth();
@@ -314,6 +316,16 @@ export default function SettingsScreen({
                     {isOwner ? "Chủ quán" : "Nhân viên"}
                   </Text>
                 </View>
+                {/* Debug: Show Business ID */}
+                <Text
+                  style={{
+                    color: COLORS.textMuted,
+                    fontSize: 10,
+                    marginTop: 4,
+                  }}
+                >
+                  ID: {profile?.business_id?.substring(0, 8)}...
+                </Text>
               </View>
             </View>
             {/* Edit Profile Button - All users can edit their own profile */}

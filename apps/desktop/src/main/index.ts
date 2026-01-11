@@ -46,6 +46,7 @@ interface SessionData {
   user: {
     id: string;
     email: string;
+    business_id?: string;
   };
 }
 
@@ -129,18 +130,6 @@ function registerAuthIPC() {
 
         currentSession = data.session;
 
-        // Persist session to disk for auto-login on restart
-        if (data.session && data.user) {
-          saveSession({
-            access_token: data.session.access_token,
-            refresh_token: data.session.refresh_token || "",
-            user: {
-              id: data.user.id,
-              email: data.user.email || "",
-            },
-          });
-        }
-
         // Set token for sync client
         if (data.session?.access_token) {
           setAuthToken(data.session.access_token);
@@ -156,20 +145,34 @@ function registerAuthIPC() {
           // Note: We need to get businessId from profile - for now use user.id as placeholder
           // In production, fetch profile first to get business_id
           /* FIXED: Fetch profile to get business_id and set in database */
-          authClient
+          // Fetch profile to get business_id
+          const { data: profile } = await authClient
             .from("profiles")
             .select("business_id")
             .eq("id", data.user.id)
-            .single()
-            .then(({ data: profile }) => {
-              if (profile?.business_id) {
-                setDatabaseBusinessId(profile.business_id);
-              }
-            });
+            .single();
 
+          if (profile?.business_id) {
+            setDatabaseBusinessId(profile.business_id);
+          }
+
+          // Persist session to disk (Moved here to include business_id)
+          if (data.session && data.user) {
+            saveSession({
+              access_token: data.session.access_token,
+              refresh_token: data.session.refresh_token || "",
+              user: {
+                id: data.user.id,
+                email: data.user.email || "",
+                business_id: profile?.business_id,
+              },
+            });
+          }
+
+          // Start Realtime with Correct Business ID
           startRealtimeListener(
             data.session.access_token,
-            data.user?.id || "", // TODO: Replace with actual business_id
+            profile?.business_id || data.user?.id || "",
             mainWindow
           );
         }
@@ -702,6 +705,15 @@ app.whenReady().then(async () => {
         );
         currentSession = data.session;
 
+        if (savedSession.user?.business_id) {
+          console.log(
+            "[Session] Using cached business_id:",
+            savedSession.user.business_id
+          );
+          setDatabaseBusinessId(savedSession.user.business_id);
+          currentSession.business_id = savedSession.user.business_id;
+        }
+
         // Update saved session with new tokens
         if (data.session.access_token !== savedSession.access_token) {
           saveSession({
@@ -710,6 +722,7 @@ app.whenReady().then(async () => {
             user: {
               id: data.session.user?.id || "",
               email: data.session.user?.email || "",
+              business_id: savedSession.user.business_id, // Keep existing business_id
             },
           });
         }
@@ -724,19 +737,31 @@ app.whenReady().then(async () => {
           setDatabaseSupabaseClient(client);
         }
 
-        /* FIXED: Fetch profile to get business_id (Restore Session) */
-        authClient
-          .from("profiles")
-          .select("business_id")
-          .eq("id", data.session.user.id)
-          .single()
-          .then(({ data: profile }) => {
-            if (profile?.business_id) {
-              setDatabaseBusinessId(profile.business_id);
-            }
-          });
+        // Fetch profile to get/refresh business_id (Restore Session)
+        // This is non-blocking if we have cached ID, but we should await it to be safe for Realtime
+        if (!currentSession.business_id) {
+          const { data: profile } = await authClient
+            .from("profiles")
+            .select("business_id")
+            .eq("id", data.session.user.id)
+            .single();
 
-        // Note: Realtime listener will start after window is created and mainWindow is available
+          if (profile?.business_id) {
+            setDatabaseBusinessId(profile.business_id);
+            currentSession.business_id = profile.business_id;
+
+            // Update cache with found business_id
+            saveSession({
+              access_token: data.session.access_token,
+              refresh_token: data.session.refresh_token || "",
+              user: {
+                id: data.session.user?.id || "",
+                email: data.session.user?.email || "",
+                business_id: profile.business_id,
+              },
+            });
+          }
+        }
       }
     } catch (err) {
       console.error("[Session] Restore error:", err);
@@ -750,7 +775,7 @@ app.whenReady().then(async () => {
   if (currentSession && mainWindow) {
     startRealtimeListener(
       currentSession.access_token,
-      currentSession.user?.id || "",
+      currentSession.business_id || currentSession.user?.id || "",
       mainWindow
     );
   }

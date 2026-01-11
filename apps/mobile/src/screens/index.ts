@@ -23,3 +23,4 @@ export { default as QuickOutScreen } from "./QuickOutScreen";
 export { default as IngredientEditScreen } from "./IngredientEditScreen";
 export { default as ConfirmLogScreen } from "./ConfirmLogScreen";
 export type { ConfirmItem } from "./ConfirmLogScreen";
+export { default as StaffManagementScreen } from "./StaffManagementScreen";

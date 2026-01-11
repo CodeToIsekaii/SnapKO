@@ -35,6 +35,7 @@ import {
   ProfileEditScreen,
   AdHocTransferScreen,
   QuickOutScreen,
+  StaffManagementScreen,
 } from "./src/screens";
 import { InventoryModelProvider } from "./src/contexts/InventoryModelContext";
 import type {
@@ -74,7 +75,8 @@ type Screen =
   | "INGREDIENT_EDIT"
   | "PROFILE_EDIT"
   | "TRANSFER"
-  | "QUICK_OUT";
+  | "QUICK_OUT"
+  | "STAFF_MANAGEMENT";
 
 // State for ConfirmLog screen
 interface ConfirmLogParams {
@@ -221,10 +223,16 @@ function AppNavigator() {
             setCurrentScreen(isOwner ? "DASHBOARD" : "INVENTORY_CAPTURE")
           }
           onLogout={signOut}
-          userName={profile.fullName || undefined}
-          userRole={profile.role}
           onEditProfile={() => setCurrentScreen("PROFILE_EDIT")}
+          onManageStaff={
+            isOwner ? () => setCurrentScreen("STAFF_MANAGEMENT") : undefined
+          }
         />
+      );
+
+    case "STAFF_MANAGEMENT":
+      return (
+        <StaffManagementScreen onBack={() => setCurrentScreen("SETTINGS")} />
       );
 
     case "PROFILE_EDIT":

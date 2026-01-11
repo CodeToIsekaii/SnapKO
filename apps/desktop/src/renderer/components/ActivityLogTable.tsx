@@ -16,9 +16,7 @@ interface ActivityLogTableProps {
 export const ActivityLogTable: React.FC<ActivityLogTableProps> = ({ logs }) => {
   console.log("ActivityLogTable rendering. Logs:", logs);
   return (
-    <div
-      style={{ ...styles.container, border: "2px solid red", minHeight: 100 }}
-    >
+    <div style={{ ...styles.container, minHeight: 100 }}>
       <h3 style={styles.title}>📜 Nhật ký hoạt động</h3>
       <div style={styles.tableWrapper}>
         <table style={styles.table}>

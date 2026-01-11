@@ -13,9 +13,13 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
 import { Env } from "../env";
+import { useAuth } from "../contexts/AuthContext";
 
 interface ProfileEditScreenProps {
   onBack: () => void;
@@ -41,6 +45,17 @@ export default function ProfileEditScreen({
   });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Password Change State
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [passwordData, setPasswordData] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  const { updatePassword } = useAuth();
 
   // Load initial data and fetch business name for owners
   useEffect(() => {
@@ -139,6 +154,42 @@ export default function ProfileEditScreen({
       Alert.alert("Lỗi", "Có lỗi xảy ra khi cập nhật");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handlePasswordChange = async () => {
+    const { currentPassword, newPassword, confirmPassword } = passwordData;
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      Alert.alert("Lỗi", "Vui lòng điền đầy đủ thông tin mật khẩu");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      Alert.alert("Lỗi", "Mật khẩu mới không khớp");
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      Alert.alert("Lỗi", "Mật khẩu mới phải có ít nhất 6 ký tự");
+      return;
+    }
+
+    setChangingPassword(true);
+
+    try {
+      await updatePassword(currentPassword, newPassword);
+      Alert.alert("Thành công", "Đổi mật khẩu thành công!");
+      setPasswordData({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+      });
+      setShowPasswordChange(false);
+    } catch (err: any) {
+      Alert.alert("Lỗi", err.message || "Không thể đổi mật khẩu");
+    } finally {
+      setChangingPassword(false);
     }
   };
 
@@ -294,6 +345,128 @@ export default function ProfileEditScreen({
           >
             Số liên hệ khi nhân viên cần hỗ trợ
           </Text>
+        </View>
+        {/* Password Change Section - Collapsible */}
+        <View style={{ marginTop: 24, marginBottom: 16 }}>
+          <Pressable
+            onPress={() => setShowPasswordChange(!showPasswordChange)}
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              paddingVertical: 12,
+              borderTopWidth: 1,
+              borderTopColor: "#2A2A2A",
+            }}
+          >
+            <Text style={{ color: "#E07A2F", fontSize: 16, fontWeight: "600" }}>
+              {showPasswordChange ? "▼ Đổi mật khẩu" : "▶ Đổi mật khẩu"}
+            </Text>
+          </Pressable>
+
+          {showPasswordChange && (
+            <View style={{ gap: 12, marginTop: 8 }}>
+              {/* Current Password */}
+              <View>
+                <Text style={{ color: "#B8B3A8", marginBottom: 6 }}>
+                  Mật khẩu hiện tại
+                </Text>
+                <TextInput
+                  value={passwordData.currentPassword}
+                  onChangeText={(t) =>
+                    setPasswordData({ ...passwordData, currentPassword: t })
+                  }
+                  secureTextEntry
+                  style={{
+                    backgroundColor: "#1A1A1A",
+                    padding: 12,
+                    borderRadius: 8,
+                    color: "white",
+                    borderWidth: 1,
+                    borderColor: "#333",
+                  }}
+                  placeholderTextColor="#666"
+                  placeholder="Nhập mật khẩu cũ"
+                />
+              </View>
+
+              {/* New Password */}
+              <View>
+                <Text style={{ color: "#B8B3A8", marginBottom: 6 }}>
+                  Mật khẩu mới
+                </Text>
+                <TextInput
+                  value={passwordData.newPassword}
+                  onChangeText={(t) =>
+                    setPasswordData({ ...passwordData, newPassword: t })
+                  }
+                  secureTextEntry
+                  style={{
+                    backgroundColor: "#1A1A1A",
+                    padding: 12,
+                    borderRadius: 8,
+                    color: "white",
+                    borderWidth: 1,
+                    borderColor: "#333",
+                  }}
+                  placeholderTextColor="#666"
+                  placeholder="Nhập mật khẩu mới"
+                />
+              </View>
+
+              {/* Confirm Password */}
+              <View>
+                <Text style={{ color: "#B8B3A8", marginBottom: 6 }}>
+                  Xác nhận mật khẩu mới
+                </Text>
+                <TextInput
+                  value={passwordData.confirmPassword}
+                  onChangeText={(t) =>
+                    setPasswordData({ ...passwordData, confirmPassword: t })
+                  }
+                  secureTextEntry
+                  style={{
+                    backgroundColor: "#1A1A1A",
+                    padding: 12,
+                    borderRadius: 8,
+                    color: "white",
+                    borderWidth: 1,
+                    borderColor: "#333",
+                  }}
+                  placeholderTextColor="#666"
+                  placeholder="Nhập lại mật khẩu mới"
+                />
+              </View>
+
+              {/* Save Password Button */}
+              <Pressable
+                onPress={handlePasswordChange}
+                disabled={changingPassword}
+                style={{
+                  backgroundColor: "#2A2A2A",
+                  padding: 12,
+                  borderRadius: 8,
+                  alignItems: "center",
+                  marginTop: 8,
+                  borderWidth: 1,
+                  borderColor: "#E07A2F",
+                }}
+              >
+                {changingPassword ? (
+                  <ActivityIndicator color="#E07A2F" />
+                ) : (
+                  <Text
+                    style={{
+                      color: "#E07A2F",
+                      fontWeight: "600",
+                    }}
+                  >
+                    Cập nhật mật khẩu
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          )}
         </View>
       </ScrollView>
 

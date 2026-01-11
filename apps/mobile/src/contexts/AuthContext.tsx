@@ -49,6 +49,9 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   createBusiness: (name: string) => Promise<void>; // For Profile Setup
+  // Password Management
+  updatePassword: (oldPw: string, newPw: string) => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
   // Staff flow
   setStaffPending: (profileId: string) => void;
   clearStaffPending: () => void;
@@ -446,6 +449,38 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setAuthState({ status: "unauthenticated" });
   }, []);
 
+  // Password Management
+  const updatePassword = useCallback(async (oldPw: string, newPw: string) => {
+    // 1. Verify old password by attempting re-auth
+    // Note: We use the current session's email
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user || !user.email) throw new Error("Không xác định được người dùng");
+
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: oldPw,
+    });
+
+    if (signInError) throw new Error("Mật khẩu hiện tại không đúng");
+
+    // 2. Update to new password
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPw,
+    });
+
+    if (updateError) throw new Error(updateError.message);
+  }, []);
+
+  const resetPassword = useCallback(async (email: string) => {
+    // Note: This relies on Supabase sending a magic link
+    // Mobile deep linking must be configured for this to auto-redirect
+    // Otherwise user clicks link in email -> browser -> checks confirmed
+    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    if (error) throw new Error(error.message);
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -455,6 +490,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
         signOut,
         refreshProfile,
         createBusiness,
+        updatePassword,
+        resetPassword,
         setStaffPending,
         clearStaffPending,
       }}

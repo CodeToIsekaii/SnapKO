@@ -144,6 +144,7 @@ export function Dashboard({ user }: DashboardProps) {
         syncStatus={inventory.syncStatus}
         onSync={inventory.syncFromServer}
         onLogout={logout}
+        businessId={profile?.business_id || undefined}
       />
 
       {/* Tabs */}

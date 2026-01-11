@@ -19,6 +19,7 @@ const SUPABASE_ANON_KEY = Env.VITE_SUPABASE_ANON_KEY;
 // Realtime subscription
 let realtimeChannel: RealtimeChannel | null = null;
 let signalChannel: RealtimeChannel | null = null;
+let businessChannel: RealtimeChannel | null = null;
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
 // Debounce for thundering herd prevention
@@ -205,6 +206,12 @@ export function stopRealtimeListener(): void {
     supabaseClient.removeChannel(realtimeChannel);
     realtimeChannel = null;
     console.log("[Realtime] Stopped logs listener");
+  }
+
+  if (businessChannel && supabaseClient) {
+    supabaseClient.removeChannel(businessChannel);
+    businessChannel = null;
+    console.log("[Realtime] Stopped business settings listener");
   }
 
   if (supabaseClient) {

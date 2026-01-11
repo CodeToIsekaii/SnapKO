@@ -30,3 +30,4 @@ supabase/.temp/
 # docs
 docs/
 SnapKO/.agent/
+SnapKO/.shared/
