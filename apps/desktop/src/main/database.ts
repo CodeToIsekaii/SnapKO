@@ -772,6 +772,7 @@ export function registerDatabaseIPC(): void {
             id,
             type,
             staff_note,
+            ai_parsed_json,
             quantity_change_base,
             created_at,
             created_by,
@@ -784,26 +785,113 @@ export function registerDatabaseIPC(): void {
 
         if (error) {
           console.error("[Database] Failed to fetch cloud logs:", error);
-          return [];
-        }
+          // Fall through to local fallback
+        } else if (data && data.length > 0) {
+          // Return cloud data only if we have results
+          console.log("[Database] Cloud inventory_logs count:", data.length);
+          return data.map((log: any) => {
+            // Extract details from ai_parsed_json if staff_note is empty
+            let details = log.staff_note || "";
+            if (!details && log.ai_parsed_json) {
+              try {
+                const parsed =
+                  typeof log.ai_parsed_json === "string"
+                    ? JSON.parse(log.ai_parsed_json)
+                    : log.ai_parsed_json;
 
-        // Format for UI
-        return data.map((log: any) => ({
-          id: log.id,
-          created_at: log.created_at,
-          action: log.type || "UNKNOWN",
-          staff_name: log.profiles?.full_name || "Unknown Staff",
-          details: log.staff_note || "Không có chi tiết",
-          quantity_change: log.quantity_change_base,
-        }));
+                // Build details string with reason + items
+                const parts: string[] = [];
+
+                // Add reason label if exists (e.g., "Vỡ/Hỏng", "Cho mượn")
+                if (parsed.reason_label) parts.push(parsed.reason_label);
+                else if (parsed.notes) parts.push(parsed.notes);
+
+                // Add item names
+                if (parsed.items?.length) {
+                  const itemNames = parsed.items
+                    .slice(0, 3)
+                    .map((i: any) => {
+                      const name = i.ingredient_name || i.name || "";
+                      const qty = i.quantity ? `: ${i.quantity}` : "";
+                      return name + qty;
+                    })
+                    .filter(Boolean)
+                    .join(", ");
+                  if (itemNames) parts.push(itemNames);
+                  if (parsed.items.length > 3)
+                    parts.push(`(+${parsed.items.length - 3} khác)`);
+                }
+
+                details = parts.join(" - ");
+              } catch {}
+            }
+            return {
+              id: log.id,
+              created_at: log.created_at,
+              action: log.type || "UNKNOWN",
+              staff_name: log.profiles?.full_name || "Unknown Staff",
+              details: details || "Không có chi tiết",
+              quantity_change: log.quantity_change_base,
+            };
+          });
+        }
+        // Cloud returned empty, fall through to local
       } catch (err) {
         console.error("[Database] Cloud log fetch exception:", err);
-        return [];
+        // Fall through to local fallback
       }
     }
 
-    // 2. Fallback
-    return [];
+    // 2. Fallback: Read from local pending_sync_logs
+    const database = getDatabase();
+    try {
+      const localLogs = database
+        .prepare(
+          `SELECT id, type, ai_parsed_json, created_at, location 
+           FROM pending_sync_logs 
+           ORDER BY created_at DESC 
+           LIMIT ?`
+        )
+        .all(limit) as {
+        id: string;
+        type: string;
+        ai_parsed_json: string;
+        created_at: string;
+        location: string;
+      }[];
+
+      console.log(
+        "[Database] Local pending_sync_logs count:",
+        localLogs.length
+      );
+
+      return localLogs.map((log) => {
+        let details = "Không có chi tiết";
+        try {
+          const parsed = JSON.parse(log.ai_parsed_json || "{}");
+          if (parsed.notes) details = parsed.notes;
+          else if (parsed.items?.length) {
+            details = parsed.items
+              .slice(0, 2)
+              .map((i: any) => i.ingredient_name || i.name)
+              .join(", ");
+            if (parsed.items.length > 2)
+              details += ` (+${parsed.items.length - 2} khác)`;
+          }
+        } catch {}
+
+        return {
+          id: log.id,
+          created_at: log.created_at,
+          action: log.type || "UNKNOWN",
+          staff_name: log.location === "mobile" ? "Mobile" : "Desktop",
+          details,
+        };
+      });
+    } catch (err) {
+      console.error("[Database] Local log fallback error:", err);
+      return [];
+    }
   });
 
   // Log Retention

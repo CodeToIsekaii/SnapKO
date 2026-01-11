@@ -39,21 +39,21 @@ const OUT_REASONS: OutReasonOption[] = [
   {
     id: "DAMAGED",
     label: "Vỡ / Hỏng",
-    icon: "❌",
+    icon: "close-circle",
     description: "Hàng vỡ, hỏng, hết hạn. Tính vào chi phí hao hụt.",
     color: "#EF4444",
   },
   {
     id: "LOAN",
     label: "Cho Mượn",
-    icon: "🤝",
+    icon: "hand-left",
     description: "Hàng xóm mượn. Sẽ nhắc đòi lại ngày mai.",
     color: "#F59E0B",
   },
   {
     id: "MARKETING",
     label: "Mời khách",
-    icon: "🎁",
+    icon: "gift",
     description: "Mời khách, marketing. Tính vào chi phí quảng cáo.",
     color: "#6B8E23",
   },
@@ -141,10 +141,11 @@ export default function QuickOutScreen({
       );
 
       // Map reason to type for sync logs (Dashboard queries use these types)
+      // Valid enum values: IMPORT | TRANSFER | AUDIT | WASTE | LENT
       const typeMapping: Record<string, string> = {
         DAMAGED: "WASTE",
-        LOAN: "LOAN",
-        MARKETING: "MARKETING",
+        LOAN: "LENT", // Database uses "LENT" not "LOAN"
+        MARKETING: "WASTE", // Treat marketing as loss/waste
       };
       const logType = typeMapping[reason] || "QUICK_OUT";
 
@@ -155,7 +156,7 @@ export default function QuickOutScreen({
         [
           id,
           logType, // Use mapped type instead of generic QUICK_OUT
-          "mobile",
+          "BAR", // Valid enum value: WAREHOUSE or BAR
           JSON.stringify({
             items: itemsArr,
             reason: reason,
@@ -219,7 +220,7 @@ export default function QuickOutScreen({
           [
             Crypto.randomUUID(),
             "LOAN_FOLLOWUP",
-            "🤝 Nhắc đòi hàng mượn",
+            "Nhắc đòi hàng mượn",
             `Hôm qua đã cho mượn: ${itemNames}. Nhớ đòi lại!`,
             tomorrow.toISOString(),
             id, // Link to the QUICK_OUT log
@@ -284,7 +285,13 @@ export default function QuickOutScreen({
         <TouchableOpacity onPress={onBack} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color="#EF4444" />
         </TouchableOpacity>
-        <Text style={styles.title}>Xuất Khác / Hủy 📤</Text>
+        <Text style={styles.title}>Xuất Khác / Hủy</Text>
+        <Ionicons
+          name="exit-outline"
+          size={18}
+          color="#EF4444"
+          style={{ marginLeft: 6 }}
+        />
       </View>
 
       <View style={styles.searchBar}>
@@ -355,7 +362,12 @@ export default function QuickOutScreen({
                 style={[styles.reasonCard, { borderColor: reason.color }]}
                 onPress={() => handleConfirmWithReason(reason.id)}
               >
-                <Text style={styles.reasonIcon}>{reason.icon}</Text>
+                <Ionicons
+                  name={reason.icon as any}
+                  size={28}
+                  color={reason.color}
+                  style={{ marginRight: 12 }}
+                />
                 <View style={styles.reasonInfo}>
                   <Text style={[styles.reasonLabel, { color: reason.color }]}>
                     {reason.label}

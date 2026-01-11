@@ -15,6 +15,14 @@ import SettingsPage from "./SettingsPage";
 import ProfileEditPage from "./ProfileEditPage";
 import { dashboardStyles, COLORS } from "../styles/theme";
 import { User } from "../types";
+import {
+  BarChart3,
+  Users,
+  Package,
+  Leaf,
+  ChefHat,
+  Settings,
+} from "lucide-react";
 
 type TabId =
   | "dashboard"
@@ -68,13 +76,13 @@ export function Dashboard({ user }: DashboardProps) {
   }, [activeTab, refreshProfile]);
 
   // Tab definitions - Updated with Settings
-  const tabs: { id: TabId; label: string; icon: string }[] = [
-    { id: "dashboard", label: "Dashboard", icon: "📊" },
-    { id: "employees", label: "Nhân viên", icon: "👥" },
-    { id: "inventory", label: "Tồn kho", icon: "📦" },
-    { id: "ingredients", label: "Nguyên liệu", icon: "🥬" },
-    { id: "recipes", label: "Công thức", icon: "🍳" },
-    { id: "settings", label: "Cài đặt", icon: "⚙️" },
+  const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
+    { id: "dashboard", label: "Dashboard", icon: <BarChart3 size={16} /> },
+    { id: "employees", label: "Nhân viên", icon: <Users size={16} /> },
+    { id: "inventory", label: "Tồn kho", icon: <Package size={16} /> },
+    { id: "ingredients", label: "Nguyên liệu", icon: <Leaf size={16} /> },
+    { id: "recipes", label: "Công thức", icon: <ChefHat size={16} /> },
+    { id: "settings", label: "Cài đặt", icon: <Settings size={16} /> },
   ];
 
   // Handle model change with error handling

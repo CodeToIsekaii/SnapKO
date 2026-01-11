@@ -26,6 +26,14 @@ export const COLORS = {
   borderFocus: "#E07A2F",
 } as const;
 
+// Shadow tokens for depth
+export const SHADOWS = {
+  card: "0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06)",
+  hover:
+    "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
+  focus: `0 0 0 3px rgba(224, 122, 47, 0.3)`, // Primary ring
+};
+
 // Login Screen Styles
 export const loginStyles: Record<string, React.CSSProperties> = {
   container: {

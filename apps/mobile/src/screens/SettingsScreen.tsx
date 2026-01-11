@@ -284,7 +284,15 @@ export default function SettingsScreen({
             <Text style={styles.backText}>← Quay lại</Text>
           </TouchableOpacity>
         )}
-        <Text style={styles.title}>⚙️ Cài đặt</Text>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <Ionicons
+            name="settings"
+            size={20}
+            color={COLORS.primary}
+            style={{ marginRight: 6 }}
+          />
+          <Text style={styles.title}>Cài đặt</Text>
+        </View>
         <View style={{ width: 60 }} />
       </View>
 
@@ -306,7 +314,12 @@ export default function SettingsScreen({
                   {profile?.full_name || "Người dùng"}
                 </Text>
                 <View style={styles.roleContainer}>
-                  <Text style={styles.roleEmoji}>{isOwner ? "👑" : "👤"}</Text>
+                  <Ionicons
+                    name={isOwner ? "trophy" : "person"}
+                    size={14}
+                    color={isOwner ? "#E07A2F" : COLORS.textSecondary}
+                    style={{ marginRight: 4 }}
+                  />
                   <Text
                     style={[
                       styles.profileRole,
@@ -316,16 +329,19 @@ export default function SettingsScreen({
                     {isOwner ? "Chủ quán" : "Nhân viên"}
                   </Text>
                 </View>
-                {/* Debug: Show Business ID */}
-                <Text
-                  style={{
-                    color: COLORS.textMuted,
-                    fontSize: 10,
-                    marginTop: 4,
-                  }}
-                >
-                  ID: {profile?.business_id?.substring(0, 8)}...
-                </Text>
+                {/* Debug: Show Business ID - Only in DEV */}
+                {__DEV__ && (
+                  <Text
+                    style={{
+                      color: COLORS.textMuted,
+                      fontSize: 10,
+                      marginTop: 4,
+                      fontFamily: "monospace",
+                    }}
+                  >
+                    ID: {profile?.business_id?.substring(0, 8)}...
+                  </Text>
+                )}
               </View>
             </View>
             {/* Edit Profile Button - All users can edit their own profile */}
@@ -343,7 +359,15 @@ export default function SettingsScreen({
                   }
                 }}
               >
-                <Text style={styles.menuRowText}>✏️ Chỉnh sửa hồ sơ</Text>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <Ionicons
+                    name="pencil"
+                    size={14}
+                    color={COLORS.textSecondary}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text style={styles.menuRowText}>Chỉnh sửa hồ sơ</Text>
+                </View>
                 <Ionicons
                   name="chevron-forward"
                   size={16}

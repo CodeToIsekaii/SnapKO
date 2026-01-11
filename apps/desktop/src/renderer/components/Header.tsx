@@ -4,6 +4,7 @@
 import React from "react";
 import { User, SyncStatus } from "../types";
 import { COLORS } from "../styles/theme";
+import { RefreshCw, LogOut } from "lucide-react";
 
 interface HeaderProps {
   user: User;
@@ -38,7 +39,16 @@ export function Header({
             opacity: syncStatus.syncing ? 0.7 : 1,
           }}
         >
-          {syncStatus.syncing ? "🔄 Đang đồng bộ..." : "🔄 Đồng bộ"}
+          <RefreshCw
+            size={16}
+            style={{
+              marginRight: 6,
+              animation: syncStatus.syncing
+                ? "spin 1s linear infinite"
+                : "none",
+            }}
+          />
+          {syncStatus.syncing ? "Đang đồng bộ..." : "Đồng bộ"}
         </button>
         {syncStatus.pending > 0 && (
           <span style={styles.pendingBadge}>{syncStatus.pending} chờ</span>
@@ -62,11 +72,18 @@ export function Header({
         >
           <span style={styles.userEmail}>{user.email}</span>
           {/* Debug: Show Business ID */}
-          <span style={{ fontSize: 10, color: COLORS.textMuted }}>
-            ID: ID: {businessId?.substring(0, 8) || "Loading..."}
+          <span
+            style={{
+              fontSize: 10,
+              color: COLORS.textMuted,
+              fontFamily: "monospace",
+            }}
+          >
+            ID: {businessId?.substring(0, 8) || "Loading..."}
           </span>
         </div>
         <button onClick={onLogout} style={styles.logoutButton}>
+          <LogOut size={14} style={{ marginRight: 6 }} />
           Đăng xuất
         </button>
       </div>
@@ -103,6 +120,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 12,
   },
   syncButton: {
+    display: "flex",
+    alignItems: "center",
     padding: "8px 16px",
     backgroundColor: COLORS.primary,
     color: "white",
@@ -110,6 +129,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 8,
     fontSize: 14,
     cursor: "pointer",
+    transition: "all 0.2s ease",
   },
   pendingBadge: {
     padding: "4px 10px",
@@ -133,6 +153,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
   },
   logoutButton: {
+    display: "flex",
+    alignItems: "center",
     padding: "8px 16px",
     backgroundColor: "transparent",
     color: COLORS.textSecondary,
@@ -140,5 +162,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 8,
     fontSize: 14,
     cursor: "pointer",
+    transition: "all 0.2s ease",
   },
 };

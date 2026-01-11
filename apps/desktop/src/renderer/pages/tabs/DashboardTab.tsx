@@ -7,6 +7,7 @@ import { COGSDashboard } from "../../components/COGSChart";
 import { ActivityLogTable } from "../../components/ActivityLogTable";
 import { COLORS } from "../../styles/theme";
 import { ActivityLog } from "../../types";
+import { BarChart3, RefreshCw, Download } from "lucide-react";
 
 interface DashboardTabProps {
   cogsReport: COGSReport | null;
@@ -43,7 +44,8 @@ export function DashboardTab({
       <div style={styles.empty}>
         <p>Không có dữ liệu báo cáo</p>
         <button onClick={onRefresh} style={styles.refreshButton}>
-          🔄 Tải lại
+          <RefreshCw size={14} style={{ marginRight: 6 }} />
+          Tải lại
         </button>
       </div>
     );
@@ -53,13 +55,22 @@ export function DashboardTab({
     <div>
       {/* Header Actions */}
       <div style={styles.header}>
-        <h2 style={styles.title}>📊 Dashboard COGS</h2>
+        <h2 style={styles.title}>
+          <BarChart3
+            size={22}
+            color={COLORS.primary}
+            style={{ marginRight: 8 }}
+          />
+          Dashboard COGS
+        </h2>
         <div style={styles.actions}>
           <button onClick={onRefresh} style={styles.actionButton}>
-            🔄 Làm mới
+            <RefreshCw size={14} style={{ marginRight: 6 }} />
+            Làm mới
           </button>
           <button onClick={handleExport} style={styles.exportButton}>
-            📥 Xuất Excel
+            <Download size={14} style={{ marginRight: 6 }} />
+            Xuất Excel
           </button>
         </div>
       </div>

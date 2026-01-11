@@ -336,8 +336,30 @@ export default function DashboardScreen({
       // Load low stock items (via hook)
       await refetchLowStock();
 
-      // Mock recent logs from low stock for now (or empty)
-      setRecentLogs([]);
+      // Load recent activity logs from pending_sync_logs
+      const logsDb = await getDB();
+      const recentActivity = await logsDb.getAllAsync<{
+        id: string;
+        type: string;
+        ai_parsed_json: string;
+        created_at: string;
+        location: string;
+      }>(
+        `SELECT id, type, ai_parsed_json, created_at, location 
+         FROM pending_sync_logs 
+         ORDER BY created_at DESC 
+         LIMIT 10`
+      );
+      setRecentLogs(
+        recentActivity.map((log) => ({
+          id: log.id,
+          type: log.type,
+          created_at: log.created_at,
+          ai_parsed_json: log.ai_parsed_json,
+          ingredient_name: null,
+          quantity: null,
+        }))
+      );
 
       // Also load today's data for guards
       await loadTodayData();
@@ -504,7 +526,9 @@ export default function DashboardScreen({
         }}
       >
         <Pressable onPress={onOpenSettings}>
-          <Text style={{ color: "#94A3B8", fontSize: 16 }}>⚙️ Cài đặt</Text>
+          <Text style={{ color: "#94A3B8", fontSize: 16 }}>
+            <Ionicons name="settings-outline" size={20} color="#94A3B8" />
+          </Text>
         </Pressable>
 
         {/* Center: Title + Refresh Button */}
@@ -512,16 +536,17 @@ export default function DashboardScreen({
           <Text style={{ color: "white", fontSize: 18, fontWeight: "600" }}>
             Dashboard
           </Text>
+          {/* Sync Status */}
           <Pressable
             onPress={onRefresh}
+            style={{ marginLeft: 16, padding: 8 }}
             disabled={refreshing}
-            style={{
-              backgroundColor: "#E07A2F20",
-              padding: 6,
-              borderRadius: 8,
-            }}
           >
-            <Text style={{ fontSize: 16 }}>{refreshing ? "⏳" : "🔄"}</Text>
+            <Ionicons
+              name="refresh-outline"
+              size={20}
+              color={refreshing ? "#64748B" : "#94A3B8"}
+            />
           </Pressable>
         </View>
 
@@ -592,11 +617,14 @@ export default function DashboardScreen({
               fontWeight: "600",
             }}
           >
-            Mode: {model} {model === "STANDARD" ? "📦" : "📋"}
+            Mode: {model}
           </Text>
-          <Text style={{ color: "#94A3B8", fontSize: 11 }}>
-            🔄 Nhấn để đồng bộ
-          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Ionicons name="refresh-outline" size={14} color="#94A3B8" />
+            <Text style={{ color: "#94A3B8", fontSize: 11, marginLeft: 4 }}>
+              Nhấn để đồng bộ
+            </Text>
+          </View>
         </Pressable>
 
         {/* Main Stats - OWNER ONLY per .script */}
@@ -708,7 +736,12 @@ export default function DashboardScreen({
                 marginBottom: 8,
               }}
             >
-              <Text style={{ fontSize: 16, marginRight: 6 }}>🔔</Text>
+              <Ionicons
+                name="notifications"
+                size={18}
+                color="#F59E0B"
+                style={{ marginRight: 6 }}
+              />
               <Text
                 style={{
                   color: "#F59E0B",
@@ -793,7 +826,12 @@ export default function DashboardScreen({
                 marginBottom: 8,
               }}
             >
-              <Text style={{ fontSize: 16, marginRight: 6 }}>📋</Text>
+              <Ionicons
+                name="clipboard"
+                size={18}
+                color="#6B8E23"
+                style={{ marginRight: 6 }}
+              />
               <Text
                 style={{
                   color: "#6B8E23",
@@ -1043,7 +1081,12 @@ export default function DashboardScreen({
                 alignItems: "center",
               }}
             >
-              <Text style={{ fontSize: 28, marginBottom: 4 }}>📦</Text>
+              <Ionicons
+                name="cube"
+                size={28}
+                color="white"
+                style={{ marginBottom: 4 }}
+              />
               <Text style={{ color: "white", fontWeight: "700", fontSize: 12 }}>
                 Kiểm Kho
               </Text>
@@ -1069,7 +1112,12 @@ export default function DashboardScreen({
                     flex: 1,
                   }}
                 >
-                  <Text style={{ fontSize: 18, marginRight: 6 }}>🔄</Text>
+                  <Ionicons
+                    name="swap-horizontal"
+                    size={18}
+                    color="#94A3B8"
+                    style={{ marginRight: 6 }}
+                  />
                   <Text
                     style={{
                       color: "#94A3B8",

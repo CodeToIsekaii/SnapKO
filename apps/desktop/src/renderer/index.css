@@ -170,3 +170,41 @@ body {
 .mb-2 {
   margin-bottom: 8px;
 }
+
+/* ========================================
+   ANIMATION KEYFRAMES
+   ======================================== */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ========================================
+   INTERACTIVE HOVER STATES
+   Brand color with low opacity per UX guidelines
+   ======================================== */
+
+/* Button hover effects */
+button:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* Table row hover - brand color at 8% opacity */
+tr:hover {
+  background-color: rgba(224, 122, 47, 0.08);
+}
+
+/* Card hover effect */
+.card-hover:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+  transition: all 0.2s ease;
+}

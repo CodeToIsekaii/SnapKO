@@ -446,12 +446,26 @@ export async function syncPendingLogs(
   notifyStatusChange();
 
   try {
+    // FIX: Migrate old logs with invalid location="mobile" to "BAR"
+    await db.runAsync(
+      `UPDATE pending_sync_logs SET location = 'BAR' WHERE location = 'mobile' AND synced = 0`
+    );
+    // FIX: Migrate old logs with invalid type values
+    await db.runAsync(
+      `UPDATE pending_sync_logs SET type = 'LENT' WHERE type = 'LOAN' AND synced = 0`
+    );
+    await db.runAsync(
+      `UPDATE pending_sync_logs SET type = 'WASTE' WHERE type = 'MARKETING' AND synced = 0`
+    );
+
     // Get unsynced logs
     const rows = await db.getAllAsync<
       PendingSyncLog & { local_image_path: string | null }
     >(
       "SELECT * FROM pending_sync_logs WHERE synced = 0 ORDER BY created_at ASC LIMIT 50"
     );
+
+    console.log("[SyncEngine] Pending logs count:", rows.length);
 
     if (rows.length === 0) {
       syncStatus.isSyncing = false;
@@ -521,18 +535,34 @@ export async function syncPendingLogs(
       return { synced: 0, failed: rows.length };
     }
 
-    // Step 3: Call sync-up API
+    // Step 3: Get user access token for authenticated sync
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+
+    if (!accessToken) {
+      console.warn("[SyncEngine] No access token, cannot sync");
+      syncStatus.isSyncing = false;
+      notifyStatusChange();
+      return { synced: 0, failed: rows.length };
+    }
+
+    // Step 4: Call sync-up API with user's access token
     const response = await fetch(`${Env.SUPABASE_URL}/functions/v1/sync-up`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         apikey: Env.SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${Env.SUPABASE_ANON_KEY}`,
+        Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ logs: logsForSync }),
     });
 
+    console.log("[SyncEngine] sync-up response status:", response.status);
     const result = await response.json();
+    console.log(
+      "[SyncEngine] sync-up result:",
+      JSON.stringify(result).slice(0, 500)
+    );
 
     let syncedCount = 0;
     let failedCount = 0;

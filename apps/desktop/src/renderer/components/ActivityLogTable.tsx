@@ -1,5 +1,6 @@
 import React from "react";
-import { COLORS } from "../styles/theme";
+import { COLORS, SHADOWS } from "../styles/theme";
+import { ScrollText } from "lucide-react";
 
 interface ActivityLog {
   id: string;
@@ -16,8 +17,20 @@ interface ActivityLogTableProps {
 export const ActivityLogTable: React.FC<ActivityLogTableProps> = ({ logs }) => {
   console.log("ActivityLogTable rendering. Logs:", logs);
   return (
-    <div style={{ ...styles.container, minHeight: 100 }}>
-      <h3 style={styles.title}>📜 Nhật ký hoạt động</h3>
+    <div
+      style={{ ...styles.container, minHeight: 100, boxShadow: SHADOWS.card }}
+    >
+      <h3
+        style={{
+          ...styles.title,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <ScrollText size={18} color={COLORS.primary} />
+        Nhật ký hoạt động
+      </h3>
       <div style={styles.tableWrapper}>
         <table style={styles.table}>
           <thead>

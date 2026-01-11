@@ -4,6 +4,14 @@
 import React, { useState, useMemo } from "react";
 import { Ingredient } from "../../types";
 import { COLORS, dashboardStyles } from "../../styles/theme";
+import {
+  Package,
+  RefreshCw,
+  Download,
+  FlaskConical,
+  Boxes,
+  AlertTriangle,
+} from "lucide-react";
 
 type IngredientCategory = "raw_material" | "supply";
 
@@ -76,13 +84,41 @@ export function InventoryTab({
     <div>
       {/* Header */}
       <div style={styles.header}>
-        <h2 style={styles.title}>📦 Tồn kho</h2>
+        <h2
+          style={{
+            ...styles.title,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <Package size={22} color={COLORS.primary} />
+          Tồn kho
+        </h2>
         <div style={styles.actions}>
-          <button onClick={onRefresh} style={styles.actionButton}>
-            🔄 Làm mới
+          <button
+            onClick={onRefresh}
+            style={{
+              ...styles.actionButton,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <RefreshCw size={14} />
+            Làm mới
           </button>
-          <button onClick={handleExport} style={styles.exportButton}>
-            📥 Xuất Excel
+          <button
+            onClick={handleExport}
+            style={{
+              ...styles.exportButton,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <Download size={14} />
+            Xuất Excel
           </button>
         </div>
       </div>
@@ -96,7 +132,8 @@ export function InventoryTab({
             ...(activeTab === "raw_material" ? styles.tabButtonActive : {}),
           }}
         >
-          🧪 Nguyên liệu
+          <FlaskConical size={14} />
+          Nguyên liệu
           <span style={styles.tabBadge}>
             {
               ingredients.filter((i) => {
@@ -113,7 +150,8 @@ export function InventoryTab({
             ...(activeTab === "supply" ? styles.tabButtonActive : {}),
           }}
         >
-          🧻 Vật dụng
+          <Boxes size={14} />
+          Vật dụng
           <span style={styles.tabBadge}>
             {ingredients.filter((i) => i.type === "supply").length}
           </span>
@@ -179,7 +217,13 @@ export function InventoryTab({
               return (
                 <tr key={item.id}>
                   <td style={dashboardStyles.tableCell}>
-                    {isLowStock && <span style={styles.lowStockBadge}>⚠️</span>}
+                    {isLowStock && (
+                      <AlertTriangle
+                        size={14}
+                        color={COLORS.warning}
+                        style={{ marginRight: 6 }}
+                      />
+                    )}
                     {item.name}
                   </td>
                   <td style={dashboardStyles.tableCell}>{item.base_unit}</td>

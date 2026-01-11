@@ -15,21 +15,17 @@ import {
   Pie,
   Cell,
   Legend,
+  CartesianGrid,
 } from "recharts";
-
-// SnapKO F&B Color Palette (per .UXUIrules)
-const COLORS = {
-  primary: "#E07A2F", // Burnt Orange - Primary CTA
-  positive: "#6B8E23", // Olive Green - Good state
-  warning: "#FFC857", // Mustard Yellow - Warning
-  error: "#E63946", // Tomato Red - Danger
-  surface: "#1A1A1A", // Card background
-  textPrimary: "#F5F3EF", // Cream White
-  textSecondary: "#B8B3A8", // Muted (updated per feedback)
-  textMuted: "#64748B", // Very muted
-  border: "#2A2A2A", // Border Subtle
-  gridLine: "#2A2A2A", // Chart grid lines
-};
+import { COLORS, SHADOWS } from "../styles/theme";
+import {
+  DollarSign,
+  Package,
+  AlertTriangle,
+  TrendingUp,
+  TrendingDown,
+  BarChart3,
+} from "lucide-react";
 
 interface BarChartData {
   name: string;
@@ -74,7 +70,8 @@ export function InventoryValueChart({ data }: { data: BarChartData[] }) {
         backgroundColor: COLORS.surface,
         padding: 16,
         borderRadius: 12,
-        border: "1px solid #2A2A2A",
+        border: `1px solid ${COLORS.border}`,
+        boxShadow: SHADOWS.card,
       }}
     >
       <h3
@@ -83,17 +80,27 @@ export function InventoryValueChart({ data }: { data: BarChartData[] }) {
           fontWeight: 600,
           marginBottom: 16,
           fontSize: 14,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
         }}
       >
-        📊 Giá trị tồn kho theo tháng (VNĐ)
+        <BarChart3 size={18} color={COLORS.primary} />
+        Giá trị tồn kho theo tháng (VNĐ)
       </h3>
       <ResponsiveContainer width="100%" height="85%">
         <BarChart data={data}>
+          <CartesianGrid
+            strokeDasharray="3 3"
+            vertical={false}
+            stroke={COLORS.border}
+          />
           <XAxis
             dataKey="name"
             stroke={COLORS.textSecondary}
             fontSize={12}
             tickLine={false}
+            axisLine={false}
           />
           <YAxis
             stroke={COLORS.textSecondary}
@@ -150,6 +157,7 @@ export function LossBreakdownChart({ data }: { data: PieChartData[] }) {
         padding: 16,
         borderRadius: 12,
         border: `1px solid ${COLORS.border}`,
+        boxShadow: SHADOWS.card,
       }}
     >
       <h3
@@ -158,9 +166,13 @@ export function LossBreakdownChart({ data }: { data: PieChartData[] }) {
           fontWeight: 600,
           marginBottom: 16,
           fontSize: 14,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
         }}
       >
-        📉 Phân tích hao hụt
+        <TrendingDown size={18} color={COLORS.error} />
+        Phân tích hao hụt
       </h3>
       {totalValue === 0 || isMockData ? (
         <div
@@ -223,7 +235,7 @@ interface SummaryCardProps {
   value: string;
   subtitle?: string;
   color?: string;
-  icon: string;
+  icon: React.ReactNode;
 }
 
 export function SummaryCard({
@@ -239,9 +251,10 @@ export function SummaryCard({
         backgroundColor: COLORS.surface,
         borderRadius: 12,
         padding: 20,
-        border: "1px solid #2A2A2A",
+        border: `1px solid ${COLORS.border}`,
         borderLeft: `4px solid ${color}`,
         minWidth: 200,
+        boxShadow: SHADOWS.card,
       }}
     >
       <div
@@ -283,7 +296,19 @@ export function SummaryCard({
             </p>
           )}
         </div>
-        <span style={{ fontSize: 28 }}>{icon}</span>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 10,
+            backgroundColor: `${color}15`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {icon}
+        </div>
       </div>
     </div>
   );
@@ -311,7 +336,7 @@ export function COGSDashboard({
       {/* Summary Cards Row */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
         <SummaryCard
-          icon="💰"
+          icon={<DollarSign size={20} color={COLORS.primary} />}
           title="Tổng giá trị tồn kho"
           value={
             new Intl.NumberFormat("vi-VN").format(summary.totalValue) + " đ"
@@ -319,21 +344,34 @@ export function COGSDashboard({
           color={COLORS.primary}
         />
         <SummaryCard
-          icon="📦"
+          icon={<Package size={20} color={COLORS.positive} />}
           title="Số mặt hàng"
           value={summary.itemCount.toString()}
           subtitle="nguyên liệu"
           color={COLORS.positive}
         />
         <SummaryCard
-          icon="⚠️"
+          icon={
+            <AlertTriangle
+              size={20}
+              color={
+                summary.lowStockCount > 0 ? COLORS.warning : COLORS.positive
+              }
+            />
+          }
           title="Sắp hết hàng"
           value={summary.lowStockCount.toString()}
           subtitle="cần nhập thêm"
           color={summary.lowStockCount > 0 ? COLORS.warning : COLORS.positive}
         />
         <SummaryCard
-          icon={summary.monthlyChange >= 0 ? "📈" : "📉"}
+          icon={
+            summary.monthlyChange >= 0 ? (
+              <TrendingUp size={20} color={COLORS.positive} />
+            ) : (
+              <TrendingDown size={20} color={COLORS.error} />
+            )
+          }
           title="Biến động tháng"
           value={
             (summary.monthlyChange >= 0 ? "+" : "") +
