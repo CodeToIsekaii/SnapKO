@@ -5,6 +5,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../hooks/AuthContext";
 import { useInventory } from "../hooks/useInventory";
 import { useStaff } from "../hooks/useStaff";
+import { useSubscriptionStatus } from "../hooks/useSubscriptionStatus";
 import { Header } from "../components/Header";
 import { InventoryTab } from "./tabs/InventoryTab";
 import { DashboardTab } from "./tabs/DashboardTab";
@@ -40,6 +41,13 @@ export function Dashboard({ user }: DashboardProps) {
   const { logout, profile, updateProfile, refreshProfile } = useAuth();
   const inventory = useInventory();
   const staff = useStaff();
+
+  // Subscription status (replaces old inline trial logic)
+  const subscription = useSubscriptionStatus({
+    tier: profile?.tier,
+    subscriptionExpiresAt: profile?.subscription_expires_at,
+    businessCreatedAt: profile?.business_created_at,
+  });
 
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [editingProfile, setEditingProfile] = useState(false);
@@ -87,6 +95,18 @@ export function Dashboard({ user }: DashboardProps) {
 
   // Handle model change with error handling
   const handleChangeModel = async (model: "SIMPLE" | "STANDARD") => {
+    // Enforce subscription limit for Standard Model (Kho Kép)
+    if (model === "STANDARD" && !subscription.canUseDualWarehouse) {
+      alert(
+        "⚠️ Gói của bạn đã hết hạn. Vui lòng nâng cấp để sử dụng tính năng Kho Kép (Dual Warehouse)."
+      );
+      // Open pricing page
+      (window as any).electronAPI?.openExternal?.(
+        "https://app.snapko.vn/pricing"
+      );
+      return;
+    }
+
     if (updateProfile) {
       console.log("[Dashboard] Changing model to:", model);
 
@@ -220,6 +240,7 @@ export function Dashboard({ user }: DashboardProps) {
             inventoryModel={profile?.inventory_model}
             onChangeModel={handleChangeModel}
             onEditProfile={() => setEditingProfile(true)}
+            subscription={subscription}
           />
         )}
       </main>

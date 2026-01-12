@@ -149,14 +149,16 @@ export default function NavBar() {
   const proDaysLeft = getProDaysLeft();
 
   return (
-    <nav className="fixed top-0 w-full z-50 bg-white/95 backdrop-blur-sm border-b border-[#E0DCD5]">
-      <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <nav className="fixed top-4 left-4 right-4 z-50 rounded-2xl border border-white/20 bg-white/70 backdrop-blur-md shadow-sm transition-all duration-300">
+      <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
         {/* Logo & Links */}
         <div className="flex items-center gap-8">
           <Link href="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-[#6B8E23] rounded-full flex items-center justify-center">
-              <Check className="w-4 h-4 text-white" />
-            </div>
+            <img
+              src="/logo.png"
+              alt="SnapKO Logo"
+              className="w-9 h-9 object-contain"
+            />
             <span className="text-[#1E1E1E] font-bold text-lg">SnapKO</span>
           </Link>
           <div className="hidden md:flex items-center gap-6 text-sm text-[#6F6B63]">

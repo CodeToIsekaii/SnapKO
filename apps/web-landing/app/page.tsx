@@ -2,6 +2,7 @@
 
 import React, { useState, ReactNode } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import SmartDownloadButton from "./components/SmartDownloadButton";
 import NavBar from "./components/NavBar";
+import DownloadButtons from "./components/DownloadButtons";
 
 // ============================================================
 // REUSABLE COMPONENTS
@@ -33,9 +35,13 @@ import NavBar from "./components/NavBar";
 // Logo Component
 const Logo = ({ className = "" }: { className?: string }) => (
   <div className={`flex items-center gap-2 ${className}`}>
-    <div className="w-8 h-8 bg-[#6B8E23] rounded-full flex items-center justify-center">
-      <Check className="w-4 h-4 text-white" />
-    </div>
+    <Image
+      src="/logo.png"
+      alt="SnapKO Logo"
+      width={36}
+      height={36}
+      className="object-contain"
+    />
     <span className="text-[#1E1E1E] font-bold text-lg">SnapKO</span>
   </div>
 );
@@ -129,7 +135,7 @@ const FeatureCard = ({
     whileInView={{ opacity: 1, y: 0 }}
     viewport={{ once: true }}
     transition={{ duration: 0.5 }}
-    className="bg-white border border-[#E0DCD5] rounded-xl p-6 hover:shadow-lg transition-shadow"
+    className="bg-white border border-[#E0DCD5] rounded-xl p-6 hover:shadow-xl hover:border-[#E07A2F]/30 hover:-translate-y-1 transition-all duration-300"
   >
     <div
       className={`w-12 h-12 ${iconBg} border border-[#E0DCD5] rounded-xl flex items-center justify-center mb-4`}
@@ -162,7 +168,7 @@ const StepCard = ({
     whileInView={{ opacity: 1, y: 0 }}
     viewport={{ once: true }}
     transition={{ duration: 0.5, delay }}
-    className="bg-[#FAF9F7] rounded-xl p-6 text-center"
+    className="bg-[#FAF9F7] rounded-xl p-6 text-center hover:shadow-lg hover:bg-white hover:-translate-y-1 transition-all duration-300 border border-transparent hover:border-[#E0DCD5]"
   >
     <div
       className={`w-14 h-14 ${iconBg} rounded-xl flex items-center justify-center mx-auto mb-4`}
@@ -203,10 +209,10 @@ const PricingCard = ({
     whileInView={{ opacity: 1, y: 0 }}
     viewport={{ once: true }}
     transition={{ duration: 0.5 }}
-    className={`bg-white rounded-2xl p-8 relative ${
+    className={`bg-white rounded-2xl p-8 relative hover:shadow-xl hover:-translate-y-1 transition-all duration-300 ${
       popular
         ? "border-2 border-[#E07A2F] shadow-lg"
-        : "border border-[#E0DCD5]"
+        : "border border-[#E0DCD5] hover:border-[#E07A2F]/30"
     }`}
   >
     {popular && (
@@ -245,11 +251,6 @@ const PricingCard = ({
     >
       {cta}
     </Button>
-    {popular && (
-      <p className="text-center text-xs text-[#6F6B63] mt-3">
-        Không cần thẻ tín dụng
-      </p>
-    )}
   </motion.div>
 );
 
@@ -273,7 +274,7 @@ const FAQItem = ({ icon, number, question, answer }: FAQItemProps) => {
     >
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-start gap-3 w-full p-6 text-left hover:bg-[#FAF9F7] transition-colors"
+        className="flex items-start gap-3 w-full p-6 text-left hover:bg-[#FAF9F7] transition-colors cursor-pointer"
       >
         <div className="w-8 h-8 bg-[#6B8E23]/10 rounded-lg flex items-center justify-center flex-shrink-0">
           {icon}
@@ -368,8 +369,16 @@ export default function LandingPage() {
       <NavBar />
 
       {/* Hero Section */}
-      <section className="pt-28 pb-20">
-        <div className="max-w-6xl mx-auto px-4">
+      <section className="relative pt-32 pb-20 overflow-hidden">
+        {/* Background Pattern Layer */}
+        <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] opacity-[0.03]" />
+
+        {/* Gradient Blob - Orange accent */}
+        <div className="absolute -top-24 -right-24 h-96 w-96 rounded-full bg-[#E07A2F] opacity-10 blur-3xl" />
+        <div className="absolute top-1/2 -left-48 h-72 w-72 rounded-full bg-[#6B8E23] opacity-[0.08] blur-3xl" />
+
+        {/* Content */}
+        <div className="relative z-10 max-w-6xl mx-auto px-4">
           <div className="grid md:grid-cols-2 gap-12 items-center">
             {/* Left Content */}
             <motion.div
@@ -397,8 +406,8 @@ export default function LandingPage() {
                 liệu tuyệt đối.
               </p>
 
-              <SmartDownloadButton />
-              <div className="flex items-center gap-4 mt-4">
+              <div className="flex flex-col items-center w-fit gap-3">
+                <SmartDownloadButton />
                 <Link
                   href="/download"
                   className="text-[#6F6B63] text-sm hover:text-[#E07A2F] underline"
@@ -474,49 +483,66 @@ export default function LandingPage() {
                   </div>
                 </div>
 
-                {/* Green Download Card */}
-                <div className="bg-[#6B8E23] rounded-xl p-5 text-white">
-                  <h3 className="font-bold text-lg mb-1">
-                    Sẵn sàng kiểm soát kho?
-                  </h3>
-                  <p className="text-sm opacity-90 mb-4">
-                    Tham gia cuộc cách mạng Hybrid. Tải SnapKO ngay hôm nay.
-                  </p>
+                {/* Live Activity Feed */}
+                <div className="bg-[#FAF9F7] rounded-xl p-4 border border-[#E0DCD5]">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-bold text-[#1E1E1E] text-sm flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-[#E07A2F] animate-pulse" />
+                      Hoạt động thời gian thực
+                    </h3>
+                    <span className="text-[10px] text-[#6F6B63] bg-white px-2 py-1 rounded border border-[#E0DCD5]">
+                      Live
+                    </span>
+                  </div>
 
-                  {/* Download buttons - matching Figma layout */}
-                  <div className="flex items-center gap-2">
-                    {/* iOS button - gray background */}
-                    <motion.button
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      className="flex items-center gap-2 bg-[#F5F5F5] text-[#1E1E1E] rounded-lg px-4 py-2.5"
-                    >
-                      <Apple className="w-5 h-5" />
-                      <span className="text-sm font-medium">iOS</span>
-                    </motion.button>
+                  <div className="space-y-3">
+                    {/* Item 1: AI Analysis */}
+                    <div className="flex items-start gap-3 p-3 bg-white rounded-lg border border-[#E0DCD5]/50 shadow-sm">
+                      <div className="w-8 h-8 rounded-full bg-[#E07A2F]/10 flex items-center justify-center flex-shrink-0">
+                        <Zap className="w-4 h-4 text-[#E07A2F]" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-[#1E1E1E]">
+                          AI đang phân tích hóa đơn...
+                        </div>
+                        <div className="text-[10px] text-[#6F6B63]">
+                          Nhập hàng NCC Thái Long • 12 mặt hàng
+                        </div>
+                      </div>
+                    </div>
 
-                    {/* Android button - white border */}
-                    <motion.button
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      className="flex items-center gap-2 bg-white text-[#1E1E1E] border border-[#E0DCD5] rounded-lg px-4 py-2.5"
-                    >
-                      <Smartphone className="w-5 h-5" />
-                      <span className="text-sm font-medium">Android</span>
-                    </motion.button>
+                    {/* Item 2: Risk Alert */}
+                    <div className="flex items-start gap-3 p-3 bg-white rounded-lg border border-[#E0DCD5]/50 shadow-sm">
+                      <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center flex-shrink-0">
+                        <AlertTriangle className="w-4 h-4 text-red-500" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-[#1E1E1E]">
+                          Cảnh báo lệch kho
+                        </div>
+                        <div className="text-[10px] text-[#6F6B63]">
+                          Bia Heineken:{" "}
+                          <span className="text-red-500 font-medium">
+                            -2 chai
+                          </span>{" "}
+                          so với POS
+                        </div>
+                      </div>
+                    </div>
 
-                    {/* Desktop dropdown - green bg with macOS + Windows */}
-                    <div className="flex bg-[#5a7a1f] rounded-lg overflow-hidden ml-auto">
-                      <button className="flex items-center gap-1.5 px-3 py-2.5 text-white hover:bg-[#4d6a1a] transition-colors">
-                        <Apple className="w-4 h-4" />
-                        <span className="text-sm">macOS</span>
-                      </button>
-                      <div className="w-px bg-white/30"></div>
-                      <button className="flex items-center gap-1.5 px-3 py-2.5 text-white hover:bg-[#4d6a1a] transition-colors">
-                        <Monitor className="w-4 h-4" />
-                        <span className="text-sm">Windows</span>
-                      </button>
-                      <ChevronDown className="w-4 h-4 text-white self-center mr-2" />
+                    {/* Item 3: Staff Action */}
+                    <div className="flex items-start gap-3 p-3 bg-white rounded-lg border border-[#E0DCD5]/50 shadow-sm">
+                      <div className="w-8 h-8 rounded-full bg-[#6B8E23]/10 flex items-center justify-center flex-shrink-0">
+                        <Check className="w-4 h-4 text-[#6B8E23]" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-[#1E1E1E]">
+                          Kiểm kho cuối ca hoàn tất
+                        </div>
+                        <div className="text-[10px] text-[#6F6B63]">
+                          Bởi: Nguyễn Văn A • Quầy Bar Tầng 1
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -730,7 +756,7 @@ export default function LandingPage() {
           centered
         />
 
-        <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+        <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
           <PricingCard
             name="Gói A: STARTER"
             subtitle="Để chủ quán dùng thử & trải nghiệm"
@@ -757,13 +783,38 @@ export default function LandingPage() {
               "Chống gian lận (Cảnh báo Dư/Thiếu)",
               "Đa người dùng (Phân quyền Staff)",
               "Báo cáo nâng cao (Excel, Biểu đồ)",
-              "Kho Model B (Chuẩn) & C (Chuỗi)",
+              "Kho Model B (Chuẩn)",
             ]}
-            cta="Dùng thử 14 ngày miễn phí"
+            cta="Dùng thử 2 tháng miễn phí"
             popular
             checkColor="text-[#E07A2F]"
             href="/pricing"
           />
+          <PricingCard
+            name="Gói C: PREMIUM"
+            subtitle="Dành cho chuỗi F&B và doanh nghiệp"
+            price="150.000đ"
+            priceUnit="/tháng"
+            features={[
+              "Tất cả tính năng PRO",
+              "Kho Model C (Chuỗi nhiều chi nhánh)",
+              "Hỗ trợ ưu tiên 24/7",
+              "Dashboard Analytics nâng cao",
+            ]}
+            cta="Dùng thử 2 tháng miễn phí"
+            checkColor="text-[#E07A2F]"
+            href="/pricing"
+          />
+        </div>
+
+        {/* See More Link */}
+        <div className="text-center mt-8">
+          <Link
+            href="/pricing"
+            className="inline-flex items-center gap-2 text-[#E07A2F] font-medium hover:underline"
+          >
+            Xem thêm nhiều gói khác →
+          </Link>
         </div>
       </Section>
 
@@ -781,25 +832,25 @@ export default function LandingPage() {
             icon={<WifiOff className="w-4 h-4 text-[#6B8E23]" />}
             number={1}
             question="Mất mạng có dùng được không?"
-            answer="Được. App chạy chế độ Offline-first. Bạn cứ chụp và lưu bình thường. Khi nào có mạng, app sẽ tự động đồng bộ lên cho chủ quán xem."
+            answer="Được. SnapKO chạy chế độ Local-first (Offline-first). Bạn cứ chụp ảnh, nhập liệu bình thường. Khi có mạng, app sẽ tự động đồng bộ dữ liệu lên Cloud cho chủ quán xem trên Dashboard."
           />
           <FAQItem
             icon={<Monitor className="w-4 h-4 text-[#6B8E23]" />}
             number={2}
-            question="Tại sao tôi không tải được App trên máy tính?"
-            answer="Chủ quán: Dùng trình duyệt web vào app.snapko.vn. Không cần tải cài đặt phức tạp. Nhân viên: Chỉ dùng trên điện thoại để chụp ảnh cho tiện."
+            question="Chủ quán dùng trên máy tính như thế nào?"
+            answer="Chủ quán tải app Desktop (Windows,Mac) hoặc Điện thoại để quản lý toàn bộ kho, xem báo cáo, duyệt nhân viên. Nhân viên chỉ cần dùng app Mobile (Android/iOS) để chụp ảnh kiểm kho hàng ngày."
           />
           <FAQItem
             icon={<ShieldCheck className="w-4 h-4 text-[#6B8E23]" />}
             number={3}
-            question='Tại sao App báo "Too Perfect" (Quá hoàn hảo)?'
-            answer="Nếu bạn kiểm kho chất lỏng (sữa, rượu) mà khớp 100% liên tục, hệ thống sẽ nghi ngờ bạn không cân đo thật mà tự đạo sổ. Hãy trung thực ghi nhận hao hụt (spillage) nếu có."
+            question="Dữ liệu của tôi có an toàn không?"
+            answer="Hoàn toàn. SnapKO sử dụng Supabase với mã hóa AES-256, Row Level Security (RLS) để đảm bảo chỉ bạn và nhân viên được phép mới thấy được dữ liệu của quán."
           />
           <FAQItem
             icon={<ClipboardCheck className="w-4 h-4 text-[#6B8E23]" />}
             number={4}
-            question="Tôi lỡ chụp sai thì sao?"
-            answer='Trước khi bấm nút "Submit" (Gửi), bạn luôn có thể sửa lại. Sau khi đã Gửi, bạn phải liên hệ Chủ quán để họ sửa trên Dashboard. Nhân viên không có quyền sửa dữ liệu quá khứ.'
+            question="AI nhận diện kho như thế nào?"
+            answer="Bạn chụp ảnh nguyên liệu hoặc phiếu kiểm kho viết tay. AI của SnapKO (GPT-4o) sẽ tự động nhận dạng và nhập liệu vào hệ thống, tiết kiệm 90% thời gian gõ phím."
           />
         </div>
       </Section>
@@ -816,161 +867,17 @@ export default function LandingPage() {
             Sẵn sàng kiểm soát kho?
           </h2>
           <p className="opacity-90 mb-10 max-w-xl mx-auto">
-            Tham gia cuộc cách mạng Hybrid. Tải SnapKO ngay hôm nay và đừng việc
-            thất thoát lợi nhuận.
+            Tham gia cuộc cách mạng Hybrid. Tải SnapKO ngay hôm nay và ngừng
+            việc thất thoát lợi nhuận.
           </p>
 
-          <div className="flex flex-wrap justify-center gap-3">
-            <motion.a
-              href="#"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className="flex items-center gap-3 bg-white text-[#1E1E1E] rounded-xl px-5 py-3 hover:bg-[#FAF9F7] transition-colors"
-            >
-              <Apple className="w-5 h-5" />
-              <div className="text-left">
-                <div className="text-[10px] text-[#6F6B63]">Download for</div>
-                <div className="font-semibold text-sm">iOS</div>
-              </div>
-            </motion.a>
-            <motion.a
-              href="#"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className="flex items-center gap-3 bg-white text-[#1E1E1E] rounded-xl px-5 py-3 hover:bg-[#FAF9F7] transition-colors"
-            >
-              <Smartphone className="w-5 h-5" />
-              <div className="text-left">
-                <div className="text-[10px] text-[#6F6B63]">Download for</div>
-                <div className="font-semibold text-sm">Android</div>
-              </div>
-            </motion.a>
-            <div className="flex bg-white/10 rounded-xl overflow-hidden">
-              <motion.a
-                href="#"
-                whileHover={{ backgroundColor: "rgba(255,255,255,0.2)" }}
-                className="flex items-center gap-2 px-4 py-3"
-              >
-                <Apple className="w-4 h-4" />
-                <span className="text-sm font-medium">macOS</span>
-              </motion.a>
-              <motion.a
-                href="#"
-                whileHover={{ backgroundColor: "rgba(255,255,255,0.2)" }}
-                className="flex items-center gap-2 px-4 py-3 border-l border-white/20"
-              >
-                <Monitor className="w-4 h-4" />
-                <span className="text-sm font-medium">Windows</span>
-              </motion.a>
-            </div>
-          </div>
+          <DownloadButtons className="justify-center" />
+
           <p className="text-xs opacity-70 mt-4">
             Requires Windows 10/11 64-bit
           </p>
         </motion.div>
       </Section>
-
-      {/* Pricing Section */}
-      <section id="pricing" className="py-20 border-t border-[#E0DCD5]">
-        <div className="max-w-5xl mx-auto px-4">
-          {/* Header */}
-          <div className="text-center mb-12">
-            <span className="text-xs font-bold text-[#E07A2F] uppercase tracking-wider">
-              BẢNG GIÁ ĐƠN GIẢN
-            </span>
-            <h2 className="text-4xl font-serif text-[#1E1E1E] mt-3">
-              Trả phí cho hiệu quả thực tế
-            </h2>
-          </div>
-
-          {/* Pricing Cards */}
-          <div className="grid md:grid-cols-2 gap-8">
-            {/* STARTER - Free */}
-            <div className="bg-white rounded-2xl border border-[#E0DCD5] p-8">
-              <div className="text-xs text-[#6F6B63] mb-1">Gói A: STARTER</div>
-              <div className="text-sm text-[#6F6B63] mb-4">
-                Để chủ quán dùng thử & trải nghiệm
-              </div>
-
-              <div className="flex items-baseline gap-2 mb-6">
-                <span className="text-4xl font-serif text-[#E07A2F]">
-                  Miễn phí
-                </span>
-                <span className="text-[#6F6B63]">vĩnh viễn</span>
-              </div>
-
-              <ul className="space-y-3 mb-8">
-                {[
-                  "Lưu trữ nội bộ (Local-first)",
-                  "Không đồng bộ Cloud",
-                  "1 Người dùng (Owner)",
-                  "AI: 10 lần scan/tháng",
-                  "Kho Model A (Cơ bản)",
-                ].map((feature, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <Check className="w-5 h-5 text-[#6B8E23] mt-0.5 flex-shrink-0" />
-                    <span className="text-[#1E1E1E]">{feature}</span>
-                  </li>
-                ))}
-              </ul>
-
-              <Link
-                href="/auth/register"
-                className="block w-full py-3 px-6 rounded-xl border-2 border-[#E0DCD5] text-[#E07A2F] font-semibold text-center hover:bg-[#FAF9F7] transition-colors"
-              >
-                Bắt đầu ngay
-              </Link>
-            </div>
-
-            {/* PRO */}
-            <div className="relative bg-white rounded-2xl border-2 border-[#E07A2F] p-8 shadow-lg">
-              {/* Popular badge */}
-              <div className="absolute -top-4 right-6 bg-[#6B8E23] text-white text-xs font-bold px-4 py-1.5 rounded-full">
-                PHỔ BIẾN
-              </div>
-
-              <div className="text-xs text-[#6F6B63] mb-1">Gói B: PRO</div>
-              <div className="text-sm text-[#6F6B63] mb-4">
-                Dành cho quán vận hành chuyên nghiệp
-              </div>
-
-              <div className="flex items-baseline gap-2 mb-6">
-                <span className="text-4xl font-serif text-[#E07A2F]">
-                  100.000đ
-                </span>
-                <span className="text-[#6F6B63]">/tháng</span>
-              </div>
-
-              <ul className="space-y-3 mb-8">
-                {[
-                  "Cloud Sync (Real-time) đa thiết bị",
-                  "Unlimited AI (Scan thoải mái)",
-                  "Chống gian lận (Cảnh báo Dư/Thiếu)",
-                  "Đa người dùng (Phân quyền Staff)",
-                  "Báo cáo nâng cao (Excel, Biểu đồ)",
-                  "Kho Model B (Chuẩn) & C (Chuỗi)",
-                ].map((feature, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <Check className="w-5 h-5 text-[#6B8E23] mt-0.5 flex-shrink-0" />
-                    <span className="text-[#1E1E1E]">{feature}</span>
-                  </li>
-                ))}
-              </ul>
-
-              <Link
-                href="/pricing"
-                className="block w-full py-3 px-6 rounded-xl bg-[#E07A2F] text-white font-semibold text-center hover:bg-[#C2410C] transition-colors"
-              >
-                Dùng thử 14 ngày miễn phí
-              </Link>
-
-              <p className="text-center text-sm text-[#6F6B63] mt-3">
-                Không cần thẻ tín dụng
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
 
       {/* Footer */}
       <footer className="py-12 border-t border-[#E0DCD5]">
@@ -982,10 +889,52 @@ export default function LandingPage() {
                 Hệ thống quản lý kho duy nhất được thiết kế cho sự hỗn loạn của
                 F&B. Local-first, AI mạnh mẽ, và bảo mật tuyệt đối.
               </p>
-              <div className="flex gap-2">
-                <div className="w-8 h-8 bg-[#1E1E1E] rounded-full"></div>
-                <div className="w-8 h-8 bg-[#1E1E1E] rounded-full"></div>
-                <div className="w-8 h-8 bg-[#1E1E1E] rounded-full"></div>
+              <div className="flex gap-3">
+                <a
+                  href="https://facebook.com/snapko"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-9 h-9 bg-[#1E1E1E] hover:bg-[#E07A2F] rounded-full flex items-center justify-center transition-colors cursor-pointer"
+                  aria-label="Facebook"
+                >
+                  <svg
+                    className="w-4 h-4 text-white"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path d="M18 2h-3a5 5 0 00-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 011-1h3z" />
+                  </svg>
+                </a>
+                <a
+                  href="https://tiktok.com/@snapko"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-9 h-9 bg-[#1E1E1E] hover:bg-[#E07A2F] rounded-full flex items-center justify-center transition-colors cursor-pointer"
+                  aria-label="TikTok"
+                >
+                  <svg
+                    className="w-4 h-4 text-white"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-5.2 1.74 2.89 2.89 0 012.31-4.64 2.93 2.93 0 01.88.13V9.4a6.84 6.84 0 00-1-.05A6.33 6.33 0 005 20.1a6.34 6.34 0 0010.86-4.43v-7a8.16 8.16 0 004.77 1.52v-3.4a4.85 4.85 0 01-1-.1z" />
+                  </svg>
+                </a>
+                <a
+                  href="https://zalo.me/snapko"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-9 h-9 bg-[#1E1E1E] hover:bg-[#E07A2F] rounded-full flex items-center justify-center transition-colors cursor-pointer"
+                  aria-label="Zalo"
+                >
+                  <svg
+                    className="w-4 h-4 text-white"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+                  </svg>
+                </a>
               </div>
             </div>
 

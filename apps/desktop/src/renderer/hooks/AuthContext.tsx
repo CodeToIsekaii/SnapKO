@@ -23,6 +23,10 @@ interface Profile {
   status: string;
   full_name: string | null;
   inventory_model: string | null; // MODEL_A or MODEL_B
+  // Subscription data (from businesses table)
+  tier?: string | null;
+  subscription_expires_at?: string | null;
+  business_created_at?: string | null;
 }
 
 interface AuthState {
@@ -107,6 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             user: {
               id: result.session.user.id,
               email: result.session.user.email || "",
+              created_at: result.session.user.created_at,
             },
             profile: null,
             loading: false,
@@ -165,6 +170,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             user: {
               id: result.session.user.id,
               email: result.session.user.email || "",
+              created_at: result.session.user.created_at,
             },
             profile: null,
             loading: false,
@@ -205,6 +211,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           user: {
             id: result.session.user.id,
             email: result.session.user.email || "",
+            created_at: result.session.user.created_at,
           },
           profile: null,
           loading: false,
@@ -267,6 +274,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             user: {
               id: authData.user.id,
               email: authData.user.email || "",
+              created_at: authData.user.created_at,
             },
             profile: null,
             loading: false,

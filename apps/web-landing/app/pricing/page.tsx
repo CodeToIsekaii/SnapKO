@@ -6,21 +6,35 @@ import Link from "next/link";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 import { User } from "@supabase/supabase-js";
 import NavBar from "../components/NavBar";
-import { CheckCircle, Crown } from "lucide-react";
+import { CheckCircle, Crown, Star } from "lucide-react";
 
 /**
- * /pricing - Payment Page
+ * /pricing - Dynamic Pricing Page
+ * Fetches plans from database
  * Shows QR code for payment using PayOS
- * Handles return from PayOS with status parameter
  */
 
-const PRO_PRICE = 100000; // 100.000đ
+interface SubscriptionPlan {
+  id: string;
+  code: string;
+  name: string;
+  price: number;
+  duration_days: number;
+  target_tier: string;
+  description: string | null;
+}
 
 export default function PricingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+
   const [user, setUser] = useState<User | null>(null);
+  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(
+    null
+  );
+
   const [isLoading, setIsLoading] = useState(true);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [payosUrl, setPayosUrl] = useState<string | null>(null);
@@ -31,13 +45,11 @@ export default function PricingPage() {
   const paymentCode = searchParams.get("code");
   const cancelParam = searchParams.get("cancel");
 
-  // Check cancelled FIRST (cancelled can come with code=00 sometimes)
   const isPaymentCancelled =
     paymentStatus === "cancelled" ||
     paymentStatus === "CANCELLED" ||
     cancelParam === "true";
 
-  // Success only if NOT cancelled
   const isPaymentSuccess =
     !isPaymentCancelled &&
     (paymentStatus === "success" ||
@@ -45,51 +57,63 @@ export default function PricingPage() {
       paymentCode === "00");
 
   useEffect(() => {
-    const checkSession = async () => {
+    const init = async () => {
+      console.log("PricingPage: Init started");
+
+      // 1. Check Session
+      console.log("PricingPage: Checking session...");
       const { data } = await supabase.auth.getSession();
+      console.log(
+        "PricingPage: Session result:",
+        data.session ? "Found" : "Null"
+      );
+
       if (!data.session) {
+        // Allow viewing plans without login? Maybe, but for payment we need user.
+        // For now, redirect to register if not logged in
         router.push("/auth/register");
         return;
       }
       setUser(data.session.user);
+
+      // 2. Fetch Plans
+      console.log("PricingPage: Fetching plans...");
+      const { data: plansData, error: plansError } = await supabase
+        .from("subscription_plans")
+        .select("*")
+        .eq("is_active", true)
+        .order("price", { ascending: true });
+
+      console.log("PricingPage: Plans fetch result:", {
+        plansData,
+        error: plansError,
+      });
+
+      if (plansData) {
+        setPlans(plansData);
+        // Default select the first plan (usually Monthly PRO) if exists
+        if (plansData.length > 0) setSelectedPlan(plansData[0]);
+      }
+
       setIsLoading(false);
+      console.log("PricingPage: Loading set to false");
     };
 
-    checkSession();
+    init();
   }, [supabase, router]);
 
-  // Calculate trial status
-  const getTrialDaysLeft = () => {
-    if (!user?.created_at) return 14;
-    const createdAt = new Date(user.created_at);
-    const now = new Date();
-    const diffMs = now.getTime() - createdAt.getTime();
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    return Math.max(0, 14 - diffDays);
-  };
-
-  const trialDaysLeft = getTrialDaysLeft();
-  const isTrialExpired = trialDaysLeft === 0;
-
   // Create PayOS payment link
-  const createPayment = async () => {
+  const createPayment = async (plan: SubscriptionPlan) => {
     if (!user) return;
-
-    // 1. Chống Spam Click: Nếu đang loading thì chặn luôn
     if (paymentLoading) return;
-
-    // 2. Kiểm tra nếu đã có link chưa thanh toán (Optional - UX improvement)
-    // Nếu bạn muốn user phải hủy link cũ mới được tạo link mới thì check payosUrl ở đây.
-    // if (payosUrl) { window.open(payosUrl, '_blank'); return; }
 
     setPaymentLoading(true);
     setError(null);
+    setPayosUrl(null); // Reset previous URL
 
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-
-      // 3. Lấy domain hiện tại (localhost hoặc production) để redirect về đúng chỗ
       const origin = window.location.origin;
 
       const res = await fetch(
@@ -102,25 +126,23 @@ export default function PricingPage() {
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
-            tier: "PRO",
-            amount: PRO_PRICE,
-            // Gửi URL return/cancel động theo môi trường
-            returnUrl: `${origin}/settings/billing?status=success`,
-            cancelUrl: `${origin}/settings/billing?status=cancelled`,
+            tier: plan.target_tier, // Still support tier logic for backward compatibility
+            amount: plan.price,
+            planCode: plan.code, // Send plan code for webhook handling
+            returnUrl: `${origin}/pricing?status=success`, // Stay on pricing page for success msg
+            cancelUrl: `${origin}/pricing?status=cancelled`,
           }),
         }
       );
 
       const data = await res.json();
 
-      // 4. Xử lý lỗi từ Backend trả về (Ví dụ: "Bạn còn đơn chưa thanh toán")
       if (!res.ok || data.error) {
         throw new Error(data.error || "Không thể tạo link thanh toán");
       }
 
       if (data.checkoutUrl) {
         setPayosUrl(data.checkoutUrl);
-        // Tùy chọn: Tự động mở tab mới luôn cho tiện
         // window.open(data.checkoutUrl, '_blank');
       }
     } catch (err) {
@@ -131,74 +153,32 @@ export default function PricingPage() {
     }
   };
 
-  // Auto create payment on load (only if not returning from payment)
-  useEffect(() => {
-    if (
-      user &&
-      !payosUrl &&
-      !paymentLoading &&
-      !isPaymentSuccess &&
-      !isPaymentCancelled
-    ) {
-      createPayment();
-    }
-  }, [user, isPaymentSuccess, isPaymentCancelled]);
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat("vi-VN", {
+      style: "currency",
+      currency: "VND",
+    }).format(price);
+  };
 
-  // Payment Success UI - show immediately without waiting for session
+  // --- Render ---
+
   if (isPaymentSuccess) {
     return (
       <div className="min-h-screen bg-[#FAF9F7]">
         <NavBar />
         <div className="pt-28 pb-20">
           <div className="max-w-md mx-auto px-4 text-center">
-            {/* Success Animation */}
             <div className="mb-8">
               <div className="w-24 h-24 mx-auto bg-gradient-to-br from-[#6B8E23] to-[#556B2F] rounded-full flex items-center justify-center animate-pulse">
                 <CheckCircle className="w-12 h-12 text-white" />
               </div>
             </div>
-
-            {/* Success Message */}
             <h1 className="text-3xl font-bold text-[#1E1E1E] mb-4">
               🎉 Thanh toán thành công!
             </h1>
             <p className="text-[#6F6B63] mb-8">
-              Chúc mừng bạn đã nâng cấp lên gói PRO. Tất cả tính năng cao cấp đã
-              được kích hoạt.
+              Gói cước của bạn đã được kích hoạt. Hãy trải nghiệm ngay!
             </p>
-
-            {/* PRO Badge */}
-            <div className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-[#E07A2F] to-[#C2410C] text-white rounded-full font-bold mb-8">
-              <Crown className="w-5 h-5" />
-              BẠN ĐÃ LÀ THÀNH VIÊN PRO
-            </div>
-
-            {/* Features unlocked */}
-            <div className="bg-white rounded-2xl border border-[#E0DCD5] p-6 mb-8 text-left">
-              <h3 className="font-bold text-[#1E1E1E] mb-4">
-                Tính năng đã mở khóa:
-              </h3>
-              <ul className="space-y-3 text-sm">
-                {[
-                  "Cloud Sync real-time đa thiết bị",
-                  "Unlimited AI scan",
-                  "Chống gian lận thông minh",
-                  "Đa người dùng & phân quyền",
-                  "Báo cáo nâng cao",
-                  "Kho Model B & C",
-                ].map((feature, i) => (
-                  <li
-                    key={i}
-                    className="flex items-center gap-2 text-[#6F6B63]"
-                  >
-                    <CheckCircle className="w-4 h-4 text-[#6B8E23]" />
-                    {feature}
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {/* CTA */}
             <Link
               href="/dashboard"
               className="block w-full py-4 px-6 rounded-xl bg-[#E07A2F] text-white font-bold text-center hover:bg-[#C2410C] transition-colors"
@@ -211,7 +191,6 @@ export default function PricingPage() {
     );
   }
 
-  // Payment Cancelled UI
   if (isPaymentCancelled) {
     return (
       <div className="min-h-screen bg-[#FAF9F7]">
@@ -221,12 +200,9 @@ export default function PricingPage() {
             <h1 className="text-3xl font-bold text-[#1E1E1E] mb-4">
               Thanh toán đã hủy
             </h1>
-            <p className="text-[#6F6B63] mb-8">
-              Bạn đã hủy thanh toán. Bạn có thể thử lại bất cứ lúc nào.
-            </p>
             <button
               onClick={() => {
-                router.push("/pricing");
+                router.replace("/pricing"); // Clear params
               }}
               className="block w-full py-3 px-6 rounded-xl bg-[#E07A2F] text-white font-semibold text-center hover:bg-[#C2410C] transition-colors mb-4"
             >
@@ -244,7 +220,6 @@ export default function PricingPage() {
     );
   }
 
-  // Loading state for normal pricing page (not for success/cancelled)
   if (isLoading) {
     return (
       <div className="min-h-screen bg-[#FAF9F7]">
@@ -259,102 +234,128 @@ export default function PricingPage() {
   return (
     <div className="min-h-screen bg-[#FAF9F7]">
       <NavBar />
-
       <div className="pt-28 pb-20">
-        <div className="max-w-md mx-auto px-4">
-          {/* Header */}
-          <div className="text-center mb-8">
+        <div className="max-w-6xl mx-auto px-4">
+          <div className="text-center mb-12">
             <h1 className="text-3xl font-bold text-[#1E1E1E] mb-2">
-              {isTrialExpired ? "Gia hạn gói PRO" : "Nâng cấp lên PRO"}
+              Nâng cấp gói cước
             </h1>
             <p className="text-[#6F6B63]">
-              {isTrialExpired
-                ? "Bản dùng thử đã hết hạn. Thanh toán để tiếp tục sử dụng."
-                : `Còn ${trialDaysLeft} ngày dùng thử. Nâng cấp ngay để không bị gián đoạn.`}
+              Chọn gói phù hợp với nhu cầu kinh doanh của bạn
             </p>
           </div>
 
-          {/* Payment Card */}
-          <div className="bg-white rounded-2xl border border-[#E0DCD5] p-8">
-            {/* Plan info */}
-            <div className="text-center mb-6">
-              <div className="text-xs text-[#6F6B63] mb-1">Gói B: PRO</div>
-              <div className="flex items-baseline justify-center gap-2">
-                <span className="text-4xl font-serif text-[#E07A2F]">
-                  100.000đ
-                </span>
-                <span className="text-[#6F6B63]">/tháng</span>
-              </div>
-            </div>
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+            {plans.map((plan) => {
+              const isPremium = plan.code.includes("PREMIUM");
+              const isYearly = plan.duration_days >= 365;
 
-            {/* Error */}
-            {error && (
-              <div className="bg-red-50 text-red-600 text-sm p-3 rounded-xl mb-4 text-center">
-                {error}
-              </div>
-            )}
-
-            {/* PayOS Button */}
-            {paymentLoading ? (
-              <div className="flex justify-center py-8">
-                <div className="w-8 h-8 border-4 border-[#E07A2F] border-t-transparent rounded-full animate-spin" />
-              </div>
-            ) : payosUrl ? (
-              <>
-                <a
-                  href={payosUrl}
-                  className="block w-full py-4 px-6 rounded-xl bg-[#E07A2F] text-white font-bold text-center hover:bg-[#C2410C] transition-colors mb-4"
+              return (
+                <div
+                  key={plan.id}
+                  className={`relative flex flex-col bg-white rounded-2xl border ${
+                    isPremium
+                      ? "border-orange-500 shadow-lg"
+                      : "border-[#E0DCD5]"
+                  } p-6 hover:shadow-xl transition-shadow`}
                 >
-                  🚀 MỞ TRANG THANH TOÁN
-                </a>
-                <p className="text-sm text-[#6F6B63] text-center mb-4">
-                  Nhấn để mở trang thanh toán PayOS và quét mã QR
-                </p>
-              </>
-            ) : (
-              <button
-                onClick={createPayment}
-                className="w-full py-4 px-6 rounded-xl bg-[#E07A2F] text-white font-bold hover:bg-[#C2410C] transition-colors mb-4"
-              >
-                Tạo mã thanh toán
-              </button>
-            )}
+                  {isPremium && (
+                    <div className="absolute top-0 right-0 bg-orange-500 text-white text-xs font-bold px-3 py-1 rounded-bl-xl rounded-tr-xl flex items-center gap-1">
+                      <Star className="w-3 h-3 fill-current" />
+                      MODEL C (Chain)
+                    </div>
+                  )}
 
-            {/* Info */}
-            <div className="bg-[#FAF9F7] rounded-xl p-4 mb-6 space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-[#6F6B63]">Gói:</span>
-                <span className="font-bold text-[#1E1E1E]">PRO</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[#6F6B63]">Số tiền:</span>
-                <span className="font-bold text-[#E07A2F]">100.000₫</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[#6F6B63]">Thanh toán qua:</span>
-                <span className="font-bold text-[#1E1E1E]">PayOS</span>
-              </div>
-            </div>
+                  {isYearly && !isPremium && (
+                    <div className="absolute top-0 right-0 bg-[#6B8E23] text-white text-xs font-bold px-3 py-1 rounded-bl-xl rounded-tr-xl">
+                      TIẾT KIỆM
+                    </div>
+                  )}
 
-            <p className="text-sm text-[#6F6B63] text-center mb-6">
-              ⚠️ Sau khi thanh toán, hệ thống sẽ tự động kích hoạt gói PRO.
-            </p>
+                  <div className="mb-4">
+                    <h3 className="text-lg font-bold text-[#1E1E1E]">
+                      {plan.name}
+                    </h3>
+                    <div className="flex items-baseline gap-1 mt-2">
+                      <span className="text-3xl font-bold text-[#E07A2F]">
+                        {formatPrice(plan.price)}
+                      </span>
+                      <span className="text-sm text-[#6F6B63]">
+                        /{plan.duration_days} ngày
+                      </span>
+                    </div>
+                    {plan.description && (
+                      <p className="text-sm text-[#6F6B63] mt-2 italic">
+                        {plan.description}
+                      </p>
+                    )}
+                  </div>
 
-            {/* Actions */}
-            <div className="space-y-3">
-              <Link
-                href="/dashboard"
-                className="block w-full py-3 px-6 rounded-xl font-semibold bg-[#E0DCD5] text-[#6F6B63] text-center hover:bg-[#D0CCC5] transition-colors"
-              >
-                Quay lại Dashboard
-              </Link>
-              {!isTrialExpired && (
-                <p className="text-center text-xs text-[#6F6B63]">
-                  Bạn vẫn có thể tiếp tục dùng thử trong {trialDaysLeft} ngày
-                </p>
-              )}
-            </div>
+                  <ul className="space-y-3 mb-8 flex-1">
+                    <li className="flex items-start gap-2 text-sm text-[#1E1E1E]">
+                      <CheckCircle className="w-5 h-5 text-[#6B8E23] shrink-0" />
+                      {isPremium
+                        ? "Mọi tính năng của gói PRO"
+                        : "Tính năng cơ bản SnapKO"}
+                    </li>
+                    <li className="flex items-start gap-2 text-sm text-[#1E1E1E]">
+                      <CheckCircle className="w-5 h-5 text-[#6B8E23] shrink-0" />
+                      {isPremium
+                        ? "Hỗ trợ chuỗi (Chain Support)"
+                        : "Hỗ trợ 1 điểm bán"}
+                    </li>
+                    {isPremium && (
+                      <li className="flex items-start gap-2 text-sm text-[#1E1E1E]">
+                        <CheckCircle className="w-5 h-5 text-[#6B8E23] shrink-0" />
+                        Kho Model C chuyên sâu
+                      </li>
+                    )}
+                  </ul>
+
+                  {/* Payment Action */}
+                  {payosUrl && selectedPlan?.id === plan.id ? (
+                    <div className="space-y-2">
+                      <a
+                        href={payosUrl}
+                        className="block w-full py-3 px-4 rounded-xl bg-[#6B8E23] text-white font-bold text-center hover:bg-[#556B2F] transition-colors"
+                      >
+                        Thanh toán ngay →
+                      </a>
+                      <button
+                        onClick={() => setPayosUrl(null)}
+                        className="block w-full text-xs text-[#6F6B63] hover:underline text-center"
+                      >
+                        Chọn gói khác
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      disabled={paymentLoading}
+                      onClick={() => {
+                        setSelectedPlan(plan);
+                        createPayment(plan);
+                      }}
+                      className={`block w-full py-3 px-4 rounded-xl font-bold text-center transition-colors ${
+                        isPremium
+                          ? "bg-[#E07A2F] text-white hover:bg-[#C2410C]"
+                          : "bg-white border-2 border-[#E07A2F] text-[#E07A2F] hover:bg-[#FAF9F7]"
+                      } disabled:opacity-50`}
+                    >
+                      {paymentLoading && selectedPlan?.id === plan.id
+                        ? "Đang tạo..."
+                        : "Chọn gói này"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
+
+          {error && (
+            <div className="mt-8 mx-auto max-w-md bg-red-50 text-red-600 text-sm p-4 rounded-xl text-center">
+              {error}
+            </div>
+          )}
         </div>
       </div>
     </div>

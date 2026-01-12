@@ -84,8 +84,8 @@ export const ActivityLogTable: React.FC<ActivityLogTableProps> = ({ logs }) => {
 
 // Helper for action colors
 const getActionStyle = (action: string): React.CSSProperties => {
-  let color = COLORS.textPrimary;
-  let bg = "#F3F4F6";
+  let color: string = COLORS.textPrimary;
+  let bg: string = "#F3F4F6";
 
   const lower = action.toLowerCase();
   if (lower.includes("nhập") || lower.includes("stock")) {

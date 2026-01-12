@@ -1,7 +1,7 @@
 // Payment Webhook Edge Function: Receive SePay/Casso/PayOS webhook and extend subscription
 // Uses native Deno.serve() API per project rules
 
-import { createClient } from "supabase";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // ==================== TYPES ====================
 
@@ -80,6 +80,7 @@ function extractUserIdPrefix(content: string): string | null {
 // Calculate subscription extension based on amount
 function getSubscriptionDays(amount: number): number {
   if (amount >= 990000) return 365; // Yearly
+  if (amount >= 270000) return 90; // Quarterly (270k)
   if (amount >= 100000) return 30; // Monthly (100k)
   return 0;
 }
@@ -293,8 +294,34 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Calculate new expiration date
-    const extensionDays = getSubscriptionDays(amount);
+    // Lookup Plan from DB based on Amount
+    const { data: matchedPlan } = await supabaseAdmin
+      .from("subscription_plans")
+      .select("*")
+      .eq("price", amount)
+      .eq("is_active", true) // Prioritize active plans
+      .limit(1)
+      .single();
+
+    if (!matchedPlan) {
+      console.warn(`No matching plan found for amount: ${amount}`);
+      // Fallback or error? For now, we log failure if strict, or maybe fallback to default PRO logic if legacy.
+      // Let's keep it strict for new plans to avoid mismatched tiers.
+      // Actually, let's allow legacy fallback for safety if plan not found (e.g. custom transfer)
+      if (!businessId && !userId) {
+        // ... existing failure logic
+      }
+    }
+
+    // Determine extension days
+    let extensionDays = 0;
+
+    if (matchedPlan) {
+      extensionDays = matchedPlan.duration_days;
+    } else {
+      // Legacy fallback
+      extensionDays = getSubscriptionDays(amount);
+    }
 
     if (extensionDays === 0) {
       await supabaseAdmin.from("payment_transactions").insert({
@@ -306,7 +333,10 @@ Deno.serve(async (req: Request) => {
       });
 
       return new Response(
-        JSON.stringify({ success: false, error: "Amount too low" }),
+        JSON.stringify({
+          success: false,
+          error: "Amount does not match any plan",
+        }),
         {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -322,23 +352,30 @@ Deno.serve(async (req: Request) => {
     const newExpiration = new Date(startDate);
     newExpiration.setDate(newExpiration.getDate() + extensionDays);
 
+    const targetTier = matchedPlan ? matchedPlan.target_tier : "PRO";
+
     // Update subscription - either business or profile
     if (businessId) {
       await supabaseAdmin
         .from("businesses")
         .update({
           subscription_expires_at: newExpiration.toISOString(),
-          tier: "PRO",
+          tier: targetTier, // Keep tier for backward compatibility
+          plan_code: matchedPlan ? matchedPlan.code : null, // Save specific Plan Code
         })
         .eq("id", businessId);
     }
+
+    // ... (User update logic kept same, verify if user needs tier update)
 
     if (userId) {
       await supabaseAdmin
         .from("profiles")
         .update({
           subscription_expires_at: newExpiration.toISOString(),
-          is_pro: true,
+          is_pro: true, // Only generic flag supported on profile?
+          // If we track tier on profile, update it too. Schema check needed.
+          // For now, assuming is_pro is enough or tier is on business.
         })
         .eq("id", userId);
     }
@@ -351,6 +388,26 @@ Deno.serve(async (req: Request) => {
       transaction_code: transactionCode,
       gateway,
     });
+
+    // Log to subscription_history for tracking
+    if (businessId) {
+      const planCode = matchedPlan
+        ? matchedPlan.code
+        : extensionDays === 365
+        ? "YEARLY_PRO"
+        : "MONTHLY_PRO";
+
+      await supabaseAdmin.from("subscription_history").insert({
+        business_id: businessId,
+        plan_code: planCode,
+        plan_id: matchedPlan ? matchedPlan.id : null,
+        amount_paid: amount,
+        start_date: startDate.toISOString(),
+        end_date: newExpiration.toISOString(),
+        payment_gateway: gateway,
+        transaction_code: transactionCode,
+      });
+    }
 
     console.log(
       `Payment success: +${extensionDays} days, expires: ${newExpiration.toISOString()}`

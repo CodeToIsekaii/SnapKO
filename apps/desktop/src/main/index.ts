@@ -387,7 +387,7 @@ function registerAuthIPC() {
     }
 
     try {
-      // Fetch profile with inventory_model and join businesses for business_name
+      // Fetch profile with inventory_model and join businesses for subscription data
       const { data: profile, error } = await authClient
         .from("profiles")
         .select(
@@ -401,7 +401,10 @@ function registerAuthIPC() {
           inventory_model,
           businesses (
             name,
-            inventory_model
+            inventory_model,
+            tier,
+            subscription_expires_at,
+            created_at
           )
         `
         )
@@ -422,6 +425,11 @@ function registerAuthIPC() {
           (profile?.businesses as any)?.inventory_model ||
           profile.inventory_model ||
           "STANDARD",
+        // Subscription data
+        tier: (profile?.businesses as any)?.tier || "FREE",
+        subscription_expires_at:
+          (profile?.businesses as any)?.subscription_expires_at || null,
+        business_created_at: (profile?.businesses as any)?.created_at || null,
       };
 
       console.log("[Auth] Profile fetched:", flattenedProfile);

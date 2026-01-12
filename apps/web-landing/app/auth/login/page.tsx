@@ -45,10 +45,27 @@ export default function LoginPage() {
       }
 
       if (data.session) {
-        // Wait for session to be persisted
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        router.refresh();
-        router.push("/dashboard");
+        console.log("AUTH: Session found, checking profile...");
+        // Check role and redirect
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", data.session.user.id)
+          .single();
+
+        if (profileError) {
+          console.error("AUTH: Profile error:", profileError);
+        }
+
+        console.log("AUTH: Profile data:", profile);
+
+        if (profile?.role === "ADMIN") {
+          console.log("AUTH: Redirecting to /admin");
+          router.push("/admin");
+        } else {
+          console.log("AUTH: Redirecting to /dashboard");
+          router.push("/dashboard");
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Đăng nhập thất bại";

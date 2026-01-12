@@ -29,68 +29,43 @@ export interface UserProfile {
   status: ProfileStatusEnum;
   fullName: string | null;
   phoneNumber: string | null;
+  // Subscription data
+  tier?: string | null;
+  subscriptionExpiresAt?: string | null;
+  businessCreatedAt?: string | null;
 }
 
-export type AuthState =
-  | { status: "loading" }
-  | { status: "unauthenticated" }
-  | { status: "pending"; profileId: string } // Staff waiting for approval
-  | { status: "needs_setup"; user: User; profile: UserProfile } // Owner without business
-  | { status: "authenticated"; user: User; profile: UserProfile };
-
-interface AuthContextValue {
-  authState: AuthState;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (
-    email: string,
-    password: string,
-    businessName?: string
-  ) => Promise<void>;
-  signOut: () => Promise<void>;
-  refreshProfile: () => Promise<void>;
-  createBusiness: (name: string) => Promise<void>; // For Profile Setup
-  // Password Management
-  updatePassword: (oldPw: string, newPw: string) => Promise<void>;
-  resetPassword: (email: string) => Promise<void>;
-  // Staff flow
-  setStaffPending: (profileId: string) => void;
-  clearStaffPending: () => void;
-}
+// ... existing code ...
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-// ================== SUPABASE CLIENT ==================
-
-const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
-  auth: {
-    storage: AsyncStorage, // Standard solution for handling large sessions on React Native
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-  },
-});
-
-export { supabase };
-
-// ================== PROVIDER ==================
-
-interface AuthProviderProps {
-  children: ReactNode;
-}
-
-export function AuthProvider({ children }: AuthProviderProps) {
-  const [authState, setAuthState] = useState<AuthState>({ status: "loading" });
+// ... existing code ...
 
   // Fetch profile from DB
   const fetchProfile = useCallback(
     async (userId: string): Promise<UserProfile | null> => {
+      // Fetch profile and join businesses to get subscription data
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, business_id, role, status, full_name, phone_number")
+        .select(`
+          id, 
+          business_id, 
+          role, 
+          status, 
+          full_name, 
+          phone_number,
+          businesses (
+            tier,
+            subscription_expires_at,
+            created_at
+          )
+        `)
         .eq("id", userId)
         .maybeSingle();
 
       if (error || !data) return null;
+
+      const businessData = data.businesses as any;
 
       return {
         id: data.id,
@@ -99,6 +74,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
         status: data.status as ProfileStatusEnum,
         fullName: data.full_name,
         phoneNumber: data.phone_number,
+        // Flatten subscription data from joined table
+        tier: businessData?.tier || "FREE",
+        subscriptionExpiresAt: businessData?.subscription_expires_at || null,
+        businessCreatedAt: businessData?.created_at || null,
       };
     },
     []

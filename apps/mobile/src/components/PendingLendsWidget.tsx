@@ -19,11 +19,13 @@ import * as Haptics from "expo-haptics";
 interface PendingLendsWidgetProps {
   businessId: string;
   refreshKey?: number;
+  onReturnComplete?: () => void; // Callback to notify parent when a return is processed
 }
 
 export const PendingLendsWidget = ({
   businessId,
   refreshKey,
+  onReturnComplete,
 }: PendingLendsWidgetProps) => {
   const [lends, setLends] = useState<PendingLend[]>([]);
   const [loading, setLoading] = useState(true);
@@ -152,6 +154,11 @@ export const PendingLendsWidget = ({
       setShowReturnModal(false);
       setReturningItem(null);
       loadLends(); // Refresh list immediately
+
+      // Notify parent to refresh activity list
+      if (onReturnComplete) {
+        onReturnComplete();
+      }
     } catch (err) {
       console.error("Return process failed:", err);
       Alert.alert("Lỗi", "Không thể cập nhật trả hàng.");

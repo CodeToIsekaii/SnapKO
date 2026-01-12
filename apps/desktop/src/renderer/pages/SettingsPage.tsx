@@ -21,6 +21,7 @@ import {
   Download,
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import { SubscriptionInfo } from "../hooks/useSubscriptionStatus";
 
 interface SettingsPageProps {
   onLogout: () => void;
@@ -31,6 +32,7 @@ interface SettingsPageProps {
   inventoryModel?: string | null; // SIMPLE | STANDARD | CHAIN
   onEditProfile?: () => void;
   onChangeModel?: (model: "SIMPLE" | "STANDARD") => Promise<void>;
+  subscription?: SubscriptionInfo;
 }
 
 export default function SettingsPage({
@@ -42,6 +44,7 @@ export default function SettingsPage({
   inventoryModel,
   onEditProfile,
   onChangeModel,
+  subscription,
 }: SettingsPageProps) {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteCode, setInviteCode] = useState<string | null>(null);
@@ -196,6 +199,128 @@ export default function SettingsPage({
           <h1 style={styles.title}>Cài đặt</h1>
         </div>
         <p style={styles.subtitle}>Quản lý tài khoản và đồng bộ dữ liệu</p>
+
+        {/* Subscription Banner - Only show for relevant states */}
+        {subscription?.showExpiredBanner && (
+          <div
+            style={{
+              marginTop: 16,
+              padding: "12px 16px",
+              backgroundColor: COLORS.error,
+              color: "white",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 500,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <span>⚠️ Gói của bạn đã hết hạn. Nâng cấp để sử dụng Kho Kép.</span>
+            <button
+              onClick={() => {
+                (window as any).electronAPI?.openExternal?.(
+                  "https://app.snapko.vn/pricing"
+                );
+              }}
+              style={{
+                backgroundColor: "white",
+                color: COLORS.error,
+                border: "none",
+                borderRadius: 6,
+                padding: "4px 12px",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Nâng cấp ngay
+            </button>
+          </div>
+        )}
+
+        {subscription?.showExpiryWarning && (
+          <div
+            style={{
+              marginTop: 16,
+              padding: "12px 16px",
+              backgroundColor: "#F59E0B", // Amber/Warning
+              color: "white",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 500,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <span>
+              💡 Gói PRO còn {subscription.daysLeft} ngày! Gia hạn ngay để giữ
+              tính năng Kho Kép & Báo cáo doanh thu không bị gián đoạn.
+            </span>
+            <button
+              onClick={() => {
+                (window as any).electronAPI?.openExternal?.(
+                  "https://app.snapko.vn/pricing"
+                );
+              }}
+              style={{
+                backgroundColor: "white",
+                color: "#F59E0B",
+                border: "none",
+                borderRadius: 6,
+                padding: "4px 12px",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Gia hạn ngay
+            </button>
+          </div>
+        )}
+
+        {subscription?.showTrialBanner && (
+          <div
+            style={{
+              marginTop: 16,
+              padding: "12px 16px",
+              backgroundColor: COLORS.positive,
+              color: "white",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 500,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <span>
+              🎉 Bản dùng thử miễn phí: còn {subscription.daysLeft} ngày
+            </span>
+            <button
+              onClick={() => {
+                (window as any).electronAPI?.openExternal?.(
+                  "https://app.snapko.vn/pricing"
+                );
+              }}
+              style={{
+                backgroundColor: "rgba(255,255,255,0.2)",
+                color: "white",
+                border: "none",
+                borderRadius: 6,
+                padding: "4px 12px",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Xem gói Pro
+            </button>
+          </div>
+        )}
+
+        {/* PRO_ACTIVE: No banner shown - user has active subscription */}
       </div>
 
       {/* Profile Card */}
@@ -294,13 +419,27 @@ export default function SettingsPage({
                 )}
               </button>
 
-              {/* STANDARD Button */}
               <button
+                disabled={
+                  changingModel ||
+                  (!subscription?.canUseDualWarehouse &&
+                    inventoryModel !== "STANDARD")
+                }
                 style={{
                   ...styles.modelButton,
                   ...(inventoryModel === "STANDARD"
                     ? styles.modelButtonActive
                     : {}),
+                  opacity:
+                    !subscription?.canUseDualWarehouse &&
+                    inventoryModel !== "STANDARD"
+                      ? 0.5
+                      : 1,
+                  cursor:
+                    !subscription?.canUseDualWarehouse &&
+                    inventoryModel !== "STANDARD"
+                      ? "not-allowed"
+                      : "pointer",
                 }}
                 onClick={async () => {
                   if (inventoryModel !== "STANDARD") {
@@ -309,7 +448,6 @@ export default function SettingsPage({
                     setChangingModel(false);
                   }
                 }}
-                disabled={changingModel}
               >
                 <span style={styles.modelIcon}>
                   <div

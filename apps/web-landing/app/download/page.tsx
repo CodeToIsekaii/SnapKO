@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { FaWindows, FaApple, FaAndroid } from "react-icons/fa";
 import { SiAppstore } from "react-icons/si";
@@ -50,9 +51,13 @@ export default function DownloadPage() {
       <header className="border-b border-[#E0DCD5] bg-white">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-[#6B8E23] rounded-full flex items-center justify-center">
-              <Check className="w-4 h-4 text-white" />
-            </div>
+            <Image
+              src="/logo.png"
+              alt="SnapKO Logo"
+              width={32}
+              height={32}
+              className="object-contain"
+            />
             <span className="text-[#1E1E1E] font-bold text-lg">SnapKO</span>
           </Link>
           <Link
@@ -268,12 +273,12 @@ export default function DownloadPage() {
           <h3 className="font-bold text-[#1E1E1E] mb-2">💡 Ai dùng app nào?</h3>
           <ul className="text-sm text-[#6F6B63] space-y-2">
             <li>
-              • <strong>Chủ quán:</strong> Dùng Desktop (Windows/Mac) để xem báo
-              cáo, quản lý nhân viên
+              • <strong>Chủ quán:</strong>Nên dùng Desktop (Windows/Mac),  để xem báo
+              cáo, quản lý nhân viên, Điện thoại (iOS/Android) cũng được nhưng không khuyến khích
             </li>
             <li>
               • <strong>Nhân viên:</strong> Dùng Mobile (iOS/Android) để chụp
-              hóa đơn, kiểm kho
+              hóa đơn, kiểm kho, nhập hàng ,...
             </li>
           </ul>
         </div>

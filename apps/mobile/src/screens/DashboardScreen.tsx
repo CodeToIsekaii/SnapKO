@@ -31,6 +31,9 @@ import AreaSelectorModal, {
   CheckMode,
 } from "../components/AreaSelectorModal";
 import { PendingLendsWidget } from "../components/PendingLendsWidget";
+import { useSubscription, SubscriptionStatus } from "../hooks/useSubscription";
+import { checkAndNotifySubscription } from "../utils/subscriptionNotification";
+import { COLORS } from "../shared/theme/colors";
 
 interface DailySummary {
   date: string;
@@ -95,6 +98,27 @@ export default function DashboardScreen({
     refetch: refetchLowStock,
   } = useLowStock();
   const [showLowStockModal, setShowLowStockModal] = useState(false);
+
+  // Subscription Hook
+  const profile =
+    authState.status === "authenticated" ? authState.profile : null;
+
+  const subscription = useSubscription(
+    profile?.tier,
+    profile?.subscriptionExpiresAt,
+    profile?.businessCreatedAt
+  );
+
+  // Check for subscription notification on mount
+  useEffect(() => {
+    // Check if is OWNER inside the effect or pass isOwner prop
+    const isOwnerRole =
+      authState.status === "authenticated" &&
+      authState.profile.role === "OWNER";
+    if (isOwnerRole && subscription) {
+      checkAndNotifySubscription(subscription);
+    }
+  }, [authState.status, subscription.state]);
 
   // Initialize isOwner directly from AuthContext to prevent UI flicker
   // Using lazy initializer ensures we check authState at mount time
@@ -561,6 +585,68 @@ export default function DashboardScreen({
   // Dashboard header content (rendered via ListHeaderComponent)
   const DashboardHeader = () => (
     <>
+      {/* Subscription Banner */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 0 }}>
+        {isOwner && subscription.showExpiredBanner && (
+          <Pressable
+            style={{
+              backgroundColor: COLORS.error,
+              padding: 12,
+              marginBottom: 16,
+              borderRadius: 8,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+            onPress={onOpenSettings}
+          >
+            <Text style={{ color: "white", fontWeight: "600", flex: 1 }}>
+              ⚠️ Gói đã hết hạn. Chạm để nâng cấp.
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="white" />
+          </Pressable>
+        )}
+
+        {isOwner && subscription.showExpiryWarning && (
+          <Pressable
+            style={{
+              backgroundColor: "#F59E0B",
+              padding: 12,
+              marginBottom: 16,
+              borderRadius: 8,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+            onPress={onOpenSettings}
+          >
+            <Text style={{ color: "white", fontWeight: "600", flex: 1 }}>
+              💡 Gói PRO còn {subscription.daysRemaining} ngày!
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="white" />
+          </Pressable>
+        )}
+
+        {isOwner && subscription.showTrialBanner && (
+          <Pressable
+            style={{
+              backgroundColor: COLORS.success,
+              padding: 12,
+              marginBottom: 16,
+              borderRadius: 8,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+            onPress={onOpenSettings}
+          >
+            <Text style={{ color: "white", fontWeight: "600", flex: 1 }}>
+              🎉 Dùng thử: còn {subscription.daysRemaining} ngày
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="white" />
+          </Pressable>
+        )}
+      </View>
       {/* Header */}
       <View
         style={{
@@ -677,7 +763,11 @@ export default function DashboardScreen({
 
         {/* 🔔 PENDING LENDS WIDGET (LEND/RETURN FEATURE) */}
         {businessId && (
-          <PendingLendsWidget businessId={businessId} refreshKey={refreshKey} />
+          <PendingLendsWidget
+            businessId={businessId}
+            refreshKey={refreshKey}
+            onReturnComplete={loadTodayData}
+          />
         )}
 
         {/* Main Stats - OWNER ONLY per .script */}
@@ -1370,7 +1460,7 @@ export default function DashboardScreen({
       IMPORT: {
         icon: "arrow-down-circle",
         color: "#E07A2F",
-        label: "Nhập hàng",
+        label: "Trả hàng",
       },
       STOCK_CHECK: { icon: "clipboard", color: "#3B82F6", label: "Kiểm kho" },
       AUDIT: { icon: "search", color: "#3B82F6", label: "Kiểm kê" },
