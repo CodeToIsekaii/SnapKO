@@ -20,6 +20,7 @@ import { File } from "expo-file-system";
 import * as SQLite from "expo-sqlite";
 import * as Haptics from "expo-haptics";
 import { Env } from "../env";
+import { Ionicons } from "@expo/vector-icons";
 
 // UXUIrules Color Palette
 const COLORS = {
@@ -223,11 +224,11 @@ export default function RecipeScanScreen({
 
     try {
       // Step 1: Compress
-      setLoadingStep("📷 Đang nén ảnh...");
+      setLoadingStep("Đang nén ảnh...");
       const base64 = await compressImage(imageUri);
 
       // Step 2: Call AI
-      setLoadingStep("🤖 Đang phân tích công thức...");
+      setLoadingStep("Đang phân tích công thức...");
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000);
 
@@ -256,7 +257,7 @@ export default function RecipeScanScreen({
       const data: ParsedRecipe = await response.json();
 
       // Step 3: Map ingredients
-      setLoadingStep("🔗 Đang liên kết nguyên liệu...");
+      setLoadingStep("Đang liên kết nguyên liệu...");
       const mapped = autoMapIngredients(data.ingredients);
 
       setParsedRecipe(data);
@@ -340,21 +341,36 @@ export default function RecipeScanScreen({
           borderBottomColor: COLORS.border,
         }}
       >
-        <Pressable onPress={onBack}>
-          <Text style={{ color: COLORS.textSecondary, fontSize: 16 }}>
-            ← Quay lại
+        <Pressable
+          onPress={onBack}
+          style={{ flexDirection: "row", alignItems: "center" }}
+        >
+          <Ionicons name="arrow-back" size={20} color={COLORS.textSecondary} />
+          <Text
+            style={{ color: COLORS.textSecondary, fontSize: 16, marginLeft: 4 }}
+          >
+            Quay lại
           </Text>
         </Pressable>
-        <Text
-          style={{
-            color: COLORS.textPrimary,
-            fontSize: 18,
-            fontWeight: "600",
-            marginLeft: 16,
-          }}
+        <View
+          style={{ flexDirection: "row", alignItems: "center", marginLeft: 16 }}
         >
-          🤖 Quét công thức
-        </Text>
+          <Ionicons
+            name="scan-circle"
+            size={24}
+            color={COLORS.cta}
+            style={{ marginRight: 8 }}
+          />
+          <Text
+            style={{
+              color: COLORS.textPrimary,
+              fontSize: 18,
+              fontWeight: "600",
+            }}
+          >
+            Quét công thức
+          </Text>
+        </View>
       </View>
 
       <ScrollView style={{ flex: 1, padding: 16 }}>
@@ -368,10 +384,18 @@ export default function RecipeScanScreen({
                 padding: 16,
                 borderRadius: 12,
                 alignItems: "center",
+                flexDirection: "row",
+                justifyContent: "center",
               }}
             >
+              <Ionicons
+                name="camera"
+                size={20}
+                color="white"
+                style={{ marginRight: 8 }}
+              />
               <Text style={{ color: "white", fontWeight: "600", fontSize: 16 }}>
-                📷 Chụp ảnh công thức
+                Chụp ảnh công thức
               </Text>
             </Pressable>
             <Pressable
@@ -383,8 +407,16 @@ export default function RecipeScanScreen({
                 alignItems: "center",
                 borderWidth: 1,
                 borderColor: COLORS.border,
+                flexDirection: "row",
+                justifyContent: "center",
               }}
             >
+              <Ionicons
+                name="images"
+                size={20}
+                color={COLORS.textSecondary}
+                style={{ marginRight: 8 }}
+              />
               <Text
                 style={{
                   color: COLORS.textSecondary,
@@ -392,7 +424,7 @@ export default function RecipeScanScreen({
                   fontSize: 16,
                 }}
               >
-                🖼️ Chọn từ thư viện
+                Chọn từ thư viện
               </Text>
             </Pressable>
             <Text
@@ -465,9 +497,17 @@ export default function RecipeScanScreen({
                 </Text>
               </View>
             ) : (
-              <Text style={{ color: "white", fontWeight: "600" }}>
-                ✨ AI Phân tích công thức
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Ionicons
+                  name="sparkles"
+                  size={18}
+                  color="white"
+                  style={{ marginRight: 8 }}
+                />
+                <Text style={{ color: "white", fontWeight: "600" }}>
+                  AI Phân tích công thức
+                </Text>
+              </View>
             )}
           </Pressable>
         )}
@@ -533,14 +573,30 @@ export default function RecipeScanScreen({
                 </View>
               </View>
               {parsedRecipe.category && (
-                <Text style={{ color: COLORS.textSecondary }}>
-                  📁 {parsedRecipe.category}
-                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <Ionicons
+                    name="folder-open"
+                    size={14}
+                    color={COLORS.textSecondary}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text style={{ color: COLORS.textSecondary }}>
+                    {parsedRecipe.category}
+                  </Text>
+                </View>
               )}
               {parsedRecipe.price && (
-                <Text style={{ color: COLORS.cta, fontWeight: "600" }}>
-                  💰 {parsedRecipe.price.toLocaleString("vi-VN")} đ
-                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <Ionicons
+                    name="cash"
+                    size={14}
+                    color={COLORS.cta}
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text style={{ color: COLORS.cta, fontWeight: "600" }}>
+                    {parsedRecipe.price.toLocaleString("vi-VN")} đ
+                  </Text>
+                </View>
               )}
             </View>
 
@@ -580,25 +636,41 @@ export default function RecipeScanScreen({
                   </Text>
                 </View>
                 {ing.linkedId ? (
-                  <Text
+                  <View
                     style={{
-                      color: COLORS.success,
-                      fontSize: 12,
+                      flexDirection: "row",
+                      alignItems: "center",
                       marginTop: 4,
                     }}
                   >
-                    ✓ Liên kết: {ing.linkedName} ({ing.matchScore}%)
-                  </Text>
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={14}
+                      color={COLORS.success}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={{ color: COLORS.success, fontSize: 12 }}>
+                      Liên kết: {ing.linkedName} ({ing.matchScore}%)
+                    </Text>
+                  </View>
                 ) : (
-                  <Text
+                  <View
                     style={{
-                      color: COLORS.warning,
-                      fontSize: 12,
+                      flexDirection: "row",
+                      alignItems: "center",
                       marginTop: 4,
                     }}
                   >
-                    ⚠️ Chưa có trong kho
-                  </Text>
+                    <Ionicons
+                      name="warning"
+                      size={14}
+                      color={COLORS.warning}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={{ color: COLORS.warning, fontSize: 12 }}>
+                      Chưa có trong kho
+                    </Text>
+                  </View>
                 )}
               </View>
             ))}
@@ -615,9 +687,19 @@ export default function RecipeScanScreen({
                 marginBottom: 32,
               }}
             >
-              <Text style={{ color: "white", fontWeight: "600", fontSize: 16 }}>
-                ➕ Tạo món từ kết quả AI
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Ionicons
+                  name="add-circle"
+                  size={18}
+                  color="white"
+                  style={{ marginRight: 8 }}
+                />
+                <Text
+                  style={{ color: "white", fontWeight: "600", fontSize: 16 }}
+                >
+                  Tạo món từ kết quả AI
+                </Text>
+              </View>
             </Pressable>
           </View>
         )}

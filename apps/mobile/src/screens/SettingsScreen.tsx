@@ -75,6 +75,8 @@ export default function SettingsScreen({
   const [changingModel, setChangingModel] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [retentionDays, setRetentionDays] = useState(30);
+  const [updatingRetention, setUpdatingRetention] = useState(false);
 
   // Derived
   const isOwner =
@@ -104,10 +106,39 @@ export default function SettingsScreen({
           setModel("STANDARD");
         }
       }
+
+      // Load retention settings
+      const { getLogRetentionDays } = await import("../db");
+      const days = await getLogRetentionDays(db);
+      if (days > 0) {
+        setRetentionDays(days);
+      } else {
+        // Fallback checks
+        setRetentionDays(localUser?.role === "OWNER" ? 30 : 10);
+      }
     } catch (e) {
       console.error("[SettingsScreen] Load profile error:", e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Set log retention days handler (Owner only)
+  const handleSetRetention = async (days: number) => {
+    setUpdatingRetention(true);
+    try {
+      const { setLogRetentionDays } = await import("../db");
+      await setLogRetentionDays(days);
+      setRetentionDays(days);
+      Alert.alert(
+        "Đã lưu cấu hình",
+        `Dữ liệu hoạt động cũ hơn ${days} ngày sẽ tự động được xóa khi khởi động lại ứng dụng.`
+      );
+    } catch (err) {
+      console.error("[SettingsScreen] Set retention error:", err);
+      Alert.alert("Lỗi", "Không thể lưu cấu hình");
+    } finally {
+      setUpdatingRetention(false);
     }
   };
 
@@ -199,7 +230,7 @@ export default function SettingsScreen({
   // Delete account handler
   const handleDeleteAccount = () => {
     Alert.alert(
-      "⚠️ Xóa tài khoản",
+      "Xóa tài khoản",
       "Bạn có chắc chắn muốn xóa tài khoản?\n\n• Tất cả dữ liệu sẽ bị xóa sau 30 ngày\n• Hành động này không thể hoàn tác",
       [
         { text: "Hủy", style: "cancel" },
@@ -280,8 +311,20 @@ export default function SettingsScreen({
       {/* Header */}
       <View style={styles.header}>
         {onBack && (
-          <TouchableOpacity onPress={onBack} style={styles.backButton}>
-            <Text style={styles.backText}>← Quay lại</Text>
+          <TouchableOpacity
+            onPress={onBack}
+            style={{
+              ...styles.backButton,
+              flexDirection: "row",
+              alignItems: "center",
+            }}
+          >
+            <Ionicons
+              name="arrow-back"
+              size={20}
+              color={COLORS.textSecondary}
+            />
+            <Text style={{ ...styles.backText, marginLeft: 4 }}>Quay lại</Text>
           </TouchableOpacity>
         )}
         <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -402,7 +445,45 @@ export default function SettingsScreen({
           </View>
         )}
 
-        {/* Inventory Model Selector - Owner Only */}
+        {/* Data Configuration - Owner Only */}
+        {isOwner && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Cấu hình dữ liệu</Text>
+            <View style={styles.card}>
+              <Text style={styles.hintText}>
+                Thời gian lưu giữ "Hoạt động gần đây". Dữ liệu cũ hơn sẽ tự động
+                được xóa để giải phóng bộ nhớ.
+              </Text>
+
+              <View style={styles.retentionContainer}>
+                {[10, 30, 60, 90].map((days) => (
+                  <TouchableOpacity
+                    key={days}
+                    style={[
+                      styles.retentionOption,
+                      retentionDays === days && styles.retentionOptionActive,
+                    ]}
+                    onPress={() => handleSetRetention(days)}
+                    disabled={updatingRetention}
+                  >
+                    <Text
+                      style={[
+                        styles.retentionText,
+                        retentionDays === days && styles.retentionTextActive,
+                      ]}
+                    >
+                      {days} ngày
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {updatingRetention && (
+                <Text style={styles.retentionStatusText}>Đang lưu...</Text>
+              )}
+            </View>
+          </View>
+        )}
+
         {isOwner && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Mô hình vận hành</Text>
@@ -421,7 +502,17 @@ export default function SettingsScreen({
                   }
                   disabled={changingModel}
                 >
-                  <Text style={styles.modelIcon}>🏠</Text>
+                  <View style={{ marginBottom: 8 }}>
+                    <Ionicons
+                      name="home"
+                      size={32}
+                      color={
+                        model === "SIMPLE"
+                          ? COLORS.primary
+                          : COLORS.textSecondary
+                      }
+                    />
+                  </View>
                   <Text
                     style={[
                       styles.modelName,
@@ -450,7 +541,42 @@ export default function SettingsScreen({
                   }
                   disabled={changingModel}
                 >
-                  <Text style={styles.modelIcon}>🏭→🍸</Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 4,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <Ionicons
+                      name="business"
+                      size={24}
+                      color={
+                        model === "STANDARD"
+                          ? COLORS.primary
+                          : COLORS.textSecondary
+                      }
+                    />
+                    <Ionicons
+                      name="arrow-forward"
+                      size={16}
+                      color={
+                        model === "STANDARD"
+                          ? COLORS.primary
+                          : COLORS.textSecondary
+                      }
+                    />
+                    <Ionicons
+                      name="wine"
+                      size={24}
+                      color={
+                        model === "STANDARD"
+                          ? COLORS.primary
+                          : COLORS.textSecondary
+                      }
+                    />
+                  </View>
                   <Text
                     style={[
                       styles.modelName,
@@ -646,9 +772,7 @@ const styles = StyleSheet.create({
     gap: 4,
     marginTop: 4,
   },
-  roleEmoji: {
-    fontSize: 12,
-  },
+
   profileRole: {
     fontSize: 13,
     color: COLORS.textSecondary,
@@ -721,10 +845,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.primary,
     backgroundColor: `${COLORS.primary}15`,
   },
-  modelIcon: {
-    fontSize: 24,
-    marginBottom: 8,
-  },
+
   modelName: {
     fontSize: 13,
     fontWeight: "600",
@@ -746,9 +867,42 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: COLORS.success,
-    alignItems: "center",
-    justifyContent: "center",
+  },
+
+  // Retention Settings Styles
+  retentionContainer: {
+    flexDirection: "row",
+    gap: 8,
+    padding: 16,
+    paddingTop: 0,
+    flexWrap: "wrap",
+  },
+  retentionOption: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.background,
+  },
+  retentionOptionActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: `${COLORS.primary}20`,
+  },
+  retentionText: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+  },
+  retentionTextActive: {
+    color: COLORS.primary,
+    fontWeight: "600",
+  },
+  retentionStatusText: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    fontStyle: "italic",
+    textAlign: "center",
+    paddingBottom: 12,
   },
   changingIndicator: {
     flexDirection: "row",

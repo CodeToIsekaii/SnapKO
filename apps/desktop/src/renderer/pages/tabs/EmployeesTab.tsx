@@ -4,6 +4,20 @@
 import React, { useState, useEffect } from "react";
 import { StaffProfile } from "../../types";
 import { COLORS } from "../../styles/theme";
+import {
+  Users,
+  Plus,
+  Loader2,
+  Ticket,
+  Clock,
+  ClipboardCopy,
+  Smartphone,
+  Check,
+  X,
+  Ban,
+  CheckCircle,
+  AlertCircle,
+} from "lucide-react";
 
 interface EmployeesTabProps {
   pendingStaff: StaffProfile[];
@@ -44,7 +58,7 @@ export function EmployeesTab({
   const handleGenerateCode = async () => {
     const result = await onGenerateCode();
     if (result?.error) {
-      setToast({ message: "❌ " + result.error, type: "error" });
+      setToast({ message: result.error, type: "error" });
       setTimeout(() => setToast(null), 3000);
     } else if (result?.code) {
       setInviteCode(result.code);
@@ -61,7 +75,7 @@ export function EmployeesTab({
   const handleCopyCode = () => {
     if (inviteCode) {
       navigator.clipboard.writeText(inviteCode);
-      setToast({ message: "✅ Đã sao chép mã!", type: "success" });
+      setToast({ message: "Đã sao chép mã!", type: "success" });
       setTimeout(() => setToast(null), 3000);
     }
   };
@@ -83,24 +97,47 @@ export function EmployeesTab({
             fontSize: 14,
             zIndex: 9999,
             boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
           }}
         >
+          {toast.type === "success" ? (
+            <CheckCircle size={18} />
+          ) : (
+            <AlertCircle size={18} />
+          )}
           {toast.message}
         </div>
       )}
 
-      {/* Header */}
       <div style={styles.header}>
-        <h2 style={styles.title}>👥 Quản lý nhân viên</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <Users size={24} color={COLORS.textPrimary} />
+          <h2 style={styles.title}>Quản lý nhân viên</h2>
+        </div>
         <button
           onClick={handleGenerateCode}
           disabled={generating}
           style={{
             ...styles.generateButton,
             opacity: generating ? 0.7 : 1,
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
           }}
         >
-          {generating ? "⏳ Đang tạo..." : "➕ Tạo mã mời"}
+          {generating ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              Đang tạo...
+            </>
+          ) : (
+            <>
+              <Plus size={16} />
+              Tạo mã mời
+            </>
+          )}
         </button>
       </div>
 
@@ -108,14 +145,47 @@ export function EmployeesTab({
       {inviteCode && (
         <div style={styles.modalOverlay}>
           <div style={styles.modal}>
-            <h3 style={styles.modalTitle}>🎫 Mã mời nhân viên</h3>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                marginBottom: "16px",
+              }}
+            >
+              <Ticket size={24} color={COLORS.primary} />
+              <h3 style={styles.modalTitle}>Mã mời nhân viên</h3>
+            </div>
             <div style={styles.codeBox}>
               <span style={styles.code}>{inviteCode}</span>
             </div>
-            <p style={styles.expiryNote}>⏰ Mã này sẽ hết hạn sau 48 giờ</p>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+                color: COLORS.textSecondary,
+                marginBottom: "24px",
+              }}
+            >
+              <Clock size={16} />
+              <p style={styles.expiryNote}>Mã này sẽ hết hạn sau 48 giờ</p>
+            </div>
             <div style={styles.modalActions}>
-              <button onClick={handleCopyCode} style={styles.copyButton}>
-                📋 Copy mã
+              <button
+                onClick={handleCopyCode}
+                style={{
+                  ...styles.copyButton,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                }}
+              >
+                <ClipboardCopy size={16} />
+                Copy mã
               </button>
               <button
                 onClick={() => setInviteCode(null)}
@@ -131,28 +201,61 @@ export function EmployeesTab({
       {/* Pending Staff Section */}
       {pendingStaff.length > 0 && (
         <div style={styles.section}>
-          <h3 style={styles.sectionTitle}>
-            ⏳ Đang chờ duyệt ({pendingStaff.length})
-          </h3>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              marginBottom: "12px",
+            }}
+          >
+            <Loader2 size={16} color={COLORS.warning} />
+            <h3 style={styles.sectionTitle}>
+              Đang chờ duyệt ({pendingStaff.length})
+            </h3>
+          </div>
           <div style={styles.pendingList}>
             {pendingStaff.map((staff) => (
               <div key={staff.id} style={styles.pendingCard}>
                 <div>
                   <p style={styles.staffName}>{staff.full_name}</p>
-                  <p style={styles.staffPhone}>📱 {staff.phone_number}</p>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      color: COLORS.textSecondary,
+                      marginTop: "4px",
+                    }}
+                  >
+                    <Smartphone size={14} />
+                    <p style={styles.staffPhone}>{staff.phone_number}</p>
+                  </div>
                 </div>
                 <div style={styles.actions}>
                   <button
                     onClick={() => handleAction(staff.id, "approve")}
-                    style={styles.approveButton}
+                    style={{
+                      ...styles.approveButton,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
                   >
-                    ✓ Duyệt
+                    <Check size={14} />
+                    Duyệt
                   </button>
                   <button
                     onClick={() => handleAction(staff.id, "reject")}
-                    style={styles.rejectButton}
+                    style={{
+                      ...styles.rejectButton,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
                   >
-                    ✗ Từ chối
+                    <X size={14} />
+                    Từ chối
                   </button>
                 </div>
               </div>
@@ -188,9 +291,15 @@ export function EmployeesTab({
                 <span style={{ textAlign: "right" }}>
                   <button
                     onClick={() => handleAction(staff.id, "deactivate")}
-                    style={styles.deactivateButton}
+                    style={{
+                      ...styles.deactivateButton,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
                   >
-                    🚫 Vô hiệu hóa
+                    <Ban size={12} />
+                    Vô hiệu hóa
                   </button>
                 </span>
               </div>

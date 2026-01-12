@@ -54,7 +54,9 @@ export interface ElectronAPI {
   getPendingLogs: () => Promise<any[]>;
   addPendingLog: (log: any) => Promise<{ success: boolean }>;
   markSynced: (ids: string[]) => Promise<{ success: boolean; count: number }>;
-  getInventoryLogs: (limit?: number) => Promise<any[]>;
+  getInventoryLogs: (
+    options?: number | { limit?: number; days?: number }
+  ) => Promise<any[]>;
   fixMissingBusinessId: (
     businessId: string
   ) => Promise<{ success: boolean; error?: string }>;
@@ -67,6 +69,17 @@ export interface ElectronAPI {
   pruneLogs: (
     days: number
   ) => Promise<{ success: boolean; count?: number; error?: string }>;
+
+  // Export Full Log History
+  exportInventoryLogsHistory: (options?: {
+    startDate?: string;
+    endDate?: string;
+  }) => Promise<{
+    success: boolean;
+    data?: any[];
+    count?: number;
+    error?: string;
+  }>;
 
   // Database - Recipes
   getRecipes: (options?: { includeArchived?: boolean }) => Promise<any[]>;
@@ -162,8 +175,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   markSynced: (ids: string[]) => ipcRenderer.invoke("db:markSynced", ids),
 
-  getInventoryLogs: (limit?: number) =>
-    ipcRenderer.invoke("db:getInventoryLogs", limit),
+  getInventoryLogs: (options?: number | { limit?: number; days?: number }) =>
+    ipcRenderer.invoke("db:getInventoryLogs", options),
   fixMissingBusinessId: (businessId: string) =>
     ipcRenderer.invoke("db:fix-missing-business-id", businessId),
   deleteIngredient: (ingredientId: string) =>
@@ -176,6 +189,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setRetentionDays: (days: number) =>
     ipcRenderer.invoke("db:setRetentionDays", days),
   pruneLogs: (days: number) => ipcRenderer.invoke("db:pruneLogs", days),
+
+  // Export Full Log History
+  exportInventoryLogsHistory: (options?: {
+    startDate?: string;
+    endDate?: string;
+  }) => ipcRenderer.invoke("export:inventoryLogsHistory", options),
 
   // ==================== DATABASE: RECIPES ====================
   getRecipes: (options?: { includeArchived?: boolean }) =>

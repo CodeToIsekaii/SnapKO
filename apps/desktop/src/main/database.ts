@@ -218,6 +218,12 @@ export function initDatabase(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_inventory_stats(date);
     CREATE INDEX IF NOT EXISTS idx_recipes_business ON local_recipes(business_id);
     CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON local_recipe_ingredients(recipe_id);
+
+    CREATE TABLE IF NOT EXISTS local_system_meta (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   // Migration: Add missing columns if table already exists
@@ -761,138 +767,175 @@ export function registerDatabaseIPC(): void {
   });
 
   // Get inventory logs (Cloud-first for Desktop Dashboard)
-  ipcMain.handle("db:getInventoryLogs", async (_event, limit = 50) => {
-    // 1. Try fetching from Cloud (Supabase) if authenticated
-    if (authClient) {
-      try {
-        const { data, error } = await authClient
-          .from("inventory_logs")
-          .select(
+  ipcMain.handle(
+    "db:getInventoryLogs",
+    async (_event, input: number | { limit?: number; days?: number } = 50) => {
+      // 1. Try fetching from Cloud (Supabase) if authenticated
+      if (authClient) {
+        try {
+          // Determine parameters
+          const limit = typeof input === "object" ? input.limit || 50 : input;
+          const days = typeof input === "object" ? input.days : undefined;
+
+          let query = authClient
+            .from("inventory_logs")
+            .select(
+              `
+              id,
+              type,
+              staff_note,
+              ai_parsed_json,
+              quantity_change_base,
+              created_at,
+              created_by,
+              profiles:created_by ( full_name )
             `
-            id,
-            type,
-            staff_note,
-            ai_parsed_json,
-            quantity_change_base,
-            created_at,
-            created_by,
-            profiles:created_by ( full_name )
-          `
-          )
-          .eq("business_id", currentBusinessId) // Ensure RLS
-          .order("created_at", { ascending: false })
-          .limit(limit);
+            )
+            .eq("business_id", currentBusinessId) // Ensure RLS
+            .order("created_at", { ascending: false })
+            .limit(limit);
 
-        if (error) {
-          console.error("[Database] Failed to fetch cloud logs:", error);
+          // Apply Date Filter if days provided
+          if (days && days > 0) {
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - days);
+            query = query.gte("created_at", cutoffDate.toISOString());
+            console.log(
+              "[Database] Filtering cloud logs after:",
+              cutoffDate.toISOString()
+            );
+          }
+
+          const { data, error } = await query;
+
+          if (error) {
+            console.error("[Database] Failed to fetch cloud logs:", error);
+            // Fall through to local fallback
+          } else if (data && data.length > 0) {
+            // Return cloud data only if we have results
+            console.log("[Database] Cloud inventory_logs count:", data.length);
+            return data.map((log: any) => {
+              // Extract details from ai_parsed_json if staff_note is empty
+              let details = log.staff_note || "";
+              if (!details && log.ai_parsed_json) {
+                try {
+                  const parsed =
+                    typeof log.ai_parsed_json === "string"
+                      ? JSON.parse(log.ai_parsed_json)
+                      : log.ai_parsed_json;
+
+                  // Build details string with reason + items
+                  const parts: string[] = [];
+
+                  // Add reason label if exists (e.g., "Vỡ/Hỏng", "Cho mượn")
+                  if (parsed.reason_label) parts.push(parsed.reason_label);
+                  else if (parsed.notes) parts.push(parsed.notes);
+
+                  // Add item names
+                  if (parsed.items?.length) {
+                    const itemNames = parsed.items
+                      .slice(0, 3)
+                      .map((i: any) => {
+                        const name = i.ingredient_name || i.name || "";
+                        const qty = i.quantity ? `: ${i.quantity}` : "";
+                        return name + qty;
+                      })
+                      .filter(Boolean)
+                      .join(", ");
+                    if (itemNames) parts.push(itemNames);
+                    if (parsed.items.length > 3)
+                      parts.push(`(+${parsed.items.length - 3} khác)`);
+                  }
+
+                  details = parts.join(" - ");
+                } catch {}
+              }
+              return {
+                id: log.id,
+                created_at: log.created_at,
+                action: log.type || "UNKNOWN",
+                staff_name: log.profiles?.full_name || "Unknown Staff",
+                details: details || "Không có chi tiết",
+                quantity_change: log.quantity_change_base,
+              };
+            });
+          }
+          // Cloud returned empty, fall through to local
+        } catch (err) {
+          console.error("[Database] Cloud log fetch exception:", err);
           // Fall through to local fallback
-        } else if (data && data.length > 0) {
-          // Return cloud data only if we have results
-          console.log("[Database] Cloud inventory_logs count:", data.length);
-          return data.map((log: any) => {
-            // Extract details from ai_parsed_json if staff_note is empty
-            let details = log.staff_note || "";
-            if (!details && log.ai_parsed_json) {
-              try {
-                const parsed =
-                  typeof log.ai_parsed_json === "string"
-                    ? JSON.parse(log.ai_parsed_json)
-                    : log.ai_parsed_json;
-
-                // Build details string with reason + items
-                const parts: string[] = [];
-
-                // Add reason label if exists (e.g., "Vỡ/Hỏng", "Cho mượn")
-                if (parsed.reason_label) parts.push(parsed.reason_label);
-                else if (parsed.notes) parts.push(parsed.notes);
-
-                // Add item names
-                if (parsed.items?.length) {
-                  const itemNames = parsed.items
-                    .slice(0, 3)
-                    .map((i: any) => {
-                      const name = i.ingredient_name || i.name || "";
-                      const qty = i.quantity ? `: ${i.quantity}` : "";
-                      return name + qty;
-                    })
-                    .filter(Boolean)
-                    .join(", ");
-                  if (itemNames) parts.push(itemNames);
-                  if (parsed.items.length > 3)
-                    parts.push(`(+${parsed.items.length - 3} khác)`);
-                }
-
-                details = parts.join(" - ");
-              } catch {}
-            }
-            return {
-              id: log.id,
-              created_at: log.created_at,
-              action: log.type || "UNKNOWN",
-              staff_name: log.profiles?.full_name || "Unknown Staff",
-              details: details || "Không có chi tiết",
-              quantity_change: log.quantity_change_base,
-            };
-          });
         }
-        // Cloud returned empty, fall through to local
-      } catch (err) {
-        console.error("[Database] Cloud log fetch exception:", err);
-        // Fall through to local fallback
       }
-    }
 
-    // 2. Fallback: Read from local pending_sync_logs
-    const database = getDatabase();
-    try {
-      const localLogs = database
-        .prepare(
-          `SELECT id, type, ai_parsed_json, created_at, location 
+      // 2. Fallback: Read from local pending_sync_logs
+      const database = getDatabase();
+      try {
+        // Determine query params
+        const fetchLimit =
+          typeof input === "object" ? input.limit || 50 : input;
+        const retentionDays =
+          typeof input === "object" ? input.days : undefined;
+
+        let dateFilter = "";
+        const queryParams: any[] = [];
+
+        if (retentionDays && retentionDays > 0) {
+          dateFilter = "AND created_at >= date('now', '-' || ? || ' days')";
+          queryParams.push(retentionDays.toString());
+        }
+        // Add limit to params at the end
+        queryParams.push(fetchLimit);
+
+        const localLogs = database
+          .prepare(
+            `SELECT id, type, ai_parsed_json, created_at, location 
            FROM pending_sync_logs 
+           WHERE 1=1 ${dateFilter}
            ORDER BY created_at DESC 
            LIMIT ?`
-        )
-        .all(limit) as {
-        id: string;
-        type: string;
-        ai_parsed_json: string;
-        created_at: string;
-        location: string;
-      }[];
+          )
+          .all(...queryParams) as {
+          id: string;
+          type: string;
+          ai_parsed_json: string;
+          created_at: string;
+          location: string;
+        }[];
 
-      console.log(
-        "[Database] Local pending_sync_logs count:",
-        localLogs.length
-      );
+        console.log(
+          "[Database] Local pending_sync_logs count:",
+          localLogs.length
+        );
 
-      return localLogs.map((log) => {
-        let details = "Không có chi tiết";
-        try {
-          const parsed = JSON.parse(log.ai_parsed_json || "{}");
-          if (parsed.notes) details = parsed.notes;
-          else if (parsed.items?.length) {
-            details = parsed.items
-              .slice(0, 2)
-              .map((i: any) => i.ingredient_name || i.name)
-              .join(", ");
-            if (parsed.items.length > 2)
-              details += ` (+${parsed.items.length - 2} khác)`;
-          }
-        } catch {}
+        return localLogs.map((log) => {
+          let details = "Không có chi tiết";
+          try {
+            const parsed = JSON.parse(log.ai_parsed_json || "{}");
+            if (parsed.notes) details = parsed.notes;
+            else if (parsed.items?.length) {
+              details = parsed.items
+                .slice(0, 2)
+                .map((i: any) => i.ingredient_name || i.name)
+                .join(", ");
+              if (parsed.items.length > 2)
+                details += ` (+${parsed.items.length - 2} khác)`;
+            }
+          } catch {}
 
-        return {
-          id: log.id,
-          created_at: log.created_at,
-          action: log.type || "UNKNOWN",
-          staff_name: log.location === "mobile" ? "Mobile" : "Desktop",
-          details,
-        };
-      });
-    } catch (err) {
-      console.error("[Database] Local log fallback error:", err);
-      return [];
+          return {
+            id: log.id,
+            created_at: log.created_at,
+            action: log.type || "UNKNOWN",
+            staff_name: log.location === "mobile" ? "Mobile" : "Desktop",
+            details,
+          };
+        });
+      } catch (err) {
+        console.error("[Database] Local log fallback error:", err);
+        return [];
+      }
     }
-  });
+  );
 
   // Log Retention
   ipcMain.handle("db:getRetentionDays", () => {
@@ -939,6 +982,110 @@ export function registerDatabaseIPC(): void {
       return { success: false, error: err.message };
     }
   });
+
+  // Export Full Log History from Cloud (Owner Only)
+  ipcMain.handle(
+    "export:inventoryLogsHistory",
+    async (_event, options?: { startDate?: string; endDate?: string }) => {
+      if (!authClient || !currentBusinessId) {
+        return { success: false, error: "Not authenticated" };
+      }
+
+      try {
+        console.log("[Database] Fetching full log history from Cloud...");
+
+        let query = authClient
+          .from("inventory_logs")
+          .select(
+            `
+            id,
+            type,
+            staff_note,
+            ai_parsed_json,
+            quantity_change_base,
+            created_at,
+            created_by,
+            profiles:created_by ( full_name )
+          `
+          )
+          .eq("business_id", currentBusinessId)
+          .order("created_at", { ascending: false });
+
+        // Apply date filters if provided
+        if (options?.startDate) {
+          query = query.gte("created_at", options.startDate);
+        }
+        if (options?.endDate) {
+          query = query.lte("created_at", options.endDate);
+        }
+
+        const { data, error } = await query;
+
+        if (error) {
+          console.error("[Database] Failed to fetch cloud logs:", error);
+          return { success: false, error: error.message };
+        }
+
+        // Transform for export
+        const exportData = (data || []).map((log: any, idx: number) => {
+          let details = log.staff_note || "";
+          let totalQty = log.quantity_change_base || 0;
+
+          if (log.ai_parsed_json) {
+            try {
+              const parsed =
+                typeof log.ai_parsed_json === "string"
+                  ? JSON.parse(log.ai_parsed_json)
+                  : log.ai_parsed_json;
+
+              // Build details string
+              if (!details) {
+                if (parsed.reason_label) details = parsed.reason_label;
+                else if (parsed.notes) details = parsed.notes;
+              }
+
+              if (parsed.items?.length) {
+                // Calculate total quantity from items
+                if (totalQty === 0) {
+                  totalQty = parsed.items.reduce(
+                    (sum: number, item: any) =>
+                      sum + (parseFloat(item.quantity) || 0),
+                    0
+                  );
+                }
+
+                const itemNames = parsed.items
+                  .map((i: any) => {
+                    const name = i.ingredient_name || i.name || "";
+                    const qty = i.quantity ? ` (${i.quantity})` : "";
+                    return name + qty;
+                  })
+                  .filter(Boolean)
+                  .join(", ");
+                if (itemNames)
+                  details = details ? `${details} - ${itemNames}` : itemNames;
+              }
+            } catch {}
+          }
+
+          return {
+            stt: idx + 1,
+            ngay: new Date(log.created_at).toLocaleString("vi-VN"),
+            loai: log.type || "UNKNOWN",
+            nhan_vien: log.profiles?.full_name || "Unknown",
+            chi_tiet: details || "Không có chi tiết",
+            so_luong: totalQty,
+          };
+        });
+
+        console.log(`[Database] Fetched ${exportData.length} logs for export.`);
+        return { success: true, data: exportData, count: exportData.length };
+      } catch (err: any) {
+        console.error("[Database] Export log history error:", err);
+        return { success: false, error: err.message };
+      }
+    }
+  );
 
   // ==================== WEEK 2: COGS REPORT ====================
   ipcMain.handle("db:getCOGSReport", () => {

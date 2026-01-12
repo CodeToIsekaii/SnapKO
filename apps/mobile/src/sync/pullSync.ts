@@ -337,30 +337,178 @@ export async function pullLatestBatchRecipes(): Promise<{ synced: number }> {
 }
 
 /**
- * Full pull - stock, ingredients, recipes, batch recipes
+ * Pull latest inventory logs (activity history)
+ */
+export async function pullLatestInventoryLogs(): Promise<{ synced: number }> {
+  try {
+    const db = await getDB();
+
+    if (!db) {
+      console.error(
+        "[PullSync] Database not ready, skipping inventory logs sync"
+      );
+      throw new Error("Database not initialized");
+    }
+
+    // Fetch recent inventory logs (last 50 for performance)
+    const { data: logs, error } = await supabase
+      .from("inventory_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error("[PullSync] Inventory logs fetch error:", error);
+      throw error;
+    }
+
+    if (!logs || logs.length === 0) {
+      console.log("[PullSync] No inventory logs to sync");
+      return { synced: 0 };
+    }
+
+    // Upsert to local_inventory_logs
+    for (const log of logs) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO local_inventory_logs
+        (id, ingredient_id, location, type, ai_parsed_quantity, ai_confidence_score,
+         final_confirmed_quantity, quantity_change_base, unit_cost_at_time,
+         source_photo_urls, ai_parsed_json, staff_note, is_verified, diff_percentage,
+         created_at, created_by, business_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          log.id,
+          log.ingredient_id,
+          log.location || "",
+          log.type,
+          log.ai_parsed_quantity,
+          log.ai_confidence_score,
+          log.final_confirmed_quantity,
+          log.quantity_change_base,
+          log.unit_cost_at_time,
+          JSON.stringify(log.source_photo_urls || []),
+          log.ai_parsed_json,
+          log.staff_note,
+          log.is_verified ? 1 : 0,
+          log.diff_percentage,
+          log.created_at,
+          log.created_by,
+          log.business_id,
+        ]
+      );
+    }
+
+    console.log(`[PullSync] Synced ${logs.length} inventory logs`);
+    return { synced: logs.length };
+  } catch (err) {
+    console.error("[PullSync] Inventory logs error:", err);
+    return { synced: 0 };
+  }
+}
+
+/**
+ * Full pull - stock, ingredients, recipes, batch recipes, inventory logs
  */
 export async function pullAllData(): Promise<{
   stock: number;
   ingredients: number;
   recipes: number;
   batchRecipes: number;
+  inventoryLogs: number;
 }> {
   const stockResult = await pullLatestStock();
   const ingredientsResult = await pullLatestIngredients();
   const recipesResult = await pullLatestRecipes();
   const batchRecipesResult = await pullLatestBatchRecipes();
+  const inventoryLogsResult = await pullLatestInventoryLogs();
 
   console.log("[PullSync] Full sync complete:", {
     stock: stockResult.synced,
     ingredients: ingredientsResult.synced,
     recipes: recipesResult.synced,
     batchRecipes: batchRecipesResult.synced,
+    inventoryLogs: inventoryLogsResult.synced,
   });
+
+  // 🔔 Pull Pending Lends (Fire and forget, or await)
+  try {
+    const db = await getDB();
+    const profile = await db.getFirstAsync<{ business_id: string }>(
+      "SELECT business_id FROM local_profiles LIMIT 1"
+    );
+    if (profile?.business_id) {
+      await pullPendingLends(profile.business_id);
+    }
+  } catch (e) {
+    console.warn("[PullSync] Auto-pull pending lends failed", e);
+  }
 
   return {
     stock: stockResult.synced,
     ingredients: ingredientsResult.synced,
     recipes: recipesResult.synced,
     batchRecipes: batchRecipesResult.synced,
+    inventoryLogs: inventoryLogsResult.synced,
   };
+}
+
+/**
+ * Pull pending lends (LEND/RETURN Feature)
+ * Fetches active lends and updates local database
+ */
+export async function pullPendingLends(businessId: string): Promise<void> {
+  try {
+    const db = await getDB();
+    if (!db) return;
+
+    console.log("[PullSync] Pulling pending lends...");
+
+    // Fetch ONLY active lends (is_returned = false) from server
+    // We don't need history of returned items for the widget
+    const { data, error } = await supabase
+      .from("pending_lends")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("is_returned", false);
+
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      await db.withTransactionAsync(async () => {
+        // Clear existing local active lends to avoid duplicates/stale data
+        // (Simple strategy: Replace all active lends)
+        await db.runAsync(
+          "DELETE FROM local_pending_lends WHERE is_returned = 0"
+        );
+
+        for (const lend of data) {
+          await db.runAsync(
+            `INSERT INTO local_pending_lends (
+              id, business_id, ingredient_id, ingredient_name, quantity, unit,
+              source_location, lent_at, related_log_id, synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`, // synced=1 because fetched from server
+            [
+              lend.id,
+              lend.business_id,
+              lend.ingredient_id,
+              lend.ingredient_name,
+              lend.quantity,
+              lend.unit,
+              lend.source_location,
+              lend.lent_at,
+              lend.related_log_id,
+            ]
+          );
+        }
+      });
+      console.log(`[PullSync] Synced ${data.length} pending lends`);
+    } else {
+      // If no active lends on server, clear local active lends too
+      await db.runAsync(
+        "DELETE FROM local_pending_lends WHERE is_returned = 0"
+      );
+    }
+  } catch (err) {
+    console.error("[PullSync] Failed to pull pending lends:", err);
+  }
 }

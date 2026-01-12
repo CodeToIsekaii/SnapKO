@@ -64,11 +64,11 @@ export function InventoryTab({
   const handleExport = async () => {
     const result = await onExport();
     if (result?.success) {
-      alert("✅ Đã xuất Excel thành công!");
+      alert("Đã xuất Excel thành công!");
     } else if (result?.cancelled) {
       // User cancelled
     } else {
-      alert("❌ Lỗi xuất file");
+      alert("Lỗi xuất file");
     }
   };
 

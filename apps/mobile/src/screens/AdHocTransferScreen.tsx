@@ -114,7 +114,7 @@ export default function AdHocTransferScreen({
         [
           id,
           "TRANSFER",
-          "mobile",
+          "BAR", // Valid enum value: WAREHOUSE or BAR (was "mobile" which is invalid)
           JSON.stringify({
             items: itemsArr,
             from_area_id: warehouse,

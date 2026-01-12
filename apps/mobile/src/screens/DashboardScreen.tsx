@@ -30,6 +30,7 @@ import AreaSelectorModal, {
   StorageArea,
   CheckMode,
 } from "../components/AreaSelectorModal";
+import { PendingLendsWidget } from "../components/PendingLendsWidget";
 
 interface DailySummary {
   date: string;
@@ -40,9 +41,10 @@ interface DailySummary {
 interface RecentLog {
   id: string;
   type: string;
-  ingredient_name: string;
-  quantity: number;
+  ingredient_name: string | null;
+  quantity: number | null;
   created_at: string;
+  ai_parsed_json?: string;
 }
 
 interface DashboardScreenProps {
@@ -276,15 +278,40 @@ export default function DashboardScreen({
       const todayEnd = new Date();
       todayEnd.setHours(23, 59, 59, 999);
 
+      // Determine retention days for filter
+      // If setting is 0 (unset), fallback to role: STAFF=10, OWNER=30
+      const { getLogRetentionDays } = await import("../db"); // Dynamic import to avoid cycles if any
+      let retentionDays = await getLogRetentionDays(db);
+      if (!retentionDays || retentionDays <= 0) {
+        retentionDays = isOwnerRole ? 30 : 10;
+      }
+
+      const retentionDate = new Date();
+      retentionDate.setDate(retentionDate.getDate() - retentionDays);
+      const retentionDateStr = retentionDate.toISOString();
+
       const allActivities = await db.getAllAsync<any>(
-        `SELECT psl.*, li.name as ingredient_name 
-         FROM pending_sync_logs psl 
-         LEFT JOIN local_ingredients li ON psl.ingredient_id = li.id
-         WHERE psl.type IN ('TRANSFER', 'WASTE', 'LENT', 'IMPORT', 'STOCK_CHECK', 'AUDIT') 
-           AND psl.created_at >= ? AND psl.created_at <= ?
-         ORDER BY psl.created_at DESC
+        `SELECT id, type, created_at, ai_parsed_json, ingredient_id, ingredient_name, 'pending' as source
+         FROM (
+           -- 1. Local Pending (Not synced yet)
+           SELECT psl.id, psl.type, psl.created_at, psl.ai_parsed_json, psl.ingredient_id, li.name as ingredient_name
+           FROM pending_sync_logs psl 
+           LEFT JOIN local_ingredients li ON psl.ingredient_id = li.id
+           WHERE psl.synced = 0 
+             AND psl.type IN ('TRANSFER', 'WASTE', 'LENT', 'IMPORT', 'STOCK', 'STOCK_CHECK', 'AUDIT')
+           
+           UNION ALL
+           
+           -- 2. Server History (Synced) - Limit to last 10 days per user request
+           SELECT log.id, log.type, log.created_at, log.ai_parsed_json, log.ingredient_id, li.name as ingredient_name
+           FROM local_inventory_logs log
+           LEFT JOIN local_ingredients li ON log.ingredient_id = li.id
+           WHERE log.type IN ('TRANSFER', 'WASTE', 'LENT', 'IMPORT', 'STOCK', 'STOCK_CHECK', 'AUDIT')
+             AND log.created_at >= ?
+         )
+         ORDER BY created_at DESC
          LIMIT 20`,
-        [todayStart.toISOString(), todayEnd.toISOString()]
+        [retentionDateStr]
       );
       setTodayActivity(allActivities);
 
@@ -358,6 +385,10 @@ export default function DashboardScreen({
          FROM pending_sync_logs 
          ORDER BY created_at DESC 
          LIMIT 10`
+      );
+      console.log(
+        "[Dashboard] Local pending_sync_logs count:",
+        recentActivity.length
       );
       setRecentLogs(
         recentActivity.map((log) => ({
@@ -444,6 +475,14 @@ export default function DashboardScreen({
     console.log("🔄 Pull-to-refresh triggered...");
 
     try {
+      // 0. PUSH local logs to cloud FIRST (before pulling)
+      const { syncPendingLogs } = await import("../sync/syncEngine");
+      const { getDB } = await import("../db");
+      const db = await getDB();
+      console.log("📤 Pushing local logs to cloud...");
+      await syncPendingLogs(db);
+      console.log("📤 Push complete!");
+
       // 1. Pull data from Supabase to local DB
       const { pullAllData } = await import("../sync/pullSync");
       const pullResult = await pullAllData();
@@ -635,6 +674,11 @@ export default function DashboardScreen({
             </Text>
           </View>
         </Pressable>
+
+        {/* 🔔 PENDING LENDS WIDGET (LEND/RETURN FEATURE) */}
+        {businessId && (
+          <PendingLendsWidget businessId={businessId} refreshKey={refreshKey} />
+        )}
 
         {/* Main Stats - OWNER ONLY per .script */}
         {isOwner && (
@@ -946,14 +990,60 @@ export default function DashboardScreen({
               </Text>
             </View>
             {todayQuickOuts.slice(0, 3).map((q, idx) => {
-              const typeEmoji =
-                q.type === "WASTE" ? "❌" : q.type === "LOAN" ? "🤝" : "🎁";
-              const typeLabel =
-                q.type === "WASTE"
-                  ? "Vỡ/Hỏng"
-                  : q.type === "LOAN"
-                  ? "Cho mượn"
-                  : "Mời khách";
+              // Parse reason from ai_parsed_json for accurate icon display
+              let reason = q.type; // fallback to type
+              let reasonLabel = "";
+              try {
+                const parsed =
+                  typeof q.ai_parsed_json === "string"
+                    ? JSON.parse(q.ai_parsed_json)
+                    : q.ai_parsed_json;
+                if (parsed?.reason) reason = parsed.reason;
+                if (parsed?.reason_label) reasonLabel = parsed.reason_label;
+              } catch {}
+
+              // Ionicons config based on REASON (not type) per UI/UX guidelines
+              const iconMap: Record<
+                string,
+                {
+                  name: keyof typeof Ionicons.glyphMap;
+                  color: string;
+                  label: string;
+                }
+              > = {
+                DAMAGED: {
+                  name: "close-circle",
+                  color: "#EF4444",
+                  label: "Vỡ/Hỏng",
+                },
+                LOAN: {
+                  name: "hand-left",
+                  color: "#F59E0B",
+                  label: "Cho mượn",
+                },
+                MARKETING: {
+                  name: "gift",
+                  color: "#8B5CF6",
+                  label: "Mời khách",
+                },
+                // Fallbacks for type values
+                WASTE: {
+                  name: "close-circle",
+                  color: "#EF4444",
+                  label: "Vỡ/Hỏng",
+                },
+                LENT: {
+                  name: "hand-left",
+                  color: "#F59E0B",
+                  label: "Cho mượn",
+                },
+              };
+              const iconCfg = iconMap[reason] || {
+                name: "help-circle" as keyof typeof Ionicons.glyphMap,
+                color: "#94A3B8",
+                label: reason,
+              };
+              const typeLabel = reasonLabel || iconCfg.label;
               const time = new Date(q.created_at).toLocaleTimeString("vi-VN", {
                 hour: "2-digit",
                 minute: "2-digit",
@@ -984,9 +1074,12 @@ export default function DashboardScreen({
                     borderTopColor: "#3A2A2A",
                   }}
                 >
-                  <Text style={{ fontSize: 14, marginRight: 6 }}>
-                    {typeEmoji}
-                  </Text>
+                  <Ionicons
+                    name={iconCfg.name}
+                    size={14}
+                    color={iconCfg.color}
+                    style={{ marginRight: 6 }}
+                  />
                   <Text style={{ color: "#64748B", fontSize: 11, width: 45 }}>
                     {time}
                   </Text>
@@ -1050,7 +1143,12 @@ export default function DashboardScreen({
                 borderColor: "#2A2A2A",
               }}
             >
-              <Text style={{ fontSize: 28, marginBottom: 4 }}>📷</Text>
+              <Ionicons
+                name="camera"
+                size={28}
+                color="#E07A2F"
+                style={{ marginBottom: 4 }}
+              />
               <Text
                 style={{ color: "#E07A2F", fontWeight: "600", fontSize: 12 }}
               >
@@ -1071,7 +1169,12 @@ export default function DashboardScreen({
                 borderColor: "#2A2A2A",
               }}
             >
-              <Text style={{ fontSize: 28, marginBottom: 4 }}>🧾</Text>
+              <Ionicons
+                name="receipt"
+                size={28}
+                color="#6B8E23"
+                style={{ marginBottom: 4 }}
+              />
               <Text
                 style={{ color: "#6B8E23", fontWeight: "600", fontSize: 12 }}
               >
@@ -1155,7 +1258,12 @@ export default function DashboardScreen({
                     flex: 1,
                   }}
                 >
-                  <Text style={{ fontSize: 18, marginRight: 6 }}>📤</Text>
+                  <Ionicons
+                    name="arrow-up-circle"
+                    size={18}
+                    color="#EF4444"
+                    style={{ marginRight: 6 }}
+                  />
                   <Text
                     style={{
                       color: "#EF4444",
@@ -1229,25 +1337,53 @@ export default function DashboardScreen({
           (authState.profile?.role === "OWNER" ? "Chủ quán" : "Nhân viên")
         : "Nhân viên";
 
-    // Activity type config
+    // Parse reason from ai_parsed_json for accurate icon display (MARKETING vs WASTE)
+    let displayType = activity.type;
+    let reasonLabel = "";
+    try {
+      const parsed =
+        typeof activity.ai_parsed_json === "string"
+          ? JSON.parse(activity.ai_parsed_json)
+          : activity.ai_parsed_json;
+      if (parsed?.reason) displayType = parsed.reason;
+      if (parsed?.reason_label) reasonLabel = parsed.reason_label;
+    } catch {}
+
+    // Activity type config - using Ionicons per UI/UX guidelines (no emojis)
+    // Uses both type and reason values for flexibility
     const typeConfig: Record<
       string,
-      { icon: string; color: string; label: string }
+      { icon: keyof typeof Ionicons.glyphMap; color: string; label: string }
     > = {
-      TRANSFER: { icon: "📦", color: "#6B8E23", label: "Chuyển kho" },
-      WASTE: { icon: "❌", color: "#EF4444", label: "Vỡ/Hỏng" },
-      LOAN: { icon: "🤝", color: "#F59E0B", label: "Cho mượn" },
-      MARKETING: { icon: "🎁", color: "#8B5CF6", label: "Mời khách" },
-      IMPORT: { icon: "📥", color: "#E07A2F", label: "Nhập hàng" },
-      STOCK_CHECK: { icon: "📋", color: "#3B82F6", label: "Kiểm kho" },
+      TRANSFER: {
+        icon: "swap-horizontal",
+        color: "#6B8E23",
+        label: "Chuyển kho",
+      },
+      // Reason values from QuickOutScreen
+      DAMAGED: { icon: "close-circle", color: "#EF4444", label: "Vỡ/Hỏng" },
+      LOAN: { icon: "hand-left", color: "#F59E0B", label: "Cho mượn" },
+      MARKETING: { icon: "gift", color: "#8B5CF6", label: "Mời khách" },
+      // Type values from database
+      WASTE: { icon: "close-circle", color: "#EF4444", label: "Vỡ/Hỏng" },
+      LENT: { icon: "hand-left", color: "#F59E0B", label: "Cho mượn" },
+      IMPORT: {
+        icon: "arrow-down-circle",
+        color: "#E07A2F",
+        label: "Nhập hàng",
+      },
+      STOCK_CHECK: { icon: "clipboard", color: "#3B82F6", label: "Kiểm kho" },
+      AUDIT: { icon: "search", color: "#3B82F6", label: "Kiểm kê" },
     };
 
-    const config = typeConfig[activity.type] || {
-      icon: "📝",
-      color: "#94A3B8",
-      label: activity.type,
-    };
-
+    const config = typeConfig[displayType] ||
+      typeConfig[activity.type] || {
+        icon: "document-text" as keyof typeof Ionicons.glyphMap,
+        color: "#94A3B8",
+        label: activity.type,
+      };
+    // Override label with reasonLabel if available
+    const finalLabel = reasonLabel || config.label;
     // Parse quantity info
     let quantityText = "";
     if (activity.ai_parsed_json) {
@@ -1281,7 +1417,12 @@ export default function DashboardScreen({
           alignItems: "center",
         }}
       >
-        <Text style={{ fontSize: 20, marginRight: 10 }}>{config.icon}</Text>
+        <Ionicons
+          name={config.icon}
+          size={20}
+          color={config.color}
+          style={{ marginRight: 10 }}
+        />
         <View style={{ flex: 1 }}>
           <View
             style={{
@@ -1293,7 +1434,7 @@ export default function DashboardScreen({
             <Text
               style={{ color: config.color, fontSize: 12, fontWeight: "600" }}
             >
-              {config.label}
+              {finalLabel}
             </Text>
             <Text style={{ color: "#64748B", fontSize: 10, marginLeft: 8 }}>
               {dateStr} {timeStr}
@@ -1305,7 +1446,7 @@ export default function DashboardScreen({
             </Text>
           ) : null}
           <Text style={{ color: "#64748B", fontSize: 10, marginTop: 2 }}>
-            👤 {userName}
+            <Ionicons name="person" size={10} color="#64748B" /> {userName}
           </Text>
         </View>
       </View>

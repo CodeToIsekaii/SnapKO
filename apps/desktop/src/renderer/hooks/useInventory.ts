@@ -48,10 +48,16 @@ export function useInventory() {
   // Load all data
   const loadData = useCallback(async () => {
     try {
+      const retentionDays =
+        (await window.electronAPI.getRetentionDays?.()) || 30;
+
       const results = await Promise.all([
         window.electronAPI.getIngredients?.() || [],
         window.electronAPI.getPendingLogs?.() || [],
-        window.electronAPI.getInventoryLogs?.(50) || [],
+        window.electronAPI.getInventoryLogs?.({
+          limit: 100, // Increase limit to allow logic filtering
+          days: retentionDays > 0 ? retentionDays : undefined,
+        }) || [],
         window.electronAPI.getCOGSReport?.() || null,
       ]);
       const [ingredients, pendingLogs, logs, cogsReport] = results;

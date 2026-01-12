@@ -12,6 +12,7 @@ import {
   StyleSheet,
   Pressable,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 // UXUIrules Color Palette
 const COLORS = {
@@ -42,7 +43,13 @@ export default function SetupPendingScreen({
     <View style={styles.container}>
       <View style={styles.card}>
         {/* Hourglass Icon */}
-        <Text style={styles.icon}>⏳</Text>
+        {/* Hourglass Icon */}
+        <Ionicons
+          name="hourglass"
+          size={48}
+          color={COLORS.cta}
+          style={{ marginBottom: 16 }}
+        />
 
         <Text style={styles.title}>Chờ Chủ Quán Một Chút...</Text>
 
@@ -63,7 +70,15 @@ export default function SetupPendingScreen({
 
         {/* Manual refresh button */}
         <Pressable style={styles.refreshButton} onPress={onCheckAgain}>
-          <Text style={styles.refreshButtonText}>🔄 Kiểm tra ngay</Text>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Ionicons
+              name="refresh"
+              size={16}
+              color={COLORS.textPrimary}
+              style={{ marginRight: 6 }}
+            />
+            <Text style={styles.refreshButtonText}>Kiểm tra ngay</Text>
+          </View>
         </Pressable>
 
         {/* Logout option */}
@@ -76,7 +91,23 @@ export default function SetupPendingScreen({
 
       {/* Info box */}
       <View style={styles.infoBox}>
-        <Text style={styles.infoTitle}>💡 Mô hình kho là gì?</Text>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            marginBottom: 8,
+          }}
+        >
+          <Ionicons
+            name="bulb"
+            size={18}
+            color={COLORS.cta}
+            style={{ marginRight: 6 }}
+          />
+          <Text style={{ ...styles.infoTitle, marginBottom: 0 }}>
+            Mô hình kho là gì?
+          </Text>
+        </View>
         <Text style={styles.infoText}>
           <Text style={styles.bold}>Model A:</Text> Quán nhỏ, 1 kho duy nhất
           {"\n"}

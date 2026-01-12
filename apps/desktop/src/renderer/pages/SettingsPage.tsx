@@ -5,6 +5,22 @@
 
 import React, { useState, useEffect } from "react";
 import { COLORS } from "../styles/theme";
+import {
+  Settings,
+  User,
+  Store,
+  Home,
+  Factory,
+  Check,
+  Timer,
+  LogOut,
+  Trash2,
+  Pencil,
+  AlertTriangle,
+  Martini,
+  Download,
+} from "lucide-react";
+import * as XLSX from "xlsx";
 
 interface SettingsPageProps {
   onLogout: () => void;
@@ -35,6 +51,7 @@ export default function SettingsPage({
   >("idle");
   const [changingModel, setChangingModel] = useState(false);
   const [retentionDays, setRetentionDays] = useState(30);
+  const [exportingHistory, setExportingHistory] = useState(false);
 
   useEffect(() => {
     loadRetention();
@@ -98,7 +115,7 @@ export default function SettingsPage({
   // Delete account confirmation
   const handleDeleteAccount = () => {
     const confirmed = window.confirm(
-      "⚠️ Xóa tài khoản\n\n• Tất cả dữ liệu sẽ bị xóa sau 30 ngày\n• Hành động này không thể hoàn tác\n\nBạn có chắc chắn?"
+      "Xóa tài khoản\n\n• Tất cả dữ liệu sẽ bị xóa sau 30 ngày\n• Hành động này không thể hoàn tác\n\nBạn có chắc chắn?"
     );
     if (confirmed) {
       // TODO: Call delete account API
@@ -107,21 +124,99 @@ export default function SettingsPage({
     }
   };
 
+  // Export Full Log History to Excel
+  const handleExportHistory = async () => {
+    setExportingHistory(true);
+    try {
+      const result = await (
+        window as any
+      ).electronAPI?.exportInventoryLogsHistory?.();
+      if (!result?.success) {
+        alert("Lỗi: " + (result?.error || "Không thể tải dữ liệu"));
+        return;
+      }
+
+      if (!result.data || result.data.length === 0) {
+        alert("Không có dữ liệu để export.");
+        return;
+      }
+
+      // Create Excel from data
+      const worksheetData = result.data.map((row: any) => ({
+        STT: row.stt,
+        "Ngày giờ": row.ngay,
+        Loại: row.loai,
+        "Nhân viên": row.nhan_vien,
+        "Chi tiết": row.chi_tiet,
+        "Số lượng": row.so_luong,
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(worksheetData);
+      worksheet["!cols"] = [
+        { wch: 5 },
+        { wch: 20 },
+        { wch: 12 },
+        { wch: 15 },
+        { wch: 40 },
+        { wch: 10 },
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Lịch sử hoạt động");
+
+      // Trigger download
+      const now = new Date();
+      const filename = `log_history_${now.getFullYear()}-${String(
+        now.getMonth() + 1
+      ).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}.xlsx`;
+      XLSX.writeFile(workbook, filename);
+
+      alert(`Đã xuất ${result.count} bản ghi thành file ${filename}`);
+    } catch (err: any) {
+      console.error("Export history failed:", err);
+      alert("Lỗi khi export: " + err.message);
+    } finally {
+      setExportingHistory(false);
+    }
+  };
+
   return (
     <div style={styles.container}>
       {/* Header */}
       <div style={styles.header}>
-        <h1 style={styles.title}>⚙️ Cài đặt</h1>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+            marginBottom: "4px",
+          }}
+        >
+          <Settings size={28} color={COLORS.textPrimary} />
+          <h1 style={styles.title}>Cài đặt</h1>
+        </div>
         <p style={styles.subtitle}>Quản lý tài khoản và đồng bộ dữ liệu</p>
       </div>
 
       {/* Profile Card */}
       <div style={styles.card}>
         <div style={styles.cardHeader}>
-          <span style={styles.cardTitle}>👤 Thông tin tài khoản</span>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <User size={18} color={COLORS.textPrimary} />
+            <span style={styles.cardTitle}>Thông tin tài khoản</span>
+          </div>
           {onEditProfile && (
-            <button onClick={onEditProfile} style={styles.editButton}>
-              ✏️ Chỉnh sửa
+            <button
+              onClick={onEditProfile}
+              style={{
+                ...styles.editButton,
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+            >
+              <Pencil size={14} />
+              Chỉnh sửa
             </button>
           )}
         </div>
@@ -158,7 +253,10 @@ export default function SettingsPage({
       {isOwner && onChangeModel && (
         <div style={styles.card}>
           <div style={styles.cardHeader}>
-            <span style={styles.cardTitle}>🏪 Mô hình kho</span>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <Store size={18} color={COLORS.textPrimary} />
+              <span style={styles.cardTitle}>Mô hình kho</span>
+            </div>
           </div>
           <div style={styles.cardContent}>
             <p style={styles.hint}>
@@ -184,11 +282,15 @@ export default function SettingsPage({
                 }}
                 disabled={changingModel}
               >
-                <span style={styles.modelIcon}>🏠</span>
+                <span style={styles.modelIcon}>
+                  <Home size={28} />
+                </span>
                 <span style={styles.modelName}>KHO ĐƠN</span>
                 <span style={styles.modelDesc}>1 kho duy nhất</span>
                 {inventoryModel === "SIMPLE" && (
-                  <span style={styles.modelCheck}>✓</span>
+                  <span style={styles.modelCheck}>
+                    <Check size={12} color="white" />
+                  </span>
                 )}
               </button>
 
@@ -209,11 +311,25 @@ export default function SettingsPage({
                 }}
                 disabled={changingModel}
               >
-                <span style={styles.modelIcon}>🏭→🍸</span>
+                <span style={styles.modelIcon}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
+                  >
+                    <Factory size={20} />
+                    <span>→</span>
+                    <Martini size={20} />
+                  </div>
+                </span>
                 <span style={styles.modelName}>KHO KÉP</span>
                 <span style={styles.modelDesc}>Kho Tổng + Quầy Bar</span>
                 {inventoryModel === "STANDARD" && (
-                  <span style={styles.modelCheck}>✓</span>
+                  <span style={styles.modelCheck}>
+                    <Check size={12} color="white" />
+                  </span>
                 )}
               </button>
             </div>
@@ -231,9 +347,16 @@ export default function SettingsPage({
       {isOwner && (
         <div style={styles.card}>
           <div style={styles.cardHeader}>
-            <span style={styles.cardTitle}>
-              ⏱️ Cấu hình lưu trữ (Thiết bị này)
-            </span>
+            <div style={styles.cardHeader}>
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "8px" }}
+              >
+                <Timer size={18} color={COLORS.textPrimary} />
+                <span style={styles.cardTitle}>
+                  Cấu hình lưu trữ (Thiết bị này)
+                </span>
+              </div>
+            </div>
           </div>
           <div style={styles.cardContent}>
             <p style={styles.hint}>
@@ -274,6 +397,38 @@ export default function SettingsPage({
                 </button>
               ))}
             </div>
+
+            {/* Export Full History Button */}
+            <div
+              style={{
+                marginTop: 16,
+                borderTop: `1px solid ${COLORS.border}`,
+                paddingTop: 16,
+              }}
+            >
+              <p style={{ ...styles.hint, marginBottom: 12 }}>
+                Xuất toàn bộ lịch sử hoạt động từ Cloud (không bị giới hạn bởi
+                cấu hình lưu trữ).
+              </p>
+              <button
+                onClick={handleExportHistory}
+                disabled={exportingHistory}
+                style={{
+                  ...styles.secondaryButton,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  width: "auto",
+                  padding: "10px 20px",
+                }}
+              >
+                <Download size={16} />
+                {exportingHistory
+                  ? "Đang tải..."
+                  : "Xuất toàn bộ lịch sử (Excel)"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -281,9 +436,21 @@ export default function SettingsPage({
       {/* Danger Zone */}
       <div style={{ ...styles.card, borderColor: COLORS.error }}>
         <div style={styles.cardHeader}>
-          <span style={{ ...styles.cardTitle, color: COLORS.error }}>
-            ⚠️ Vùng nguy hiểm
-          </span>
+          <div style={styles.cardHeader}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                color: COLORS.error,
+              }}
+            >
+              <AlertTriangle size={18} />
+              <span style={{ ...styles.cardTitle, color: COLORS.error }}>
+                Vùng nguy hiểm
+              </span>
+            </div>
+          </div>
         </div>
         <div style={styles.cardContent}>
           <div style={styles.dangerRow}>

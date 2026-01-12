@@ -10,8 +10,8 @@ let initPromise: Promise<SQLite.SQLiteDatabase> | null = null; // Mutex lock
 // Schema version - INCREMENT THIS to force database reset
 // v8: Fixed InventoryService to use shared getDB
 // v9: Added archived column to local_ingredients for soft delete sync
-// v10: Added type, item_type, tracking_mode, allowable_variance, unit_weight, unit_weight_unit
-const SCHEMA_VERSION = 10;
+// v11: Added local_pending_lends for OFFline LEND/RETURN feature
+const SCHEMA_VERSION = 11;
 
 /**
  * Initialize local SQLite database with all tables
@@ -62,6 +62,7 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       DROP TABLE IF EXISTS local_recipes;
       DROP TABLE IF EXISTS local_recipe_ingredients;
       DROP TABLE IF EXISTS local_batch_recipes;
+      DROP TABLE IF EXISTS local_pending_lends; -- Added
     `);
 
       // Update version
@@ -139,15 +140,32 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
     -- Updated per .antigravityrules: Added is_flagged + flag_reason for anti-fraud
     CREATE TABLE IF NOT EXISTS local_inventory_logs (
       id TEXT PRIMARY KEY NOT NULL,
+      ingredient_id TEXT,
+      location TEXT,
+      type TEXT,
+      ai_parsed_quantity REAL,
+      ai_confidence_score REAL,
+      final_confirmed_quantity REAL,
+      quantity_change_base REAL,
+      unit_cost_at_time REAL,
+      source_photo_urls TEXT,
+      ai_parsed_json TEXT,
+      staff_note TEXT,
+      is_verified INTEGER DEFAULT 0,
+      diff_percentage REAL,
+      created_at TEXT NOT NULL,
+      created_by TEXT,
+      business_id TEXT,
+      -- Legacy/Mobile-specific fields (kept for backward compatibility)
       area_id TEXT,
-      is_partial_check INTEGER NOT NULL DEFAULT 0,
+      is_partial_check INTEGER DEFAULT 0,
       ai_raw_json TEXT,
       confirmed_json TEXT,
-      is_flagged INTEGER NOT NULL DEFAULT 0,  -- Anti-fraud: TRUE if suspicious
-      flag_reason TEXT,                       -- 'SUSPICIOUS_PERFECT_MATCH', 'LAZY_COUNTING'
-      created_at TEXT NOT NULL,
-      synced INTEGER NOT NULL DEFAULT 0
+      is_flagged INTEGER DEFAULT 0,
+      flag_reason TEXT,
+      synced INTEGER DEFAULT 0
     );
+
 
     -- Waste logs (NEW per updated .antigravityrules)
     -- Records items marked as Broken/Spilled during shortage check
@@ -187,6 +205,24 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       created_at TEXT NOT NULL,
       synced INTEGER NOT NULL DEFAULT 0,
       sync_error TEXT
+    );
+
+    -- Local Pending Lends (For Lend/Return feature)
+    CREATE TABLE IF NOT EXISTS local_pending_lends (
+      id TEXT PRIMARY KEY NOT NULL,
+      business_id TEXT NOT NULL,
+      ingredient_id TEXT,
+      ingredient_name TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      unit TEXT,
+      source_location TEXT NOT NULL,
+      lent_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      returned_at TEXT,
+      is_returned INTEGER DEFAULT 0,
+      return_location TEXT,
+      related_log_id TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      synced INTEGER DEFAULT 0
     );
 
     -- Local ingredients cache (with batch item support + inventory config)
@@ -317,6 +353,36 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       value TEXT
     );
   `);
+
+    // MIGRATION: Add missing columns to local_inventory_logs for existing databases
+    // These columns are needed to sync from server
+    const migrateColumns = [
+      "ingredient_id TEXT",
+      "location TEXT",
+      "type TEXT",
+      "ai_parsed_quantity REAL",
+      "ai_confidence_score REAL",
+      "final_confirmed_quantity REAL",
+      "quantity_change_base REAL",
+      "unit_cost_at_time REAL",
+      "source_photo_urls TEXT",
+      "ai_parsed_json TEXT",
+      "staff_note TEXT",
+      "is_verified INTEGER DEFAULT 0",
+      "diff_percentage REAL",
+      "created_by TEXT",
+      "business_id TEXT",
+    ];
+
+    for (const col of migrateColumns) {
+      try {
+        await db.execAsync(
+          `ALTER TABLE local_inventory_logs ADD COLUMN ${col}`
+        );
+      } catch {
+        // Column already exists, skip
+      }
+    }
 
     // LOG RETENTION: Prune old logs on startup
     try {
@@ -488,8 +554,92 @@ export async function pruneOldLogs(
       [cutoffStr]
     );
 
+    // Also prune synced history logs
+    await database.runAsync(
+      `DELETE FROM local_inventory_logs 
+       WHERE created_at < ?`,
+      [cutoffStr]
+    );
+
     console.log(`[DB] Log pruning complete. Cutoff: ${cutoffStr}`);
   } catch (error) {
     console.error("[DB] Failed to prune logs:", error);
   }
+}
+
+// ============================================
+// PENDING LENDS LOGIC (LEND/RETURN FEATURE)
+// ============================================
+
+export interface PendingLend {
+  id: string;
+  business_id: string;
+  ingredient_id: string;
+  ingredient_name: string;
+  quantity: number;
+  unit: string;
+  source_location: "WAREHOUSE" | "BAR";
+  lent_at: string;
+  returned_at: string | null;
+  is_returned: boolean;
+  return_location: "WAREHOUSE" | "BAR" | null;
+  related_log_id: string;
+  synced: boolean;
+}
+
+export async function createPendingLend(
+  lend: Omit<
+    PendingLend,
+    "synced" | "returned_at" | "is_returned" | "return_location"
+  >
+): Promise<void> {
+  const dbInstance = await getDB();
+  await dbInstance.runAsync(
+    `INSERT INTO local_pending_lends (
+      id, business_id, ingredient_id, ingredient_name, quantity, unit,
+      source_location, lent_at, related_log_id, synced
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+    [
+      lend.id,
+      lend.business_id,
+      lend.ingredient_id,
+      lend.ingredient_name,
+      lend.quantity,
+      lend.unit,
+      lend.source_location,
+      lend.lent_at,
+      lend.related_log_id,
+    ]
+  );
+}
+
+export async function getPendingLends(
+  businessId: string
+): Promise<PendingLend[]> {
+  const dbInstance = await getDB();
+  const rows = await dbInstance.getAllAsync<PendingLend>(
+    `SELECT * FROM local_pending_lends 
+     WHERE business_id = ? AND is_returned = 0 
+     ORDER BY lent_at DESC`,
+    [businessId]
+  );
+  return rows.map((row) => ({
+    ...row,
+    is_returned: !!row.is_returned,
+    synced: !!row.synced,
+  }));
+}
+
+export async function markLendReturned(
+  id: string,
+  returnLocation: "WAREHOUSE" | "BAR",
+  returnedAt: string
+): Promise<void> {
+  const dbInstance = await getDB();
+  await dbInstance.runAsync(
+    `UPDATE local_pending_lends 
+     SET is_returned = 1, returned_at = ?, return_location = ?, synced = 0 
+     WHERE id = ?`,
+    [returnedAt, returnLocation, id]
+  );
 }

@@ -746,6 +746,83 @@ export async function initSyncEngine(db: SQLite.SQLiteDatabase): Promise<void> {
   console.log("[SyncEngine] Initialized, pending:", syncStatus.pendingCount);
 }
 
+// ============================================
+// PENDING LENDS PUSH SYNC (LEND/RETURN FEATURE)
+// ============================================
+
+export async function syncPendingLends(): Promise<{ synced: number }> {
+  try {
+    const { getDB } = await import("../db");
+    const db = await getDB();
+
+    // Get unsynced lends
+    const unsyncedLends = await db.getAllAsync<{
+      id: string;
+      business_id: string;
+      ingredient_id: string;
+      ingredient_name: string;
+      quantity: number;
+      unit: string;
+      source_location: string;
+      lent_at: string;
+      returned_at: string | null;
+      is_returned: number;
+      return_location: string | null;
+      related_log_id: string;
+    }>("SELECT * FROM local_pending_lends WHERE synced = 0");
+
+    if (unsyncedLends.length === 0) {
+      return { synced: 0 };
+    }
+
+    console.log(
+      `[SyncEngine] Pushing ${unsyncedLends.length} pending lends...`
+    );
+
+    let syncedCount = 0;
+    for (const lend of unsyncedLends) {
+      try {
+        const { error } = await supabase.from("pending_lends").upsert(
+          {
+            id: lend.id,
+            business_id: lend.business_id,
+            ingredient_id: lend.ingredient_id,
+            ingredient_name: lend.ingredient_name,
+            quantity: lend.quantity,
+            unit: lend.unit,
+            source_location: lend.source_location,
+            lent_at: lend.lent_at,
+            returned_at: lend.returned_at,
+            is_returned: lend.is_returned === 1,
+            return_location: lend.return_location,
+            related_log_id: lend.related_log_id,
+          },
+          { onConflict: "id" }
+        );
+
+        if (error) {
+          console.error("[SyncEngine] Pending lend sync error:", error);
+        } else {
+          // Mark as synced locally
+          await db.runAsync(
+            "UPDATE local_pending_lends SET synced = 1 WHERE id = ?",
+            [lend.id]
+          );
+          syncedCount++;
+        }
+      } catch (itemError) {
+        console.error("[SyncEngine] Item sync failed:", itemError);
+      }
+    }
+
+    console.log(`[SyncEngine] Synced ${syncedCount} pending lends`);
+    return { synced: syncedCount };
+  } catch (err) {
+    console.error("[SyncEngine] syncPendingLends error:", err);
+    return { synced: 0 };
+  }
+}
+
 // Cleanup
 export function cleanupSyncEngine(): void {
   stopNetworkListener();

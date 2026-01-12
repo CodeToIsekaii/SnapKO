@@ -35,17 +35,59 @@ export async function processQueue() {
       // 2. Route by Table & Action
       if (item.table_name === "ingredients") {
         if (item.action === "UPSERT") {
-          // Sync full payload including unit_weight
-          // Ensure Supabase Schema is updated!
+          // FIX: Ensure business_id is present for RLS compliance
+          // Soft delete/restore operations queue partial payloads without business_id or other required fields
+          // Check if this is a partial payload (only has id, archived, updated_at)
+          const isPartialPayload =
+            Object.keys(data).length <= 3 && data.id && "archived" in data;
+
+          if (isPartialPayload || !data.business_id || !data.name) {
+            // Fetch full record from local DB
+            const localItem = db
+              .prepare("SELECT * FROM local_ingredients WHERE id = ?")
+              .get(data.id) as any;
+
+            if (localItem) {
+              // Merge local record with update
+              Object.assign(data, localItem, data); // data overrides localItem
+            } else {
+              console.warn(
+                `[SyncWorker] Local ingredient not found: ${data.id}`
+              );
+            }
+          }
+
+          // FIX: Parse JSON fields from SQLite TEXT to proper types
+          if (data.aliases && typeof data.aliases === "string") {
+            try {
+              data.aliases = JSON.parse(data.aliases);
+            } catch {
+              data.aliases = [];
+            }
+          }
+          if (!data.aliases) {
+            data.aliases = [];
+          }
+
           const { error: upsertErr } = await supabase
             .from("ingredients")
             .upsert(data);
           error = upsertErr;
         } else if (item.action === "DELETE") {
           // Soft delete - update archived flag
+          // FIX: Include business_id to satisfy RLS "WITH CHECK" policy
+          const localItem = db
+            .prepare("SELECT business_id FROM local_ingredients WHERE id = ?")
+            .get(data.id) as any;
+
+          const updatePayload: any = { archived: true };
+          if (localItem && localItem.business_id) {
+            updatePayload.business_id = localItem.business_id;
+          }
+
           const { error: deleteErr } = await supabase
             .from("ingredients")
-            .update({ archived: true })
+            .update(updatePayload)
             .eq("id", data.id);
           error = deleteErr;
         }
@@ -63,15 +105,41 @@ export async function processQueue() {
         }
 
         if (item.action === "UPSERT") {
+          // FIX: Ensure business_id and required fields are present
+          const isPartialPayload =
+            Object.keys(data).length <= 3 && data.id && "is_active" in data;
+
+          if (isPartialPayload || !data.business_id || !data.name) {
+            const localRecipe = db
+              .prepare("SELECT * FROM local_recipes WHERE id = ?")
+              .get(data.id) as any;
+
+            if (localRecipe) {
+              Object.assign(data, localRecipe, data);
+            } else {
+              console.warn(`[SyncWorker] Local recipe not found: ${data.id}`);
+            }
+          }
+
           const { error: recipeErr } = await supabase
             .from("recipes")
             .upsert(data);
           error = recipeErr;
         } else if (item.action === "DELETE") {
           // Soft delete - update is_active flag
+          // FIX: Include business_id for RLS consistency
+          const localRecipe = db
+            .prepare("SELECT business_id FROM local_recipes WHERE id = ?")
+            .get(data.id) as any;
+
+          const updatePayload: any = { is_active: false };
+          if (localRecipe && localRecipe.business_id) {
+            updatePayload.business_id = localRecipe.business_id;
+          }
+
           const { error: deleteErr } = await supabase
             .from("recipes")
-            .update({ is_active: false })
+            .update(updatePayload)
             .eq("id", data.id);
           error = deleteErr;
         }

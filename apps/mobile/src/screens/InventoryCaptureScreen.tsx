@@ -21,6 +21,7 @@ import {
   StyleSheet,
   TouchableOpacity,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { File } from "expo-file-system";
@@ -836,9 +837,17 @@ export default function InventoryCaptureScreen({
                 alignItems: "center",
               }}
             >
-              <Text style={{ color: "white", fontWeight: "600" }}>
-                📷 Chụp ảnh
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Ionicons
+                  name="camera"
+                  size={18}
+                  color="white"
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={{ color: "white", fontWeight: "600" }}>
+                  Chụp ảnh
+                </Text>
+              </View>
             </Pressable>
             <Pressable
               onPress={handlePickImage}
@@ -852,9 +861,17 @@ export default function InventoryCaptureScreen({
                 borderColor: "#2A2A2A",
               }}
             >
-              <Text style={{ color: "#94A3B8", fontWeight: "600" }}>
-                🖼 Thư viện
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Ionicons
+                  name="images"
+                  size={18}
+                  color="#94A3B8"
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={{ color: "#94A3B8", fontWeight: "600" }}>
+                  Thư viện
+                </Text>
+              </View>
             </Pressable>
           </View>
         )}

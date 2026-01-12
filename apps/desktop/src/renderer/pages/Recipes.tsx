@@ -7,6 +7,26 @@ import {
   convertUnit,
   calculateIngredientCost,
 } from "@snapko/shared/logic";
+import {
+  ScrollText,
+  Rocket,
+  Timer,
+  Bot,
+  Camera,
+  FileSpreadsheet,
+  ClipboardList,
+  X,
+  Save,
+  Pencil,
+  Trash2,
+  HelpCircle,
+  Scroll,
+  Plus,
+  Image,
+  Loader2,
+  CheckCircle,
+  AlertCircle,
+} from "lucide-react";
 
 interface Ingredient {
   id: string;
@@ -296,9 +316,7 @@ export default function RecipesPage() {
       await (window as any).electronAPI?.upsertRecipe(recipeData);
 
       setToast({
-        message: editing
-          ? "✅ Đã cập nhật công thức!"
-          : "✅ Đã thêm công thức mới!",
+        message: editing ? "Đã cập nhật công thức!" : "Đã thêm công thức mới!",
         type: "success",
       });
       setTimeout(() => setToast(null), 3000);
@@ -340,6 +358,11 @@ export default function RecipesPage() {
             boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
           }}
         >
+          {toast.type === "success" ? (
+            <CheckCircle size={18} />
+          ) : (
+            <AlertCircle size={18} />
+          )}
           {toast.message}
         </div>
       )}
@@ -354,14 +377,24 @@ export default function RecipesPage() {
             title: "AI Scan (Quét Công Thức Thông Minh)",
             content: (
               <>
-                <p>
-                  <strong>📝 Hỗ trợ:</strong> Ảnh chụp menu, công thức viết tay
-                  hoặc file Excel.
+                <p
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
+                  <ScrollText size={16} />
+                  <span>
+                    <strong>Hỗ trợ:</strong> Ảnh chụp menu, công thức viết tay
+                    hoặc file Excel.
+                  </span>
                 </p>
-                <p>
-                  <strong>🚀 Tự động:</strong> Hệ thống sẽ tự tách tên món và
-                  định lượng. Nếu 1 ảnh chứa nhiều món, bạn có thể chọn món cần
-                  lưu từ danh sách.
+                <p
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
+                  <Rocket size={16} />
+                  <span>
+                    <strong>Tự động:</strong> Hệ thống sẽ tự tách tên món và
+                    định lượng. Nếu 1 ảnh chứa nhiều món, bạn có thể chọn món
+                    cần lưu từ danh sách.
+                  </span>
                 </p>
               </>
             ),
@@ -392,24 +425,36 @@ export default function RecipesPage() {
 
       <div style={styles.header}>
         <div>
-          <h1 style={styles.title}>📜 Quản lý Công Thức</h1>
+          <h1
+            style={{
+              ...styles.title,
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <Scroll size={24} color={COLORS.primary} />
+            Quản lý Công Thức
+          </h1>
           <p style={styles.subtitle}>Định lượng và tính giá vốn (Cost)</p>
         </div>
         <div style={styles.headerButtons}>
           <button
+            onClick={() => setShowGuide(true)}
             style={{
-              padding: "10px 16px",
-              backgroundColor: "white",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "8px 12px",
+              background: "white",
               border: `1px solid ${COLORS.border}`,
-              borderRadius: 8,
-              fontSize: 14,
-              fontWeight: 600,
+              borderRadius: "8px",
               cursor: "pointer",
               marginRight: 8,
             }}
-            onClick={() => setShowGuide(true)}
           >
-            ❓ Hướng dẫn
+            <HelpCircle size={16} />
+            Hướng dẫn
           </button>
 
           <button
@@ -417,7 +462,17 @@ export default function RecipesPage() {
             onClick={handleAIScan}
             disabled={scanning}
           >
-            {scanning ? "🤖 Đang quét..." : "📸 AI Scan"}
+            {scanning ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Đang quét...
+              </>
+            ) : (
+              <>
+                <Bot size={16} />
+                AI Scan
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -448,9 +503,13 @@ export default function RecipesPage() {
                   fontWeight: 600,
                   color: "#6B8E23",
                   marginBottom: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
                 }}
               >
-                📋 AI tìm thấy {scannedRecipes.length} công thức - Chọn để chỉnh
+                <ClipboardList size={16} />
+                AI tìm thấy {scannedRecipes.length} công thức - Chọn để chỉnh
                 sửa:
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -500,7 +559,8 @@ export default function RecipesPage() {
                   cursor: "pointer",
                 }}
               >
-                ✕ Đóng danh sách
+                <X size={12} />
+                Đóng danh sách
               </button>
             </div>
           )}
@@ -594,7 +654,7 @@ export default function RecipesPage() {
                   onClick={() => removeIngredient(ing.ingredient_id)}
                   style={styles.removeBtn}
                 >
-                  ✕
+                  <X size={14} />
                 </button>
               </div>
             ))}
@@ -652,8 +712,18 @@ export default function RecipesPage() {
             </div>
           </div>
 
-          <button onClick={saveRecipe} style={styles.saveBtn}>
-            💾 Lưu công thức
+          <button
+            onClick={saveRecipe}
+            style={{
+              ...styles.saveBtn,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "8px",
+            }}
+          >
+            <Save size={18} />
+            Lưu công thức
           </button>
         </div>
 
@@ -694,7 +764,8 @@ export default function RecipesPage() {
                       cursor: "pointer",
                     }}
                   >
-                    ✏️ Sửa
+                    <Pencil size={12} style={{ marginRight: 4 }} />
+                    Sửa
                   </button>
                   <button
                     onClick={async () => {
@@ -730,7 +801,7 @@ export default function RecipesPage() {
                       cursor: "pointer",
                     }}
                   >
-                    🗑️
+                    <Trash2 size={12} />
                   </button>
                 </div>
               </div>

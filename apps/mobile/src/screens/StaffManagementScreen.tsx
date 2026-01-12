@@ -152,9 +152,17 @@ export default function StaffManagementScreen({
           {item.phone_number}
         </Text>
         {item.status === "PENDING" && (
-          <Text style={{ color: "#EAB308", fontSize: 12, marginTop: 4 }}>
-            ⏳ Chờ duyệt
-          </Text>
+          <View
+            style={{ flexDirection: "row", alignItems: "center", marginTop: 4 }}
+          >
+            <Ionicons
+              name="time"
+              size={12}
+              color="#EAB308"
+              style={{ marginRight: 4 }}
+            />
+            <Text style={{ color: "#EAB308", fontSize: 12 }}>Chờ duyệt</Text>
+          </View>
         )}
       </View>
 
@@ -192,8 +200,14 @@ export default function StaffManagementScreen({
           borderBottomColor: "#2A2A2A",
         }}
       >
-        <Pressable onPress={onBack}>
-          <Text style={{ color: "#94A3B8", fontSize: 16 }}>← Quay lại</Text>
+        <Pressable
+          onPress={onBack}
+          style={{ flexDirection: "row", alignItems: "center" }}
+        >
+          <Ionicons name="arrow-back" size={20} color="#94A3B8" />
+          <Text style={{ color: "#94A3B8", fontSize: 16, marginLeft: 4 }}>
+            Quay lại
+          </Text>
         </Pressable>
         <Text style={{ color: "white", fontSize: 18, fontWeight: "600" }}>
           Quản lý nhân viên

@@ -27,7 +27,7 @@ export function DashboardTab({
   const handleExport = async () => {
     const result = await onExport();
     if (result?.success) {
-      alert("✅ Đã xuất báo cáo COGS thành công!");
+      alert("Đã xuất báo cáo COGS thành công!");
     }
   };
 

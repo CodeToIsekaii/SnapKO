@@ -11,6 +11,28 @@
 import React, { useState, useEffect } from "react";
 import { COLORS } from "../styles/theme";
 import GuideModal from "../components/GuideModal";
+import {
+  Package,
+  RefreshCw,
+  Shield,
+  FileText,
+  Eye,
+  EyeOff,
+  Recycle,
+  FlaskConical,
+  ScrollText,
+  Wrench,
+  CircleDollarSign,
+  Settings,
+  Plus,
+  HelpCircle,
+  Pencil,
+  Trash2,
+  CheckCircle,
+  AlertCircle,
+  RefreshCcw,
+  Info,
+} from "lucide-react";
 
 interface Ingredient {
   id: string;
@@ -147,8 +169,8 @@ export default function IngredientsPage() {
 
       // Show success message first (non-blocking)
       const successMsg = editingIngredient
-        ? "✅ Đã cập nhật nguyên liệu!"
-        : "✅ Đã thêm nguyên liệu thành công!";
+        ? "Đã cập nhật nguyên liệu!"
+        : "Đã thêm nguyên liệu thành công!";
 
       // Reset form and close modal
       setNewIngredient({
@@ -180,7 +202,7 @@ export default function IngredientsPage() {
       setTimeout(() => setToast(null), 3000);
     } catch (err) {
       console.error("Failed to save ingredient:", err);
-      setToast({ message: "❌ Lỗi khi lưu nguyên liệu", type: "error" });
+      setToast({ message: "Lỗi khi lưu nguyên liệu", type: "error" });
       setTimeout(() => setToast(null), 3000);
     }
   };
@@ -218,7 +240,7 @@ export default function IngredientsPage() {
         console.log("🔔 [UI] Received ingredients-updated signal");
         loadIngredients(false, showHidden);
         setToast({
-          message: "🔄 Dữ liệu đã được cập nhật từ thiết bị khác",
+          message: "Dữ liệu đã được cập nhật từ thiết bị khác",
           type: "success",
         });
         setTimeout(() => setToast(null), 3000);
@@ -239,7 +261,7 @@ export default function IngredientsPage() {
       () => {
         console.log("🔔 [UI] Received stock-updated signal");
         loadIngredients(false, showHidden);
-        setToast({ message: "📦 Tồn kho vừa thay đổi", type: "success" });
+        setToast({ message: "Tồn kho vừa thay đổi", type: "success" });
         setTimeout(() => setToast(null), 3000);
       }
     );
@@ -261,12 +283,12 @@ export default function IngredientsPage() {
 
     try {
       await (window as any).electronAPI?.restoreIngredient?.(ing.id);
-      setToast({ message: `✅ Đã khôi phục "${ing.name}"`, type: "success" });
+      setToast({ message: `Đã khôi phục "${ing.name}"`, type: "success" });
       setTimeout(() => setToast(null), 3000);
       await loadIngredients(false, showHidden);
     } catch (err) {
       console.error("Failed to restore ingredient:", err);
-      setToast({ message: "❌ Lỗi khi khôi phục nguyên liệu", type: "error" });
+      setToast({ message: "Lỗi khi khôi phục nguyên liệu", type: "error" });
       setTimeout(() => setToast(null), 3000);
     }
   };
@@ -307,12 +329,12 @@ export default function IngredientsPage() {
 
     try {
       await (window as any).electronAPI?.deleteIngredient?.(ing.id);
-      setToast({ message: `✅ Đã xóa "${ing.name}"`, type: "success" });
+      setToast({ message: `Đã xóa "${ing.name}"`, type: "success" });
       setTimeout(() => setToast(null), 3000);
       await loadIngredients(false, showHidden);
     } catch (err) {
       console.error("Failed to delete ingredient:", err);
-      setToast({ message: "❌ Lỗi khi xóa nguyên liệu", type: "error" });
+      setToast({ message: "Lỗi khi xóa nguyên liệu", type: "error" });
       setTimeout(() => setToast(null), 3000);
     }
   };
@@ -338,6 +360,11 @@ export default function IngredientsPage() {
             animation: "fadeIn 0.2s ease-out",
           }}
         >
+          {toast.type === "success" ? (
+            <CheckCircle size={18} />
+          ) : (
+            <AlertCircle size={18} />
+          )}
           {toast.message}
         </div>
       )}
@@ -352,15 +379,25 @@ export default function IngredientsPage() {
             title: "Phân loại Hàng hóa (Item Type)",
             content: (
               <>
-                <p>
-                  <strong>📦 Hàng Tồn Kho (STOCK):</strong> Là nguyên liệu thực
-                  tế nhập về kho (Đường, Sữa, Cafe hạt). Có số lượng cụ thể và
-                  cần kiểm kê.
+                <p
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
+                  <Package size={16} />
+                  <span>
+                    <strong>Hàng Tồn Kho (STOCK):</strong> Là nguyên liệu thực
+                    tế nhập về kho (Đường, Sữa, Cafe hạt). Có số lượng cụ thể và
+                    cần kiểm kê.
+                  </span>
                 </p>
-                <p>
-                  <strong>🔄 Hàng Quy Đổi (PHANTOM):</strong> Là bán thành phẩm
-                  (Nước đường, Cốt trà, Sốt). Không cần nhập kho mà tự động trừ
-                  từ nguyên liệu gốc theo công thức.
+                <p
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
+                  <RefreshCw size={16} />
+                  <span>
+                    <strong>Hàng Quy Đổi (PHANTOM):</strong> Là bán thành phẩm
+                    (Nước đường, Cốt trà, Sốt). Không cần nhập kho mà tự động
+                    trừ từ nguyên liệu gốc theo công thức.
+                  </span>
                 </p>
               </>
             ),
@@ -369,15 +406,26 @@ export default function IngredientsPage() {
             title: "Chế độ Kiểm Tra (Tracking Mode)",
             content: (
               <>
-                <p>
-                  <strong>🛡️ Kiểm Kỹ (STRICT):</strong> Dành cho hàng đắt tiền
-                  (Rượu, Bò Mỹ). Hệ thống so sánh số bạn đếm với số lý thuyết
-                  (Tồn đầu + Nhập - Bán). Nếu lệch quá mức cho phép sẽ báo động.
+                <p
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
+                  <Shield size={16} />
+                  <span>
+                    <strong>Kiểm Kỹ (STRICT):</strong> Dành cho hàng đắt tiền
+                    (Rượu, Bò Mỹ). Hệ thống so sánh số bạn đếm với số lý thuyết
+                    (Tồn đầu + Nhập - Bán). Nếu lệch quá mức cho phép sẽ báo
+                    động.
+                  </span>
                 </p>
-                <p>
-                  <strong>📝 Tin Tưởng (TRUST/LOOSE):</strong> Dành cho hàng
-                  rẻ/khó đếm (Đường, Trà lá). Bạn đếm bao nhiêu, hệ thống ghi
-                  nhận bấy nhiêu. Không báo lỗi.
+                <p
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
+                  <FileText size={16} />
+                  <span>
+                    <strong>Tin Tưởng (TRUST/LOOSE):</strong> Dành cho hàng
+                    rẻ/khó đếm (Đường, Trà lá). Bạn đếm bao nhiêu, hệ thống ghi
+                    nhận bấy nhiêu. Không báo lỗi.
+                  </span>
                 </p>
               </>
             ),
@@ -421,11 +469,18 @@ export default function IngredientsPage() {
         </div>
         <div style={styles.headerButtons}>
           {/* Help Button */}
+
           <button
-            style={styles.secondaryButton}
+            style={{
+              ...styles.secondaryButton,
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+            }}
             onClick={() => setShowGuide(true)}
           >
-            ❓ Hướng dẫn
+            <HelpCircle size={16} />
+            Hướng dẫn
           </button>
           {/* Show Hidden Button */}
           <button
@@ -441,15 +496,33 @@ export default function IngredientsPage() {
             }}
             onClick={() => setShowHidden(!showHidden)}
           >
-            {showHidden ? "👁️ Đang hiện ẩn" : "👁️ Hiện đã ẩn"}
+            {showHidden ? (
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "6px" }}
+              >
+                <Eye size={16} /> Đang hiện ẩn
+              </div>
+            ) : (
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "6px" }}
+              >
+                <EyeOff size={16} /> Hiện đã ẩn
+              </div>
+            )}
           </button>
 
           {/* Add Button */}
           <button
-            style={styles.primaryButton}
+            style={{
+              ...styles.primaryButton,
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+            }}
             onClick={() => setShowAddModal(true)}
           >
-            + Thêm Nguyên Liệu
+            <Plus size={16} />
+            Thêm Nguyên Liệu
           </button>
         </div>
       </div>
@@ -547,7 +620,8 @@ export default function IngredientsPage() {
                         }}
                         onClick={() => handleRestore(ing)}
                       >
-                        ♻️ Khôi phục
+                        <Recycle size={14} />
+                        Khôi phục
                       </button>
                     ) : (
                       <>
@@ -603,7 +677,7 @@ export default function IngredientsPage() {
               {/* Section 1: Basic Info */}
               <div style={styles.formSection}>
                 <div style={styles.sectionTitle}>
-                  <span style={styles.sectionIcon}>📦</span>
+                  <Package size={20} />
                   Thông tin cơ bản
                 </div>
                 <div style={styles.field}>
@@ -666,7 +740,7 @@ export default function IngredientsPage() {
               {/* Section 2: Pricing & Units */}
               <div style={styles.formSection}>
                 <div style={styles.sectionTitle}>
-                  <span style={styles.sectionIcon}>💰</span>
+                  <CircleDollarSign size={20} />
                   Giá & Đơn vị
                 </div>
                 <div style={styles.formRow}>
@@ -788,7 +862,7 @@ export default function IngredientsPage() {
               {/* Section 3: Advanced */}
               <div style={styles.formSection}>
                 <div style={styles.sectionTitle}>
-                  <span style={styles.sectionIcon}>⚙️</span>
+                  <Settings size={20} />
                   Cài đặt nâng cao
                   <span style={styles.optionalBadge}>Tùy chọn</span>
                 </div>

@@ -76,6 +76,7 @@ export default function QuickOutScreen({
   );
   const [selectedReason, setSelectedReason] = useState<OutReason>(null);
   const [showReasonModal, setShowReasonModal] = useState(false);
+  const [showLoanSourceModal, setShowLoanSourceModal] = useState(false);
 
   useEffect(() => {
     loadIngredients();
@@ -123,11 +124,34 @@ export default function QuickOutScreen({
 
   const handleConfirmWithReason = async (reason: OutReason) => {
     if (!reason) return;
+
+    if (reason === "LOAN") {
+      setShowReasonModal(false);
+      // Delay slightly to allow modal to close before opening next one
+      setTimeout(() => setShowLoanSourceModal(true), 300);
+      return;
+    }
+
+    // For standard waste/marketing, proceed directly
+    await processQuickOut(reason, "BAR"); // Default source for waste is BAR
+  };
+
+  const processQuickOut = async (
+    reason: OutReason,
+    sourceLocation: "BAR" | "WAREHOUSE"
+  ) => {
     setShowReasonModal(false);
+    setShowLoanSourceModal(false);
 
     try {
       const db = await getDB();
       const id = Crypto.randomUUID();
+      // Use businessId from context or fetch from profile
+      const profile = await db.getFirstAsync<{ business_id: string }>(
+        "SELECT business_id FROM local_profiles LIMIT 1"
+      );
+      const businessId = profile?.business_id || "";
+
       const itemsArr = Array.from(selectedItems.entries()).map(
         ([ingId, qty]) => {
           const ing = ingredients.find((i) => i.id === ingId);
@@ -140,23 +164,22 @@ export default function QuickOutScreen({
         }
       );
 
-      // Map reason to type for sync logs (Dashboard queries use these types)
-      // Valid enum values: IMPORT | TRANSFER | AUDIT | WASTE | LENT
+      // Map reason to type for sync logs
       const typeMapping: Record<string, string> = {
         DAMAGED: "WASTE",
-        LOAN: "LENT", // Database uses "LENT" not "LOAN"
-        MARKETING: "WASTE", // Treat marketing as loss/waste
+        LOAN: "LENT",
+        MARKETING: "WASTE",
       };
-      const logType = typeMapping[reason] || "QUICK_OUT";
+      const logType = typeMapping[reason!] || "QUICK_OUT";
 
-      // Log the QUICK_OUT transaction with proper type for Dashboard display
+      // 1. Log transaction
       await db.runAsync(
         `INSERT INTO pending_sync_logs (id, type, location, ai_parsed_json, created_at, synced)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?)`,
         [
           id,
-          logType, // Use mapped type instead of generic QUICK_OUT
-          "BAR", // Valid enum value: WAREHOUSE or BAR
+          logType,
+          sourceLocation,
           JSON.stringify({
             items: itemsArr,
             reason: reason,
@@ -164,73 +187,72 @@ export default function QuickOutScreen({
             notes: `Xuất Khác - ${
               OUT_REASONS.find((r) => r.id === reason)?.label
             }`,
+            source_location: sourceLocation,
           }),
           new Date().toISOString(),
           0,
         ]
       );
 
-      // Deduct from stock immediately
+      // 2. Deduct Stock based on sourceLocation (Strict logic)
       for (const [ingId, qty] of selectedItems.entries()) {
-        // Deduct from bar first, then warehouse
-        await db.runAsync(
-          `UPDATE local_ingredients 
-           SET bar_qty = CASE 
-             WHEN bar_qty >= ? THEN bar_qty - ?
-             ELSE 0 
-           END,
-           warehouse_qty = CASE 
-             WHEN bar_qty < ? THEN warehouse_qty - (? - bar_qty)
-             ELSE warehouse_qty 
-           END
-           WHERE id = ?`,
-          [qty, qty, qty, qty, ingId]
-        );
+        if (sourceLocation === "WAREHOUSE") {
+          // Deduct ONLY from warehouse_qty
+          await db.runAsync(
+            `UPDATE local_ingredients 
+               SET warehouse_qty = CASE 
+                 WHEN warehouse_qty >= ? THEN warehouse_qty - ? 
+                 ELSE 0 
+               END
+               WHERE id = ?`,
+            [qty, qty, ingId]
+          );
+        } else {
+          // Deduct from BAR: first bar, then warehouse if needed?
+          // OR strict bar? User requested: "chọn từ kho tổng hay kho bar để hệ thống biết trừ thẳng kho tổng hay bar"
+          // Let's implement strict deduction from the selected source as verified in plan
+
+          // STRICT BAR DEDUCTION (If bar is empty, it goes negative or 0? Usually 0)
+          // But usually bar consumption might pull from warehouse if auto-replenish?
+          // User instruction: "trừ thẳng kho tổng hay bar". Defaulting to strict subtraction.
+
+          await db.runAsync(
+            `UPDATE local_ingredients 
+               SET bar_qty = CASE 
+                 WHEN bar_qty >= ? THEN bar_qty - ? 
+                 ELSE 0 
+               END
+               WHERE id = ?`,
+            [qty, qty, ingId]
+          );
+        }
       }
 
-      // 📌 LOAN REMINDER: If lending, create reminder for tomorrow
+      // 3. If LOAN, create pending lend record with explicit location
       if (reason === "LOAN") {
-        // Create reminders table if not exists
-        await db.execAsync(`
-          CREATE TABLE IF NOT EXISTS local_reminders (
-            id TEXT PRIMARY KEY NOT NULL,
-            type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            message TEXT,
-            remind_at TEXT NOT NULL,
-            is_done INTEGER DEFAULT 0,
-            related_log_id TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-          )
-        `);
+        const { createPendingLend } = require("../db"); // Dynamic import
 
-        // Calculate tomorrow date
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(9, 0, 0, 0); // Remind at 9 AM
+        for (const item of itemsArr) {
+          await createPendingLend({
+            id: Crypto.randomUUID(),
+            business_id: businessId,
+            ingredient_id: item.ingredient_id,
+            ingredient_name: item.ingredient_name || "Unknown",
+            quantity: item.quantity,
+            unit: item.unit || "unit",
+            source_location: sourceLocation,
+            lent_at: new Date().toISOString(),
+            related_log_id: id,
+          });
+        }
 
-        // Create reminder for each loaned item
-        const itemNames = itemsArr
-          .map((i) => `${i.ingredient_name}: ${i.quantity} ${i.unit}`)
-          .join(", ");
-
-        await db.runAsync(
-          `INSERT INTO local_reminders (id, type, title, message, remind_at, related_log_id)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [
-            Crypto.randomUUID(),
-            "LOAN_FOLLOWUP",
-            "Nhắc đòi hàng mượn",
-            `Hôm qua đã cho mượn: ${itemNames}. Nhớ đòi lại!`,
-            tomorrow.toISOString(),
-            id, // Link to the QUICK_OUT log
-          ]
-        );
-
-        console.log(
-          "[Reminder] Created LOAN reminder for:",
-          tomorrow.toISOString()
-        );
+        // Trigger sync immediately
+        try {
+          const { syncPendingLends } = await import("../sync/syncEngine");
+          await syncPendingLends();
+        } catch (syncErr) {
+          console.warn("[QuickOut] Sync after lend failed:", syncErr);
+        }
       }
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -238,8 +260,11 @@ export default function QuickOutScreen({
       const reasonLabel = OUT_REASONS.find((r) => r.id === reason)?.label;
       const loanNote =
         reason === "LOAN"
-          ? "\n\n🔔 Đã đặt nhắc nhở đòi lại vào ngày mai 9h sáng!"
+          ? `\n\n🔔 Đã ghi nhận cho mượn từ ${
+              sourceLocation === "WAREHOUSE" ? "KHO TỔNG" : "QUẦY BAR"
+            }.`
           : "";
+
       Alert.alert(
         "Thành công ✅",
         `Đã ghi nhận xuất kho (${reasonLabel}).${loanNote}\n\n⚠️ LƯU Ý: KHÔNG GHI lại vào tờ kiểm kê cuối ngày!`
@@ -383,6 +408,59 @@ export default function QuickOutScreen({
               onPress={() => setShowReasonModal(false)}
             >
               <Text style={styles.cancelBtnText}>Hủy</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Loan Source Selection Modal */}
+      <Modal visible={showLoanSourceModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Chọn nguồn hàng cho mượn</Text>
+            <Text style={styles.modalSubtitle}>Bạn lấy hàng từ kho nào?</Text>
+
+            <TouchableOpacity
+              style={[styles.reasonButton, { borderColor: "#6B8E23" }]}
+              onPress={() => processQuickOut("LOAN", "BAR")}
+            >
+              <Ionicons
+                name="wine"
+                size={24}
+                color="#6B8E23"
+                style={{ marginRight: 12 }}
+              />
+              <View>
+                <Text style={[styles.reasonLabel, { color: "#6B8E23" }]}>
+                  QUẦY BAR
+                </Text>
+                <Text style={styles.itemStock}>Lấy tại quầy pha chế / Bar</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.reasonButton, { borderColor: "#F59E0B" }]}
+              onPress={() => processQuickOut("LOAN", "WAREHOUSE")}
+            >
+              <Ionicons
+                name="cube"
+                size={24}
+                color="#F59E0B"
+                style={{ marginRight: 12 }}
+              />
+              <View>
+                <Text style={[styles.reasonLabel, { color: "#F59E0B" }]}>
+                  KHO TỔNG
+                </Text>
+                <Text style={styles.itemStock}>Lấy từ kho lưu trữ</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setShowLoanSourceModal(false)}
+            >
+              <Text style={styles.closeButtonText}>Hủy</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -563,5 +641,28 @@ const styles = StyleSheet.create({
     color: "#94A3B8",
     fontSize: 15,
     fontWeight: "600",
+  },
+  closeButton: {
+    marginTop: 12,
+    padding: 14,
+    alignItems: "center",
+  },
+  closeButtonText: {
+    color: "#94A3B8",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  itemStock: {
+    color: "#94A3B8",
+    fontSize: 12,
+  },
+  reasonButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#121212",
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+    borderWidth: 2,
   },
 });
