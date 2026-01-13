@@ -7,21 +7,12 @@
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
+    "downlevelIteration": true,
     "paths": {
-      "@snapko/shared": [
-        "../../packages/shared/src"
-      ],
-      "@snapko/shared/*": [
-        "../../packages/shared/src/*"
-      ]
+      "@snapko/shared": ["../../packages/shared/src"],
+      "@snapko/shared/*": ["../../packages/shared/src/*"]
     }
   },
-  "include": [
-    "src/**/*",
-    "app/**/*",
-    "nativewind-env.d.ts"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+  "include": ["src/**/*", "app/**/*", "nativewind-env.d.ts"],
+  "exclude": ["node_modules"]
 }

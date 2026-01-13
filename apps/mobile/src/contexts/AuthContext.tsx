@@ -35,11 +35,41 @@ export interface UserProfile {
   businessCreatedAt?: string | null;
 }
 
-// ... existing code ...
+type AuthState =
+  | { status: "unauthenticated" }
+  | { status: "loading" }
+  | { status: "authenticated"; user: User; profile: UserProfile }
+  | { status: "needs_setup"; user: User; profile: UserProfile }
+  | { status: "pending"; profileId: string };
+
+type AuthContextValue = {
+  authState: AuthState;
+  signIn: (e: string, p: string) => Promise<void>;
+  signUp: (e: string, p: string, n?: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
+  createBusiness: (n: string) => Promise<void>;
+  updatePassword: (o: string, n: string) => Promise<void>;
+  resetPassword: (e: string) => Promise<void>;
+  setStaffPending: (id: string) => Promise<void>;
+  clearStaffPending: () => Promise<void>;
+};
+
+const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
+  auth: {
+    storage: AsyncStorage,
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: false,
+  },
+});
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-// ... existing code ...
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [authState, setAuthState] = useState<AuthState>({
+    status: "unauthenticated",
+  });
 
   // Fetch profile from DB
   const fetchProfile = useCallback(
@@ -47,7 +77,8 @@ const AuthContext = createContext<AuthContextValue | null>(null);
       // Fetch profile and join businesses to get subscription data
       const { data, error } = await supabase
         .from("profiles")
-        .select(`
+        .select(
+          `
           id, 
           business_id, 
           role, 
@@ -59,7 +90,8 @@ const AuthContext = createContext<AuthContextValue | null>(null);
             subscription_expires_at,
             created_at
           )
-        `)
+        `
+        )
         .eq("id", userId)
         .maybeSingle();
 
