@@ -22,6 +22,13 @@ interface VarianceItem {
   counted: number;
   expected: number;
   percent: number;
+  unit?: string;
+  // Breakdown for calculation display (per user feedback Phase 3)
+  breakdown?: {
+    startingQty: number;
+    transfersIn: number;
+    salesConsumption: number;
+  };
 }
 
 interface VarianceModalProps {
@@ -38,7 +45,7 @@ export default function VarianceModal({
   onCancel,
 }: VarianceModalProps) {
   const [selectedReason, setSelectedReason] = useState<VarianceReason | null>(
-    null
+    null,
   );
   const [note, setNote] = useState("");
 
@@ -85,17 +92,56 @@ export default function VarianceModal({
             <Text style={styles.title}>CHÊNH LỆCH LỚN!</Text>
           </View>
 
-          {/* Variance List */}
+          {/* Variance List with Breakdown */}
           <View style={styles.listContainer}>
             {items.slice(0, 3).map((item, index) => (
-              <View key={index} style={styles.varItem}>
-                <Text style={styles.varName}>{item.name}</Text>
-                <Text style={styles.varDetails}>
-                  Thực: {item.counted} | Lý thuyết: {item.expected}
-                </Text>
-                <Text style={styles.varPercent}>
-                  -{item.percent.toFixed(1)}%
-                </Text>
+              <View key={index} style={styles.varItemContainer}>
+                <View style={styles.varItem}>
+                  <Text style={styles.varName}>{item.name}</Text>
+                  <Text style={styles.varPercent}>
+                    -{item.percent.toFixed(1)}%
+                  </Text>
+                </View>
+
+                {/* Breakdown calculation (Phase 3) */}
+                {item.breakdown ? (
+                  <View style={styles.breakdownBox}>
+                    <Text style={styles.breakdownLine}>
+                      Tồn đầu: {item.breakdown.startingQty.toFixed(1)}{" "}
+                      {item.unit || ""}
+                    </Text>
+                    {item.breakdown.transfersIn > 0 && (
+                      <Text
+                        style={[styles.breakdownLine, { color: "#6B8E23" }]}
+                      >
+                        + Nhập: +{item.breakdown.transfersIn.toFixed(1)}
+                      </Text>
+                    )}
+                    {item.breakdown.salesConsumption > 0 && (
+                      <Text
+                        style={[styles.breakdownLine, { color: "#E63946" }]}
+                      >
+                        - Bán: -{item.breakdown.salesConsumption.toFixed(1)}
+                      </Text>
+                    )}
+                    <Text
+                      style={[
+                        styles.breakdownLine,
+                        { fontWeight: "700", color: "#E07A2F" },
+                      ]}
+                    >
+                      = Lý thuyết: {item.expected.toFixed(1)}
+                    </Text>
+                    <Text style={styles.breakdownActual}>
+                      Thực tế đếm: {item.counted.toFixed(1)}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={styles.varDetails}>
+                    Thực: {item.counted.toFixed(1)} | Lý thuyết:{" "}
+                    {item.expected.toFixed(1)}
+                  </Text>
+                )}
               </View>
             ))}
             {items.length > 3 && (
@@ -197,6 +243,32 @@ const styles = StyleSheet.create({
     color: "#E63946",
     fontSize: 14,
     fontWeight: "700",
+  },
+  varItemContainer: {
+    marginBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#2A2A2A",
+    paddingBottom: 8,
+  },
+  breakdownBox: {
+    backgroundColor: "#1A1A1A",
+    borderRadius: 8,
+    padding: 8,
+    marginTop: 4,
+  },
+  breakdownLine: {
+    color: "#94A3B8",
+    fontSize: 12,
+    marginVertical: 2,
+  },
+  breakdownActual: {
+    color: "#F5F3EF",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 4,
+    paddingTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: "#2A2A2A",
   },
   moreText: {
     color: "#94A3B8",

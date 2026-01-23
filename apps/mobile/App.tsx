@@ -122,8 +122,11 @@ function AppNavigator() {
         const { getDB } = await import("./src/db");
         const db = await getDB();
         if (mounted) {
-          await initSyncEngine(db);
           setDbReady(true);
+          // Initialize sync in background so it doesn't block UI
+          initSyncEngine(db).catch((err) =>
+            console.error("Background sync init failed:", err)
+          );
         }
       } catch (e) {
         console.error("DB init failed:", e);
@@ -401,7 +404,7 @@ function AppNavigator() {
 
 // ================== ROOT COMPONENT ==================
 
-// import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 // ... existing code ...
 
@@ -421,14 +424,16 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider>
-          <InventoryModelProvider>
-            <AppNavigator />
-            <StatusBar style="light" />
-          </InventoryModelProvider>
-        </AuthProvider>
-      </QueryClientProvider>
+      <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <InventoryModelProvider>
+              <AppNavigator />
+              <StatusBar style="light" />
+            </InventoryModelProvider>
+          </AuthProvider>
+        </QueryClientProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }

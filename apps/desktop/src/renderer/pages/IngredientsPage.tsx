@@ -32,7 +32,11 @@ import {
   AlertCircle,
   RefreshCcw,
   Info,
+  Search,
+  X,
 } from "lucide-react";
+
+import { getAllUnits, UNIT_TYPES } from "@snapko/shared/logic";
 
 interface Ingredient {
   id: string;
@@ -101,7 +105,8 @@ export default function IngredientsPage() {
     ingredient_type: "raw_material" as
       | "raw_material"
       | "supply"
-      | "semi_product",
+      | "semi_product"
+      | "resale_item",
   });
 
   // Batch recipe inputs (for PHANTOM items)
@@ -112,6 +117,9 @@ export default function IngredientsPage() {
 
   // Restore feature state
   const [showHidden, setShowHidden] = useState(false);
+
+  // Search filter for ingredient list
+  const [searchTerm, setSearchTerm] = useState("");
 
   // Open edit modal with ingredient data
   const handleEdit = (ing: Ingredient) => {
@@ -540,6 +548,67 @@ export default function IngredientsPage() {
         </div>
       </div>
 
+      {/* Search Bar */}
+      <div style={{ marginBottom: 16, position: "relative", maxWidth: 400 }}>
+        <Search
+          size={18}
+          color={COLORS.textSecondary}
+          style={{
+            position: "absolute",
+            left: 14,
+            top: "50%",
+            transform: "translateY(-50%)",
+            pointerEvents: "none",
+          }}
+        />
+        <input
+          type="text"
+          placeholder="Tìm kiếm nguyên liệu..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          style={{
+            width: "100%",
+            padding: "12px 16px 12px 44px",
+            fontSize: 14,
+            color: COLORS.textPrimary,
+            backgroundColor: COLORS.surface,
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 8,
+            outline: "none",
+            transition: "border-color 0.2s, box-shadow 0.2s",
+          }}
+          onFocus={(e) => {
+            e.target.style.borderColor = COLORS.primary;
+            e.target.style.boxShadow = `0 0 0 3px ${COLORS.primary}20`;
+          }}
+          onBlur={(e) => {
+            e.target.style.borderColor = COLORS.border;
+            e.target.style.boxShadow = "none";
+          }}
+        />
+        {searchTerm && (
+          <button
+            onClick={() => setSearchTerm("")}
+            style={{
+              position: "absolute",
+              right: 12,
+              top: "50%",
+              transform: "translateY(-50%)",
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              padding: 4,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            title="Xóa tìm kiếm"
+          >
+            <X size={16} color={COLORS.textSecondary} />
+          </button>
+        )}
+      </div>
+
       {/* Table */}
       <div style={styles.tableContainer}>
         <table style={styles.table}>
@@ -568,84 +637,95 @@ export default function IngredientsPage() {
                 </td>
               </tr>
             ) : (
-              ingredients.map((ing) => (
-                <tr
-                  key={ing.id}
-                  style={{
-                    ...styles.tableRow,
-                    opacity: ing.archived ? 0.6 : 1,
-                    backgroundColor: ing.archived ? "#f5f5f5" : "transparent",
-                  }}
-                >
-                  <td style={styles.td}>
-                    <div
-                      style={{
-                        ...styles.ingredientName,
-                        textDecoration: ing.archived ? "line-through" : "none",
-                      }}
-                    >
-                      {ing.name}
-                    </div>
-                    {/* Only show aliases if it's not empty or just '[]' */}
-                    {ing.aliases &&
-                      ing.aliases !== "[]" &&
-                      ing.aliases.length > 2 && (
-                        <div style={styles.aliases}>
-                          Cũng gọi: {ing.aliases}
-                        </div>
-                      )}
-                  </td>
-                  <td style={styles.td}>
-                    <span style={styles.unitBadge}>{ing.base_unit}</span>
-                  </td>
-                  <td style={styles.td}>{formatCurrency(ing.unit_cost)}</td>
-                  <td style={styles.td}>{ing.warehouse_qty}</td>
-                  <td style={styles.td}>{ing.bar_qty}</td>
-                  <td style={styles.td}>
-                    {isLowStock(ing) ? (
-                      <span style={styles.lowStockBadge}>
-                        &lt; {ing.min_threshold} {ing.base_unit}
-                      </span>
-                    ) : (
-                      <span style={styles.okBadge}>OK</span>
-                    )}
-                  </td>
-                  <td style={{ ...styles.td, textAlign: "right" }}>
-                    {ing.archived ? (
-                      <button
+              ingredients
+                .filter((ing) => {
+                  if (!searchTerm) return true;
+                  const query = searchTerm.toLowerCase();
+                  return (
+                    ing.name.toLowerCase().includes(query) ||
+                    (ing.aliases && ing.aliases.toLowerCase().includes(query))
+                  );
+                })
+                .map((ing) => (
+                  <tr
+                    key={ing.id}
+                    style={{
+                      ...styles.tableRow,
+                      opacity: ing.archived ? 0.6 : 1,
+                      backgroundColor: ing.archived ? "#f5f5f5" : "transparent",
+                    }}
+                  >
+                    <td style={styles.td}>
+                      <div
                         style={{
-                          ...styles.editButton,
-                          color: COLORS.primary,
-                          fontWeight: 600,
+                          ...styles.ingredientName,
+                          textDecoration: ing.archived
+                            ? "line-through"
+                            : "none",
                         }}
-                        onClick={() => handleRestore(ing)}
                       >
-                        <Recycle size={14} />
-                        Khôi phục
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          style={styles.editButton}
-                          onClick={() => handleEdit(ing)}
-                        >
-                          Sửa
-                        </button>
+                        {ing.name}
+                      </div>
+                      {/* Only show aliases if it's not empty or just '[]' */}
+                      {ing.aliases &&
+                        ing.aliases !== "[]" &&
+                        ing.aliases.length > 2 && (
+                          <div style={styles.aliases}>
+                            Cũng gọi: {ing.aliases}
+                          </div>
+                        )}
+                    </td>
+                    <td style={styles.td}>
+                      <span style={styles.unitBadge}>{ing.base_unit}</span>
+                    </td>
+                    <td style={styles.td}>{formatCurrency(ing.unit_cost)}</td>
+                    <td style={styles.td}>{ing.warehouse_qty}</td>
+                    <td style={styles.td}>{ing.bar_qty}</td>
+                    <td style={styles.td}>
+                      {isLowStock(ing) ? (
+                        <span style={styles.lowStockBadge}>
+                          &lt; {ing.min_threshold} {ing.base_unit}
+                        </span>
+                      ) : (
+                        <span style={styles.okBadge}>OK</span>
+                      )}
+                    </td>
+                    <td style={{ ...styles.td, textAlign: "right" }}>
+                      {ing.archived ? (
                         <button
                           style={{
                             ...styles.editButton,
-                            color: "#EF4444",
-                            marginLeft: 8,
+                            color: COLORS.primary,
+                            fontWeight: 600,
                           }}
-                          onClick={() => handleDelete(ing)}
+                          onClick={() => handleRestore(ing)}
                         >
-                          Xóa
+                          <Recycle size={14} />
+                          Khôi phục
                         </button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))
+                      ) : (
+                        <>
+                          <button
+                            style={styles.editButton}
+                            onClick={() => handleEdit(ing)}
+                          >
+                            Sửa
+                          </button>
+                          <button
+                            style={{
+                              ...styles.editButton,
+                              color: "#EF4444",
+                              marginLeft: 8,
+                            }}
+                            onClick={() => handleDelete(ing)}
+                          >
+                            Xóa
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))
             )}
           </tbody>
         </table>
@@ -706,7 +786,8 @@ export default function IngredientsPage() {
                       const newType = e.target.value as
                         | "raw_material"
                         | "supply"
-                        | "semi_product";
+                        | "semi_product"
+                        | "resale_item";
                       setNewIngredient({
                         ...newIngredient,
                         ingredient_type: newType,
@@ -725,6 +806,9 @@ export default function IngredientsPage() {
                     <option value="semi_product">
                       🔧 Bán thành phẩm (Tự nấu)
                     </option>
+                    <option value="resale_item">
+                      🛒 Hàng bán lại (Nhập về bán)
+                    </option>
                   </select>
                   <span style={styles.hint}>
                     {newIngredient.ingredient_type === "raw_material" &&
@@ -733,6 +817,8 @@ export default function IngredientsPage() {
                       "Giấy ăn, Ly nhựa, Ống hút - Chi phí cửa hàng"}
                     {newIngredient.ingredient_type === "semi_product" &&
                       "Cốt trà, Sốt đặc biệt - Nấu từ nguyên liệu gốc"}
+                    {newIngredient.ingredient_type === "resale_item" &&
+                      "Bánh, Cookies, Snacks - Nhập sẵn bán lại, không cần công thức"}
                   </span>
                 </div>
               </div>
@@ -756,20 +842,11 @@ export default function IngredientsPage() {
                         })
                       }
                     >
-                      <option value="kg">kg</option>
-                      <option value="g">g</option>
-                      <option value="lít">lít</option>
-                      <option value="ml">ml</option>
-                      <option value="chai">chai</option>
-                      <option value="lon">lon</option>
-                      <option value="gói">gói</option>
-                      <option value="hộp">hộp</option>
-                      <option value="cái">cái</option>
-                      <option value="hũ">hũ</option>
-                      <option value="bịch">bịch</option>
-                      <option value="túi">túi</option>
-                      <option value="cây">cây</option>
-                      <option value="bó">bó</option>
+                      {getAllUnits().map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div style={styles.formCol}>
@@ -800,18 +877,7 @@ export default function IngredientsPage() {
                 </div>
 
                 {/* Unit Conversion - show only for countable units */}
-                {[
-                  "chai",
-                  "lon",
-                  "gói",
-                  "hộp",
-                  "hũ",
-                  "cái",
-                  "bịch",
-                  "túi",
-                  "cây",
-                  "bó",
-                ].includes(newIngredient.base_unit) && (
+                {UNIT_TYPES.COUNT.includes(newIngredient.base_unit as any) && (
                   <div style={{ marginTop: 16 }}>
                     <label style={styles.label}>
                       Khối lượng / 1 {newIngredient.base_unit}

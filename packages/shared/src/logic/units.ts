@@ -62,13 +62,32 @@ export const CONVERSION_RATES: Record<string, number> = {
 
 /**
  * Get the unit group (WEIGHT, VOLUME, or COUNT)
+ * Uses Unicode normalization to handle Vietnamese characters
  */
 export function getUnitGroup(
-  unit: string
+  unit: string,
 ): "WEIGHT" | "VOLUME" | "COUNT" | null {
-  if (UNIT_TYPES.WEIGHT.includes(unit as WeightUnit)) return "WEIGHT";
-  if (UNIT_TYPES.VOLUME.includes(unit as VolumeUnit)) return "VOLUME";
-  if (UNIT_TYPES.COUNT.includes(unit as CountUnit)) return "COUNT";
+  // Normalize and trim to handle Unicode variations
+  const normalizedUnit = unit.normalize("NFC").trim().toLowerCase();
+
+  if (
+    UNIT_TYPES.WEIGHT.some(
+      (u) => u.normalize("NFC").toLowerCase() === normalizedUnit,
+    )
+  )
+    return "WEIGHT";
+  if (
+    UNIT_TYPES.VOLUME.some(
+      (u) => u.normalize("NFC").toLowerCase() === normalizedUnit,
+    )
+  )
+    return "VOLUME";
+  if (
+    UNIT_TYPES.COUNT.some(
+      (u) => u.normalize("NFC").toLowerCase() === normalizedUnit,
+    )
+  )
+    return "COUNT";
   return null;
 }
 
@@ -104,7 +123,7 @@ export function canConvert(fromUnit: string, toUnit: string): boolean {
 export function convertUnit(
   value: number,
   fromUnit: string,
-  toUnit: string
+  toUnit: string,
 ): number {
   // Same unit → no conversion
   if (fromUnit === toUnit) return value;
@@ -112,7 +131,7 @@ export function convertUnit(
   // Check if conversion is possible
   if (!canConvert(fromUnit, toUnit)) {
     console.warn(
-      `Cannot convert ${fromUnit} to ${toUnit} - different unit groups`
+      `Cannot convert ${fromUnit} to ${toUnit} - different unit groups`,
     );
     return value;
   }
@@ -173,10 +192,10 @@ export function formatUnitDisplay(value: number, unit: string): string {
  * parseUnitValue("500ml") // { value: 500, unit: "ml" }
  */
 export function parseUnitValue(
-  input: string
+  input: string,
 ): { value: number; unit: string } | null {
   const match = input.match(
-    /^([\d.,]+)\s*([a-zA-Zàáảãạâầấẩẫậăằắẳẵặèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]+)$/i
+    /^([\d.,]+)\s*([a-zA-Zàáảãạâầấẩẫậăằắẳẵặèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]+)$/i,
   );
   if (!match) return null;
 
@@ -204,7 +223,7 @@ export function calculateNetVolume(
   grossWeight: number,
   inputUnit: string,
   tareWeightGram: number = 0,
-  density: number = 1
+  density: number = 1,
 ): number | null {
   const normalizedUnit = inputUnit.toLowerCase();
 
@@ -239,7 +258,7 @@ export function calculateNetVolume(
  * Get all units for a specific type
  */
 export function getUnitsForType(
-  type: "WEIGHT" | "VOLUME" | "COUNT"
+  type: "WEIGHT" | "VOLUME" | "COUNT",
 ): readonly string[] {
   return UNIT_TYPES[type];
 }
@@ -260,7 +279,7 @@ export function getAllUnits(): string[] {
  */
 export function isCrossFamilyConversion(
   fromUnit: string,
-  toUnit: string
+  toUnit: string,
 ): boolean {
   const fromGroup = getUnitGroup(fromUnit);
   const toGroup = getUnitGroup(toUnit);
@@ -285,7 +304,7 @@ export function crossFamilyConvert(
   value: number,
   fromUnit: string,
   toUnit: string,
-  density: number
+  density: number,
 ): number | "NEED_DENSITY" | "INVALID" {
   // Validate density
   if (!density || density <= 0) {
@@ -349,7 +368,7 @@ export function convertToIngredientBase(
   inputValue: number,
   inputUnit: string,
   ingredientBaseUnit: string,
-  density?: number
+  density?: number,
 ): number | "NEED_DENSITY" {
   // Same unit, no conversion
   if (inputUnit === ingredientBaseUnit) {
@@ -370,7 +389,7 @@ export function convertToIngredientBase(
       inputValue,
       inputUnit,
       ingredientBaseUnit,
-      density
+      density,
     );
     return typeof result === "number" ? result : "NEED_DENSITY";
   }
@@ -401,7 +420,7 @@ export function convertToCountUnit(
   targetUnit: string,
   baseUnit: string,
   unitWeight: number | null,
-  unitWeightUnit: string | null
+  unitWeightUnit: string | null,
 ): number | null {
   // If same unit, no conversion needed
   if (targetUnit === baseUnit) return value;
@@ -416,16 +435,12 @@ export function convertToCountUnit(
   const targetGroup = getUnitGroup(targetUnit);
   const weightGroup = getUnitGroup(unitWeightUnit);
 
-  if (targetGroup !== weightGroup) {
-    // Different groups - might need density conversion first
-    return null;
-  }
+  if (targetGroup !== weightGroup) return null;
 
   // Convert target to unit_weight_unit first (e.g., 1kg → 1000g)
   const normalizedValue = convertUnit(value, targetUnit, unitWeightUnit);
 
   // Then divide by unit_weight to get COUNT units
-  // Example: 100g / 500g per hộp = 0.2 hộp
   return normalizedValue / unitWeight;
 }
 
@@ -447,22 +462,61 @@ export function calculateIngredientCost(
     density?: number | null;
     unit_weight?: number | null;
     unit_weight_unit?: string | null;
-  }
+  },
 ): number {
   // Same unit - simple multiplication
   if (recipeUnit === ingredient.base_unit) {
     return recipeQty * ingredient.unit_cost;
   }
 
-  // Check if base unit is COUNT (hộp, chai, lon)
-  if (getUnitGroup(ingredient.base_unit) === "COUNT") {
+  const baseUnitGroup = getUnitGroup(ingredient.base_unit);
+
+  // Check if base unit is COUNT (hộp, chai, lon, bịch, etc.)
+  if (baseUnitGroup === "COUNT") {
+    let valueToConvert = recipeQty;
+    let unitToConvert = recipeUnit;
+    const unitWeightUnit = ingredient.unit_weight_unit ?? null;
+
+    // Check if recipe unit and unit_weight_unit are in different families (e.g., g vs lít)
+    // If so, use density to convert first
+    if (unitWeightUnit) {
+      const recipeUnitGroup = getUnitGroup(recipeUnit);
+      const weightUnitGroup = getUnitGroup(unitWeightUnit);
+
+      if (
+        recipeUnitGroup !== weightUnitGroup &&
+        (recipeUnitGroup === "WEIGHT" || recipeUnitGroup === "VOLUME")
+      ) {
+        // Cross-family: need to use density to convert first
+        // e.g., 10g → ?ml using density=1.3 → 10/1.3 = 7.69ml
+        const density = ingredient.density || 1;
+
+        if (recipeUnitGroup === "WEIGHT" && weightUnitGroup === "VOLUME") {
+          // g → ml: divide by density (g/ml)
+          const mlEquivalent = recipeQty / density;
+          // Normalize: convert mlEquivalent to unit_weight_unit (e.g., ml → lít)
+          valueToConvert = convertUnit(mlEquivalent, "ml", unitWeightUnit);
+          unitToConvert = unitWeightUnit;
+        } else if (
+          recipeUnitGroup === "VOLUME" &&
+          weightUnitGroup === "WEIGHT"
+        ) {
+          // ml → g: multiply by density
+          const gEquivalent = recipeQty * density;
+          // Normalize: convert gEquivalent to unit_weight_unit (e.g., g → kg)
+          valueToConvert = convertUnit(gEquivalent, "g", unitWeightUnit);
+          unitToConvert = unitWeightUnit;
+        }
+      }
+    }
+
     // Try to convert using unit_weight
     const countQty = convertToCountUnit(
-      recipeQty,
-      recipeUnit,
+      valueToConvert,
+      unitToConvert,
       ingredient.base_unit,
       ingredient.unit_weight ?? null,
-      ingredient.unit_weight_unit ?? null
+      ingredient.unit_weight_unit ?? null,
     );
     if (countQty !== null) {
       return countQty * ingredient.unit_cost;
@@ -477,7 +531,7 @@ export function calculateIngredientCost(
       recipeQty,
       recipeUnit,
       ingredient.base_unit,
-      ingredient.density || 1
+      ingredient.density || 1,
     );
     if (typeof result === "number") {
       return result * ingredient.unit_cost;

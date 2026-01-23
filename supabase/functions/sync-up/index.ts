@@ -1,13 +1,22 @@
+// deno-lint-ignore-file
 // Sync-up Edge Function: Receive array of inventory logs and bulk upsert
 // Uses native Deno.serve() API per project rules
 
-import { createClient } from "supabase";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 interface InventoryLogInput {
   id: string;
   ingredient_id?: string | null;
   location: "WAREHOUSE" | "BAR";
-  type: "IMPORT" | "TRANSFER" | "AUDIT" | "WASTE" | "LENT";
+  type:
+    | "IMPORT"
+    | "TRANSFER"
+    | "AUDIT"
+    | "WASTE"
+    | "LENT"
+    | "STOCK"
+    | "SALES"
+    | "STOCK_CHECK";
   ai_parsed_quantity?: number | null;
   ai_confidence_score?: number | null;
   final_confirmed_quantity?: number | null;
@@ -110,7 +119,7 @@ Deno.serve(async (req: Request) => {
         {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+        },
       );
     }
 
@@ -178,6 +187,201 @@ Deno.serve(async (req: Request) => {
           dpiaLogged = !dpiaError;
         }
 
+        // === CRITICAL: UPDATE STOCK FOR STOCK/STOCK_CHECK TYPE ===
+        // When mobile does stock count, update actual warehouse_qty or bar_qty
+        if (log.type === "STOCK" || log.type === "STOCK_CHECK") {
+          // DEBUG: Trace all values to understand why update might fail
+          console.log(
+            `[sync-up] STOCK DEBUG: type=${log.type}, ingredient_id=${log.ingredient_id}, location=${log.location}, final_qty=${log.final_confirmed_quantity}`,
+          );
+          console.log(
+            `[sync-up] STOCK DEBUG: ai_parsed_json=${JSON.stringify(log.ai_parsed_json)?.substring(0, 200)}`,
+          );
+
+          const stockField =
+            log.location === "BAR" ? "bar_qty" : "warehouse_qty";
+
+          // Case 1: ingredient_id is present - direct update
+          if (log.ingredient_id && log.final_confirmed_quantity != null) {
+            console.log(
+              `[sync-up] Case 1: Direct update ${stockField}=${log.final_confirmed_quantity} for ingredient ${log.ingredient_id}`,
+            );
+            const { error: stockUpdateError } = await supabaseAdmin
+              .from("ingredients")
+              .update({ [stockField]: log.final_confirmed_quantity })
+              .eq("id", log.ingredient_id)
+              .eq("business_id", profile.business_id);
+
+            if (stockUpdateError) {
+              console.error(
+                `[sync-up] Failed to update ${stockField} for ingredient ${log.ingredient_id}:`,
+                stockUpdateError.message,
+              );
+            } else {
+              console.log(
+                `[sync-up] ✅ Updated ${stockField}=${log.final_confirmed_quantity} for ingredient ${log.ingredient_id}`,
+              );
+            }
+          }
+          // Case 2: BATCH LOG - parse ai_parsed_json.items[] and update each ingredient
+          else if (log.ai_parsed_json) {
+            try {
+              const parsed =
+                typeof log.ai_parsed_json === "string"
+                  ? JSON.parse(log.ai_parsed_json)
+                  : log.ai_parsed_json;
+
+              const items = parsed?.items || [];
+              console.log(
+                `[sync-up] Case 2: BATCH LOG processing ${items.length} items`,
+              );
+
+              for (const item of items) {
+                // Get ingredient_id from various possible field names
+                const itemIngredientId =
+                  item.ingredient_id ||
+                  item.linkedIngredientId ||
+                  item.linked_ingredient_id;
+                const qty =
+                  item.quantity ?? item.stock_qty ?? item.final_quantity;
+                const ingredientName =
+                  item.ingredient_name ||
+                  item.linkedIngredientName ||
+                  item.name ||
+                  item.rawName;
+
+                if (qty == null) {
+                  console.warn(
+                    `[sync-up] Skipping item "${ingredientName}" - no quantity`,
+                  );
+                  continue;
+                }
+
+                // Priority 1: Use ingredient_id directly
+                if (itemIngredientId) {
+                  const { error: directError } = await supabaseAdmin
+                    .from("ingredients")
+                    .update({ [stockField]: qty })
+                    .eq("id", itemIngredientId)
+                    .eq("business_id", profile.business_id);
+
+                  if (!directError) {
+                    console.log(
+                      `[sync-up] ✅ BATCH: Updated ${stockField}=${qty} for "${ingredientName}" (id: ${itemIngredientId})`,
+                    );
+                    continue;
+                  } else {
+                    console.warn(
+                      `[sync-up] Direct update failed for ${itemIngredientId}, trying name fallback`,
+                    );
+                  }
+                }
+
+                // Priority 2: Name-based fallback
+                if (ingredientName) {
+                  const { data: matchedIng } = await supabaseAdmin
+                    .from("ingredients")
+                    .select("id, name")
+                    .eq("business_id", profile.business_id)
+                    .ilike("name", ingredientName)
+                    .limit(1)
+                    .single();
+
+                  if (matchedIng) {
+                    const { error: nameUpdateError } = await supabaseAdmin
+                      .from("ingredients")
+                      .update({ [stockField]: qty })
+                      .eq("id", matchedIng.id);
+
+                    if (!nameUpdateError) {
+                      console.log(
+                        `[sync-up] ✅ NAME-FALLBACK: Updated ${stockField}=${qty} for "${matchedIng.name}" (id: ${matchedIng.id})`,
+                      );
+                    } else {
+                      console.error(
+                        `[sync-up] NAME-FALLBACK failed for "${ingredientName}":`,
+                        nameUpdateError.message,
+                      );
+                    }
+                  } else {
+                    console.warn(
+                      `[sync-up] No DB match for ingredient: "${ingredientName}"`,
+                    );
+                  }
+                }
+              }
+
+              // === FULL CHECK: Reset uncounted items to 0 ===
+              if (parsed?.check_type === "FULL" && parsed?.location !== "BAR") {
+                const countedIds = items
+                  .map(
+                    (item: any) =>
+                      item.ingredient_id || item.linkedIngredientId,
+                  )
+                  .filter((id: string) => !!id);
+
+                if (countedIds.length > 0) {
+                  console.log(
+                    `[sync-up] FULL CHECK: Resetting uncounted items (${countedIds.length} counted)`,
+                  );
+
+                  // Reset all warehouse_qty to 0 for ingredients NOT in counted list
+                  const { error: resetError, count: resetCount } =
+                    await supabaseAdmin
+                      .from("ingredients")
+                      .update({ warehouse_qty: 0 })
+                      .eq("business_id", profile.business_id)
+                      .not("id", "in", `(${countedIds.join(",")})`)
+                      .neq("archived", true);
+
+                  if (resetError) {
+                    console.error(
+                      `[sync-up] FULL CHECK reset failed:`,
+                      resetError.message,
+                    );
+                  } else {
+                    console.log(
+                      `[sync-up] ✅ FULL CHECK: Reset ${resetCount || 0} uncounted items to 0`,
+                    );
+                  }
+                }
+              }
+            } catch (parseErr) {
+              console.error(
+                `[sync-up] Failed to parse ai_parsed_json for batch update:`,
+                parseErr,
+              );
+            }
+          }
+        }
+
+        // === HANDLE IMPORT TYPE: Add to stock ===
+        if (
+          log.type === "IMPORT" &&
+          log.ingredient_id &&
+          log.quantity_change_base != null &&
+          log.quantity_change_base > 0
+        ) {
+          const stockField =
+            log.location === "BAR" ? "bar_qty" : "warehouse_qty";
+          // RPC call to increment stock instead of overwrite
+          const { error: importError } = await supabaseAdmin.rpc(
+            "increment_stock",
+            {
+              p_ingredient_id: log.ingredient_id,
+              p_field: stockField,
+              p_amount: log.quantity_change_base,
+            },
+          );
+
+          if (importError) {
+            console.error(
+              `[sync-up] Failed to increment stock for import:`,
+              importError.message,
+            );
+          }
+        }
+
         results.push({ id: log.id, success: true, dpia_logged: dpiaLogged });
       } catch (err) {
         results.push({
@@ -200,7 +404,7 @@ Deno.serve(async (req: Request) => {
         .not("alert_threshold", "is", null);
 
       const alertItems = (lowStockItems ?? []).filter(
-        (ing) => ing.warehouse_qty + ing.bar_qty < (ing.alert_threshold ?? 0)
+        (ing) => ing.warehouse_qty + ing.bar_qty < (ing.alert_threshold ?? 0),
       );
 
       if (alertItems.length > 0) {
@@ -240,12 +444,12 @@ Deno.serve(async (req: Request) => {
                 body: message,
                 data: { type: "LOW_STOCK", count: alertItems.length },
                 sound: "default",
-              }))
+              })),
             ),
           });
 
           console.log(
-            `[sync-up] Low stock alert sent for ${alertItems.length} items`
+            `[sync-up] Low stock alert sent for ${alertItems.length} items`,
           );
         }
       }
@@ -263,7 +467,7 @@ Deno.serve(async (req: Request) => {
       {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      },
     );
   } catch (err) {
     return new Response(
@@ -273,7 +477,7 @@ Deno.serve(async (req: Request) => {
       {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      },
     );
   }
 });

@@ -31,12 +31,12 @@ export function setDatabaseBusinessId(id: string) {
       // Fix Business ID for all tables
       database
         .prepare(
-          "UPDATE local_ingredients SET business_id = ? WHERE business_id IS NULL"
+          "UPDATE local_ingredients SET business_id = ? WHERE business_id IS NULL",
         )
         .run(id);
       database
         .prepare(
-          "UPDATE local_recipes SET business_id = ? WHERE business_id IS NULL"
+          "UPDATE local_recipes SET business_id = ? WHERE business_id IS NULL",
         )
         .run(id);
       // db.prepare("UPDATE batch_recipes SET business_id = ? WHERE business_id IS NULL").run(id);
@@ -44,7 +44,7 @@ export function setDatabaseBusinessId(id: string) {
       // Fix Aliases (Use '[]' for empty/null)
       database
         .prepare(
-          "UPDATE local_ingredients SET aliases = '[]' WHERE aliases IS NULL OR aliases = ''"
+          "UPDATE local_ingredients SET aliases = '[]' WHERE aliases IS NULL OR aliases = ''",
         )
         .run();
 
@@ -57,7 +57,7 @@ export function setDatabaseBusinessId(id: string) {
       // Flush Legacy/Bad Queue Items (Double check)
       database
         .prepare(
-          "DELETE FROM local_sync_queue WHERE table_name = 'recipes' AND payload LIKE '%\"id\":\"recipe_%'"
+          "DELETE FROM local_sync_queue WHERE table_name = 'recipes' AND payload LIKE '%\"id\":\"recipe_%'",
         )
         .run();
 
@@ -74,7 +74,7 @@ export function setDatabaseBusinessId(id: string) {
           .all(id);
 
         const insertQueue = database.prepare(
-          "INSERT INTO local_sync_queue (action, table_name, payload, status) VALUES (?, ?, ?, ?)"
+          "INSERT INTO local_sync_queue (action, table_name, payload, status) VALUES (?, ?, ?, ?)",
         );
 
         for (const item of ingredients as any[]) {
@@ -82,14 +82,14 @@ export function setDatabaseBusinessId(id: string) {
             "UPSERT",
             "ingredients",
             JSON.stringify(item),
-            "PENDING"
+            "PENDING",
           );
         }
 
         // Mark done
         database
           .prepare(
-            "INSERT OR REPLACE INTO local_system_meta (key, value) VALUES (?, ?)"
+            "INSERT OR REPLACE INTO local_system_meta (key, value) VALUES (?, ?)",
           )
           .run(migrationKey, "true");
       }
@@ -229,7 +229,7 @@ export function initDatabase(): Database.Database {
   // Migration: Add missing columns if table already exists
   try {
     db.exec(
-      `ALTER TABLE local_ingredients ADD COLUMN density REAL NOT NULL DEFAULT 1`
+      `ALTER TABLE local_ingredients ADD COLUMN density REAL NOT NULL DEFAULT 1`,
     );
   } catch (e) {
     /* Column already exists */
@@ -237,7 +237,7 @@ export function initDatabase(): Database.Database {
 
   try {
     db.exec(
-      `ALTER TABLE local_ingredients ADD COLUMN tare_weight REAL NOT NULL DEFAULT 0`
+      `ALTER TABLE local_ingredients ADD COLUMN tare_weight REAL NOT NULL DEFAULT 0`,
     );
   } catch (e) {
     /* Column already exists */
@@ -245,7 +245,7 @@ export function initDatabase(): Database.Database {
 
   try {
     db.exec(
-      `ALTER TABLE local_ingredients ADD COLUMN min_threshold REAL NOT NULL DEFAULT 0`
+      `ALTER TABLE local_ingredients ADD COLUMN min_threshold REAL NOT NULL DEFAULT 0`,
     );
   } catch (e) {
     /* Column already exists */
@@ -273,7 +273,7 @@ export function initDatabase(): Database.Database {
   // Migration: Add archived column for soft delete
   try {
     db.exec(
-      `ALTER TABLE local_ingredients ADD COLUMN archived INTEGER DEFAULT 0`
+      `ALTER TABLE local_ingredients ADD COLUMN archived INTEGER DEFAULT 0`,
     );
   } catch (e) {
     /* Column already exists */
@@ -282,7 +282,7 @@ export function initDatabase(): Database.Database {
   // Migration: Add type column for ingredient categorization
   try {
     db.exec(
-      `ALTER TABLE local_ingredients ADD COLUMN type TEXT NOT NULL DEFAULT 'raw_material'`
+      `ALTER TABLE local_ingredients ADD COLUMN type TEXT NOT NULL DEFAULT 'raw_material'`,
     );
   } catch (e) {
     /* Column already exists */
@@ -291,7 +291,7 @@ export function initDatabase(): Database.Database {
   // Migration: Add inventory config columns
   try {
     db.exec(
-      `ALTER TABLE local_ingredients ADD COLUMN item_type TEXT NOT NULL DEFAULT 'STOCK'`
+      `ALTER TABLE local_ingredients ADD COLUMN item_type TEXT NOT NULL DEFAULT 'STOCK'`,
     );
   } catch (e) {
     /* Column already exists */
@@ -299,7 +299,7 @@ export function initDatabase(): Database.Database {
 
   try {
     db.exec(
-      `ALTER TABLE local_ingredients ADD COLUMN tracking_mode TEXT NOT NULL DEFAULT 'STRICT'`
+      `ALTER TABLE local_ingredients ADD COLUMN tracking_mode TEXT NOT NULL DEFAULT 'STRICT'`,
     );
   } catch (e) {
     /* Column already exists */
@@ -307,7 +307,7 @@ export function initDatabase(): Database.Database {
 
   try {
     db.exec(
-      `ALTER TABLE local_ingredients ADD COLUMN allowable_variance REAL NOT NULL DEFAULT 0`
+      `ALTER TABLE local_ingredients ADD COLUMN allowable_variance REAL NOT NULL DEFAULT 0`,
     );
   } catch (e) {
     /* Column already exists */
@@ -336,7 +336,7 @@ export function initDatabase(): Database.Database {
   try {
     const row = db
       .prepare(
-        "SELECT value FROM local_system_meta WHERE key = 'log_retention_days'"
+        "SELECT value FROM local_system_meta WHERE key = 'log_retention_days'",
       )
       .get() as { value: string } | undefined;
     let days = row ? parseInt(row.value) : 0;
@@ -356,7 +356,7 @@ export function initDatabase(): Database.Database {
         .prepare(
           `DELETE FROM pending_sync_logs 
          WHERE synced = 1 
-         AND created_at < date('now', '-' || ? || ' days')`
+         AND created_at < date('now', '-' || ? || ' days')`,
         )
         .run(days.toString());
       console.log(`[Database] Pruned ${info.changes} logs.`);
@@ -374,7 +374,7 @@ export function initDatabase(): Database.Database {
 function runResetDeadLetters(db: Database.Database) {
   try {
     const stmt = db.prepare(
-      "UPDATE local_sync_queue SET status = 'PENDING', retry_count = 0 WHERE status = 'ERROR'"
+      "UPDATE local_sync_queue SET status = 'PENDING', retry_count = 0 WHERE status = 'ERROR'",
     );
     const info = stmt.run();
     if (info.changes > 0) {
@@ -402,7 +402,7 @@ function runQueueMigration(db: Database.Database) {
     }
 
     console.log(
-      "[Migration] Running one-time migration: Local Data -> Sync Queue..."
+      "[Migration] Running one-time migration: Local Data -> Sync Queue...",
     );
 
     // 1. Migrate Ingredients
@@ -412,10 +412,10 @@ function runQueueMigration(db: Database.Database) {
 
     if (ingredients.length > 0) {
       const queueStmt = db.prepare(
-        "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+        "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)",
       );
       const metaStmt = db.prepare(
-        "INSERT INTO local_system_meta (key, value) VALUES (?, ?)"
+        "INSERT INTO local_system_meta (key, value) VALUES (?, ?)",
       );
 
       const transaction = db.transaction(() => {
@@ -433,7 +433,7 @@ function runQueueMigration(db: Database.Database) {
     } else {
       // Nothing to migrate, mark as done
       db.prepare(
-        "INSERT INTO local_system_meta (key, value) VALUES (?, ?)"
+        "INSERT INTO local_system_meta (key, value) VALUES (?, ?)",
       ).run(MIGRATION_KEY, "true");
     }
   } catch (err) {
@@ -466,7 +466,7 @@ export function runDailySnapshot(database: Database.Database): void {
           SUM(bar_qty * unit_cost) as bar_val,
           COUNT(*) as item_count
         FROM local_ingredients
-      `
+      `,
         )
         .get() as {
         wh_val: number | null;
@@ -480,18 +480,18 @@ export function runDailySnapshot(database: Database.Database): void {
           `
         INSERT INTO daily_inventory_stats (id, date, total_value_warehouse, total_value_bar, total_items)
         VALUES (?, ?, ?, ?, ?)
-      `
+      `,
         )
         .run(
           `snapshot_${today}`,
           today,
           stats.wh_val || 0,
           stats.bar_val || 0,
-          stats.item_count || 0
+          stats.item_count || 0,
         );
 
       console.log(
-        `[Snapshot] Saved: Warehouse=${stats.wh_val}, Bar=${stats.bar_val}, Items=${stats.item_count}`
+        `[Snapshot] Saved: Warehouse=${stats.wh_val}, Bar=${stats.bar_val}, Items=${stats.item_count}`,
       );
     } else {
       console.log("[Snapshot] Today's snapshot already exists, skipping.");
@@ -563,17 +563,17 @@ export function registerDatabaseIPC(): void {
       if (options?.includeArchived) {
         return database
           .prepare(
-            "SELECT * FROM local_ingredients WHERE archived = 1 ORDER BY name"
+            "SELECT * FROM local_ingredients WHERE archived = 1 ORDER BY name",
           )
           .all();
       }
       // Default: Show only active items
       return database
         .prepare(
-          "SELECT * FROM local_ingredients WHERE archived != 1 OR archived IS NULL ORDER BY name"
+          "SELECT * FROM local_ingredients WHERE archived != 1 OR archived IS NULL ORDER BY name",
         )
         .all();
-    }
+    },
   );
 
   // Add/update ingredient
@@ -598,7 +598,7 @@ export function registerDatabaseIPC(): void {
         item_type?: "STOCK" | "PHANTOM";
         tracking_mode?: "STRICT" | "LOOSE";
         allowable_variance?: number;
-      }
+      },
     ) => {
       const database = getDatabase();
 
@@ -606,7 +606,7 @@ export function registerDatabaseIPC(): void {
       if (!ingredient.business_id) {
         if (!currentBusinessId) {
           throw new Error(
-            "CRITICAL: Cannot save data. Missing Business ID (Not logged in?)."
+            "CRITICAL: Cannot save data. Missing Business ID (Not logged in?).",
           );
         }
         ingredient.business_id = currentBusinessId;
@@ -636,7 +636,7 @@ export function registerDatabaseIPC(): void {
           ingredient.type ?? "raw_material",
           ingredient.item_type ?? "STOCK",
           ingredient.tracking_mode ?? "STRICT",
-          ingredient.allowable_variance ?? 0
+          ingredient.allowable_variance ?? 0,
         );
 
         // 2. Add to Sync Queue
@@ -662,7 +662,7 @@ export function registerDatabaseIPC(): void {
         return { success: false, error: err.message };
       }
       return { success: true };
-    }
+    },
   );
 
   // Get pending sync logs
@@ -687,7 +687,7 @@ export function registerDatabaseIPC(): void {
         final_confirmed_quantity?: number;
         diff_percentage?: number;
         created_at: string;
-      }
+      },
     ) => {
       const database = getDatabase();
       const stmt = database.prepare(`
@@ -704,10 +704,10 @@ export function registerDatabaseIPC(): void {
         log.ai_parsed_quantity ?? null,
         log.final_confirmed_quantity ?? null,
         log.diff_percentage ?? null,
-        log.created_at
+        log.created_at,
       );
       return { success: true };
-    }
+    },
   );
 
   // Fix Missing Business ID (Legacy Data Migration Fix)
@@ -722,11 +722,11 @@ export function registerDatabaseIPC(): void {
         // 1. Update null business_id
         const info = db
           .prepare(
-            "UPDATE local_ingredients SET business_id = ? WHERE business_id IS NULL"
+            "UPDATE local_ingredients SET business_id = ? WHERE business_id IS NULL",
           )
           .run(businessId);
         console.log(
-          `[Database] Updated ${info.changes} ingredients with business_id.`
+          `[Database] Updated ${info.changes} ingredients with business_id.`,
         );
 
         // 2. Clear Sync Queue (remove bad payloads)
@@ -735,7 +735,7 @@ export function registerDatabaseIPC(): void {
 
         // 3. Reset Migration Flag
         db.prepare(
-          "DELETE FROM local_system_meta WHERE key = 'queue_migration_v1_done'"
+          "DELETE FROM local_system_meta WHERE key = 'queue_migration_v1_done'",
         ).run();
       });
 
@@ -755,7 +755,7 @@ export function registerDatabaseIPC(): void {
   ipcMain.handle("db:markSynced", (_event, ids: string[]) => {
     const database = getDatabase();
     const stmt = database.prepare(
-      "UPDATE pending_sync_logs SET synced = 1 WHERE id = ?"
+      "UPDATE pending_sync_logs SET synced = 1 WHERE id = ?",
     );
     const transaction = database.transaction(() => {
       for (const id of ids) {
@@ -789,7 +789,7 @@ export function registerDatabaseIPC(): void {
               created_at,
               created_by,
               profiles:created_by ( full_name )
-            `
+            `,
             )
             .eq("business_id", currentBusinessId) // Ensure RLS
             .order("created_at", { ascending: false })
@@ -802,7 +802,7 @@ export function registerDatabaseIPC(): void {
             query = query.gte("created_at", cutoffDate.toISOString());
             console.log(
               "[Database] Filtering cloud logs after:",
-              cutoffDate.toISOString()
+              cutoffDate.toISOString(),
             );
           }
 
@@ -831,12 +831,36 @@ export function registerDatabaseIPC(): void {
                   if (parsed.reason_label) parts.push(parsed.reason_label);
                   else if (parsed.notes) parts.push(parsed.notes);
 
-                  // Add item names
-                  if (parsed.items?.length) {
+                  // SPECIAL HANDLING FOR SALES: Show summary instead of item list
+                  if (log.type === "SALES" && parsed.items?.length) {
+                    const totalItems = parsed.items.reduce(
+                      (sum: number, i: any) => sum + (i.quantity || 1),
+                      0,
+                    );
+                    const totalRevenue =
+                      parsed.total_revenue ||
+                      parsed.items.reduce(
+                        (sum: number, i: any) =>
+                          sum + (i.unit_cost || 0) * (i.quantity || 1),
+                        0,
+                      );
+
+                    let summary = `${totalItems} món`;
+                    if (totalRevenue > 0) {
+                      summary += `, ${totalRevenue.toLocaleString("vi-VN")}đ`;
+                    }
+                    parts.push(summary);
+                  } else if (parsed.items?.length) {
+                    // Default: Add item names for non-SALES logs
                     const itemNames = parsed.items
                       .slice(0, 3)
                       .map((i: any) => {
-                        const name = i.ingredient_name || i.name || "";
+                        const name =
+                          i.ingredient_name ||
+                          i.name ||
+                          i.rawName ||
+                          i.original_name ||
+                          "";
                         const qty = i.quantity ? `: ${i.quantity}` : "";
                         return name + qty;
                       })
@@ -850,13 +874,66 @@ export function registerDatabaseIPC(): void {
                   details = parts.join(" - ");
                 } catch {}
               }
+
+              // Generate proper action label for STOCK logs
+              let actionLabel = log.type || "UNKNOWN";
+              if (log.type === "SALES") {
+                actionLabel = "Kết ca";
+              } else if (log.type === "STOCK" || log.type === "STOCK_CHECK") {
+                // Parse check_type and location from ai_parsed_json
+                try {
+                  const parsedAction =
+                    typeof log.ai_parsed_json === "string"
+                      ? JSON.parse(log.ai_parsed_json)
+                      : log.ai_parsed_json;
+                  const checkType = parsedAction?.check_type;
+                  const location = parsedAction?.location;
+
+                  if (location === "BAR" || checkType === "BAR") {
+                    actionLabel = "Kiểm quầy bar";
+                  } else if (checkType === "FULL" || checkType === "STORAGE") {
+                    actionLabel = "Kiểm kho toàn phần";
+                  } else if (checkType === "SPOT") {
+                    actionLabel = "Kiểm kho 1 phần";
+                  } else {
+                    actionLabel = "Kiểm kho";
+                  }
+                } catch {
+                  actionLabel = "Kiểm kho";
+                }
+              } else if (log.type === "IMPORT") {
+                actionLabel = "Nhập hàng";
+              } else if (log.type === "WASTE") {
+                actionLabel = "Hủy/Hao hụt";
+              } else if (log.type === "LENT") {
+                actionLabel = "Cho mượn";
+              } else if (log.type === "TRANSFER") {
+                actionLabel = "Chuyển kho";
+              }
+
               return {
                 id: log.id,
                 created_at: log.created_at,
-                action: log.type || "UNKNOWN",
+                action: actionLabel,
                 staff_name: log.profiles?.full_name || "Unknown Staff",
                 details: details || "Không có chi tiết",
                 quantity_change: log.quantity_change_base,
+                // Pass raw items for STOCK/IMPORT logs to enable dropdown expansion
+                items:
+                  (log.type === "STOCK" || log.type === "IMPORT") &&
+                  log.ai_parsed_json
+                    ? (() => {
+                        try {
+                          const p =
+                            typeof log.ai_parsed_json === "string"
+                              ? JSON.parse(log.ai_parsed_json)
+                              : log.ai_parsed_json;
+                          return p.items || [];
+                        } catch {
+                          return [];
+                        }
+                      })()
+                    : undefined,
               };
             });
           }
@@ -892,7 +969,7 @@ export function registerDatabaseIPC(): void {
            FROM pending_sync_logs 
            WHERE 1=1 ${dateFilter}
            ORDER BY created_at DESC 
-           LIMIT ?`
+           LIMIT ?`,
           )
           .all(...queryParams) as {
           id: string;
@@ -904,7 +981,7 @@ export function registerDatabaseIPC(): void {
 
         console.log(
           "[Database] Local pending_sync_logs count:",
-          localLogs.length
+          localLogs.length,
         );
 
         return localLogs.map((log) => {
@@ -912,7 +989,24 @@ export function registerDatabaseIPC(): void {
           try {
             const parsed = JSON.parse(log.ai_parsed_json || "{}");
             if (parsed.notes) details = parsed.notes;
-            else if (parsed.items?.length) {
+            // SALES: Show summary instead of item list
+            else if (log.type === "SALES" && parsed.items?.length) {
+              const totalItems = parsed.items.reduce(
+                (sum: number, i: any) => sum + (i.quantity || 1),
+                0,
+              );
+              const totalRevenue =
+                parsed.total_revenue ||
+                parsed.items.reduce(
+                  (sum: number, i: any) =>
+                    sum + (i.unit_cost || 0) * (i.quantity || 1),
+                  0,
+                );
+              details = `${totalItems} món`;
+              if (totalRevenue > 0) {
+                details += `, ${totalRevenue.toLocaleString("vi-VN")}đ`;
+              }
+            } else if (parsed.items?.length) {
               details = parsed.items
                 .slice(0, 2)
                 .map((i: any) => i.ingredient_name || i.name)
@@ -925,7 +1019,7 @@ export function registerDatabaseIPC(): void {
           return {
             id: log.id,
             created_at: log.created_at,
-            action: log.type || "UNKNOWN",
+            action: log.type === "SALES" ? "Kết ca" : log.type || "UNKNOWN",
             staff_name: log.location === "mobile" ? "Mobile" : "Desktop",
             details,
           };
@@ -934,7 +1028,7 @@ export function registerDatabaseIPC(): void {
         console.error("[Database] Local log fallback error:", err);
         return [];
       }
-    }
+    },
   );
 
   // Log Retention
@@ -943,7 +1037,7 @@ export function registerDatabaseIPC(): void {
     try {
       const row = database
         .prepare(
-          "SELECT value FROM local_system_meta WHERE key = 'log_retention_days'"
+          "SELECT value FROM local_system_meta WHERE key = 'log_retention_days'",
         )
         .get() as { value: string };
       return row ? parseInt(row.value) : 30;
@@ -956,7 +1050,7 @@ export function registerDatabaseIPC(): void {
     const database = getDatabase();
     database
       .prepare(
-        "INSERT OR REPLACE INTO local_system_meta (key, value) VALUES ('log_retention_days', ?)"
+        "INSERT OR REPLACE INTO local_system_meta (key, value) VALUES ('log_retention_days', ?)",
       )
       .run(days.toString());
     return { success: true };
@@ -972,7 +1066,7 @@ export function registerDatabaseIPC(): void {
         .prepare(
           `DELETE FROM pending_sync_logs 
          WHERE synced = 1 
-         AND created_at < date('now', '-' || ? || ' days')`
+         AND created_at < date('now', '-' || ? || ' days')`,
         )
         .run(days.toString());
       console.log(`[Database] Pruned ${info.changes} old logs.`);
@@ -1006,7 +1100,7 @@ export function registerDatabaseIPC(): void {
             created_at,
             created_by,
             profiles:created_by ( full_name )
-          `
+          `,
           )
           .eq("business_id", currentBusinessId)
           .order("created_at", { ascending: false });
@@ -1050,7 +1144,7 @@ export function registerDatabaseIPC(): void {
                   totalQty = parsed.items.reduce(
                     (sum: number, item: any) =>
                       sum + (parseFloat(item.quantity) || 0),
-                    0
+                    0,
                   );
                 }
 
@@ -1084,7 +1178,7 @@ export function registerDatabaseIPC(): void {
         console.error("[Database] Export log history error:", err);
         return { success: false, error: err.message };
       }
-    }
+    },
   );
 
   // ==================== WEEK 2: COGS REPORT ====================
@@ -1101,7 +1195,7 @@ export function registerDatabaseIPC(): void {
           SUM(CASE WHEN (warehouse_qty + bar_qty) < min_threshold AND min_threshold > 0 THEN 1 ELSE 0 END) as lowStockCount
         FROM local_ingredients
         WHERE archived != 1 OR archived IS NULL
-      `
+      `,
       )
       .get() as {
       itemCount: number;
@@ -1120,7 +1214,7 @@ export function registerDatabaseIPC(): void {
         FROM daily_inventory_stats
         ORDER BY date DESC
         LIMIT 6
-      `
+      `,
       )
       .all() as Array<{ date: string; warehouse: number; bar: number }>;
 
@@ -1135,12 +1229,12 @@ export function registerDatabaseIPC(): void {
     if (months.length === 0) {
       const currentWarehouse = database
         .prepare(
-          "SELECT SUM(warehouse_qty * unit_cost) as val FROM local_ingredients"
+          "SELECT SUM(warehouse_qty * unit_cost) as val FROM local_ingredients",
         )
         .get() as { val: number };
       const currentBar = database
         .prepare(
-          "SELECT SUM(bar_qty * unit_cost) as val FROM local_ingredients"
+          "SELECT SUM(bar_qty * unit_cost) as val FROM local_ingredients",
         )
         .get() as { val: number };
 
@@ -1209,7 +1303,7 @@ export function registerDatabaseIPC(): void {
       const { data: staffProfiles, error } = await authClient
         .from("profiles")
         .select(
-          "id, business_id, role, status, full_name, phone_number, created_at"
+          "id, business_id, role, status, full_name, phone_number, created_at",
         )
         .eq("business_id", currentProfile.business_id)
         .neq("role", "OWNER") // Exclude owner, get STAFF only
@@ -1222,7 +1316,7 @@ export function registerDatabaseIPC(): void {
 
       console.log(
         "[Database] Fetched staff profiles from Cloud:",
-        staffProfiles?.length
+        staffProfiles?.length,
       );
       return staffProfiles || [];
     } catch (err: any) {
@@ -1242,14 +1336,14 @@ export function registerDatabaseIPC(): void {
       if (options?.includeArchived) {
         recipes = database
           .prepare(
-            "SELECT * FROM local_recipes WHERE is_active = 0 ORDER BY name"
+            "SELECT * FROM local_recipes WHERE is_active = 0 ORDER BY name",
           )
           .all() as any[];
       } else {
         // Default: Show only active items
         recipes = database
           .prepare(
-            "SELECT * FROM local_recipes WHERE is_active = 1 ORDER BY name"
+            "SELECT * FROM local_recipes WHERE is_active = 1 ORDER BY name",
           )
           .all() as any[];
       }
@@ -1275,7 +1369,7 @@ export function registerDatabaseIPC(): void {
           })),
         };
       });
-    }
+    },
   );
 
   // Upsert recipe (insert or update)
@@ -1294,7 +1388,7 @@ export function registerDatabaseIPC(): void {
           quantity: number;
           unit?: string;
         }>;
-      }
+      },
     ) => {
       const database = getDatabase();
 
@@ -1302,7 +1396,7 @@ export function registerDatabaseIPC(): void {
       if (!recipe.business_id) {
         if (!currentBusinessId) {
           throw new Error(
-            "CRITICAL: Cannot save data. Missing Business ID (Not logged in?)."
+            "CRITICAL: Cannot save data. Missing Business ID (Not logged in?).",
           );
         }
         recipe.business_id = currentBusinessId;
@@ -1316,7 +1410,7 @@ export function registerDatabaseIPC(): void {
           INSERT OR REPLACE INTO local_recipes 
           (id, business_id, name, price, category, is_active, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, 1, COALESCE((SELECT created_at FROM local_recipes WHERE id = ?), datetime('now')), datetime('now'))
-        `
+        `,
           )
           .run(
             recipe.id,
@@ -1324,19 +1418,19 @@ export function registerDatabaseIPC(): void {
             recipe.name,
             recipe.price || 0,
             recipe.category || null,
-            recipe.id
+            recipe.id,
           );
 
         // SAFETY GUARD: Skip sync for legacy IDs (recipe_...)
         // Only queue standard UUIDs to prevent "invalid input syntax for type uuid" error
         const isValidUUID = (id: string) =>
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-            id
+            id,
           );
 
         if (!isValidUUID(recipe.id)) {
           console.warn(
-            `[Database] Skipping sync queue for legacy recipe ID: ${recipe.id}`
+            `[Database] Skipping sync queue for legacy recipe ID: ${recipe.id}`,
           );
           return;
         }
@@ -1378,7 +1472,7 @@ export function registerDatabaseIPC(): void {
             recipe.id,
             ing.ingredient_id,
             ing.quantity,
-            ing.unit || null
+            ing.unit || null,
           );
         }
       });
@@ -1386,7 +1480,7 @@ export function registerDatabaseIPC(): void {
       transaction();
       console.log("[Database] Recipe saved:", recipe.name);
       return { success: true };
-    }
+    },
   );
 
   // Delete recipe (soft delete)
@@ -1398,7 +1492,7 @@ export function registerDatabaseIPC(): void {
 
     // Also queue for sync (Use UPSERT with is_active=false for soft delete)
     const queueStmt = database.prepare(
-      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)",
     );
     queueStmt.run(
       "UPSERT",
@@ -1407,7 +1501,7 @@ export function registerDatabaseIPC(): void {
         id: recipeId,
         is_active: false,
         updated_at: new Date().toISOString(),
-      })
+      }),
     );
 
     console.log("[Database] Recipe deleted:", recipeId);
@@ -1423,7 +1517,7 @@ export function registerDatabaseIPC(): void {
 
     // Also queue for sync (Use UPSERT with archived=true for soft delete consistency)
     const queueStmt = database.prepare(
-      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)",
     );
     queueStmt.run(
       "UPSERT",
@@ -1432,7 +1526,7 @@ export function registerDatabaseIPC(): void {
         id: ingredientId,
         archived: true,
         updated_at: new Date().toISOString(),
-      })
+      }),
     );
 
     console.log("[Database] Ingredient archived:", ingredientId);
@@ -1448,7 +1542,7 @@ export function registerDatabaseIPC(): void {
 
     // Queue sync
     const queueStmt = database.prepare(
-      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)",
     );
     queueStmt.run(
       "UPSERT",
@@ -1457,7 +1551,7 @@ export function registerDatabaseIPC(): void {
         id: ingredientId,
         archived: false,
         updated_at: new Date().toISOString(),
-      })
+      }),
     );
 
     console.log("[Database] Ingredient restored:", ingredientId);
@@ -1473,7 +1567,7 @@ export function registerDatabaseIPC(): void {
 
     // Queue sync
     const queueStmt = database.prepare(
-      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)"
+      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)",
     );
     queueStmt.run(
       "UPSERT",
@@ -1482,7 +1576,7 @@ export function registerDatabaseIPC(): void {
         id: recipeId,
         is_active: true,
         updated_at: new Date().toISOString(),
-      })
+      }),
     );
 
     console.log("[Database] Recipe restored:", recipeId);

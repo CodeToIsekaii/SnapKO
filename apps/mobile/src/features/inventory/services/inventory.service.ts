@@ -227,6 +227,51 @@ export const InventoryService = {
       `[Import] Added ${quantity} to ${location}, new COGS: ${newCost}`
     );
   },
+
+  /**
+   * Reset Warehouse Stock for uncounted items (FULL_COUNT mode)
+   * Sets warehouse_qty = 0 for items NOT in the counted list
+   */
+  resetUncountedWarehouseStock: async (
+    countedIngredientIds: string[]
+  ): Promise<number> => {
+    const database = await getDB();
+
+    // Safety check: Only proceed if we have a valid DB connection
+    if (!database) return 0;
+
+    let query = "";
+    let params: string[] = [];
+
+    if (countedIngredientIds.length === 0) {
+      // Logic: If user counted NOTHING, then EVERYTHING is 0?
+      // Or maybe safety check prevents sending empty list?
+      // Assuming valid empty list means "I checked and found nothing" -> Reset All.
+      query = `
+        UPDATE local_ingredients 
+        SET warehouse_qty = 0 
+        WHERE (archived != 1 OR archived IS NULL)
+      `;
+    } else {
+      const placeholders = countedIngredientIds.map(() => "?").join(",");
+      query = `
+        UPDATE local_ingredients 
+        SET warehouse_qty = 0 
+        WHERE (archived != 1 OR archived IS NULL) 
+        AND id NOT IN (${placeholders})
+      `;
+      params = countedIngredientIds;
+    }
+
+    try {
+      const result = await database.runAsync(query, params);
+      console.log(`[FullCount] Reset ${result.changes} uncounted items to 0`);
+      return result.changes;
+    } catch (e) {
+      console.error("[FullCount] Error resetting stock:", e);
+      return 0;
+    }
+  },
 };
 
 // ==================== PENDING LOG SERVICE ====================

@@ -1,126 +1,139 @@
-/**
- * AI Parse Handwriting - Edge Function
- * Per .antigravityrules Section D.3: Stock Snap
- *
- * Uses Gemini 1.5 Flash to:
- * - OCR handwritten stock count sheets
- * - Extract ingredient names and quantities
- * - Handle messy Vietnamese handwriting
- * - Return strict JSON schema for validation UI
- *
- * CRITICAL: Chữ viết tay của nhân viên thường rất ẩu
- * Need extra validation step in Mobile app
- */
-
 // deno-lint-ignore-file
 import {
   createClient,
   SupabaseClient,
 } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchWithRetry } from "../_shared/retry.ts";
+import Fuse from "https://esm.sh/fuse.js@7.0.0";
 import type { StockItem, ParsedStockSheet } from "../_shared/types.ts";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+// Interface for what AI returns (Pure Transcription)
+interface AiTranscriptionItem {
+  stt: string | number | null; // Anchor
+  name_on_paper: string;
+  stock_qty: number | null;
+  unit: string | null;
+  partial_qty: number | null;
+  partial_unit: string | null;
+  import_qty: number | null;
+  confidence: number;
+  raw_text: string;
+  needs_review?: boolean;
+}
+
 const getPrompt = (model: string, area: string) => {
   const isBarCheck = area === "bar";
   const isStandard = model === "STANDARD";
 
-  const note =
+  const areaNote =
     isStandard && isBarCheck
-      ? "LƯU Ý: Đây là kiểm Bar. Hãy đọc kỹ cột NHẬP để ghi nhận hàng chuyển từ Kho Tổng qua."
-      : `LƯU Ý: Đây là kiểm ${
-          isBarCheck ? "Bar" : "Kho"
-        }. Tập trung vào cột TỒN CUỐI.`;
+      ? "NOTE: This is a Bar check. Focus on the IMPORT column (items transferred from Main Storage)."
+      : `NOTE: This is a ${isBarCheck ? "Bar" : "Storage"} check. Focus on the ENDING STOCK column.`;
 
-  return `Bạn là một AI chuyên đọc chữ viết tay tiếng Việt trên phiếu kiểm kho.
-MÔ HÌNH: ${isStandard ? "STANDARD (Kho Kép: Tổng & Bar)" : "SIMPLE (Kho Đơn)"}
-KHU VỰC: ${isBarCheck ? "QUẦY BAR (Service)" : "KHO TỔNG (Storage)"}
+  return `You are a strict data entry clerk that transcribes Vietnamese inventory check sheets into structured JSON.
 
-QUAN TRỌNG - "SMART SHEET" FEATURE:
-Phiếu kiểm thường có 2 CỘT SỐ LIỆU:
-1. **Cột "TỒN CUỐI"**: Số lượng đếm được cuối ca.
-2. **Cột "NHẬP"**: Số lượng nhập từ Kho Tổng (chỉ có ý nghĩa khi kiểm Bar ở mô hình STANDARD).
+TASK: Read the handwritten inventory sheet image and extract data row by row.
+CRITICAL: Only extract what is VISIBLE on the paper. Do NOT invent data or reference external databases.
 
-${note}
+INVENTORY MODEL: ${isStandard ? "STANDARD (Dual Storage)" : "SIMPLE (Single Storage)"}
+AREA: ${isBarCheck ? "BAR (Service)" : "MAIN STORAGE"}
 
-**TÍNH NĂNG MỚI - COMPOUND QUANTITIES:**
-Nhân viên thường ghi "2 hộp + 150g" hoặc "3 chai + còn 200ml".
-Hãy tách riêng phần nguyên (stock_qty, unit) và phần lẻ (partial_qty, partial_unit).
+TABLE STRUCTURE (typical Vietnamese inventory sheet):
+| Column 1 | Column 2 | Column 3 | Column 4 | Column 5 |
+|----------|----------|----------|----------|----------|
+| STT (Row#) | TEN (Item Name) | DVT (Unit) | TON CUOI (Ending Stock) | NHAP (Imported) |
 
-Hãy phân tích hình ảnh phiếu kiểm này và trả về JSON với format sau:
+${areaNote}
+
+EXTRACTION RULES:
+1. **STT (Row Number)**: ALWAYS extract the printed row number (1, 2, 3...). This is the ANCHOR to prevent row drift.
+2. **CROSSED-OUT NUMBERS**: If a number is scratched out or crossed, IGNORE IT. Only use the final clear number written nearby.
+3. **EMPTY/DASH CELLS**: If the quantity cell is empty, has a dash (-), slash (/), or X mark → return null (not 0).
+4. **COMPOUND QUANTITIES**: "2 boxes + 150g" → split into stock_qty=2, unit="boxes", partial_qty=150, partial_unit="g".
+5. **MATH ADDITION**: If a cell contains numbers added together (e.g. "7 + 32", "10 + 5") and they are the SAME UNIT, CALCULATE THE SUM and return the total as stock_qty. Example: "7 + 32" -> stock_qty: 39.
+6. **READ EVERY ROW**: Even if a row has no quantity, include it with null values. Never skip rows.
+
+REQUIRED JSON OUTPUT FORMAT:
 {
   "check_type": "${area}",
   "items": [
     {
-      "ingredient_name": "tên nguyên liệu (chuẩn hóa)",
-      "stock_qty": số lượng nguyên (ví dụ: 2 từ "2 hộp + 150g"),
-      "unit": "đơn vị chính (ví dụ: hộp)",
-      "partial_qty": số lượng lẻ (ví dụ: 150 từ "2 hộp + 150g", mặc định null),
-      "partial_unit": "đơn vị lẻ (ví dụ: g, mặc định null)",
-      "import_qty": số lượng NHẬP trong ca (số, mặc định 0),
-      "confidence": độ tin cậy 0-100,
-      "needs_review": true nếu không chắc chắn,
-      "raw_text": "văn bản gốc đọc được"
+      "stt": "printed row number (1, 2, 3...)",
+      "name_on_paper": "exact item name as printed on paper",
+      "stock_qty": number or null,
+      "unit": "unit string or null",
+      "partial_qty": number or null,
+      "partial_unit": "string or null",
+      "import_qty": number or 0,
+      "confidence": 0-100,
+      "raw_text": "original handwritten text seen"
     }
   ],
-  "overall_confidence": độ tin cậy tổng thể 0-100,
-  "warnings": ["cảnh báo nếu có vấn đề"]
+  "overall_confidence": 0-100,
+  "warnings": ["any issues encountered"]
 }
 
-QUY TẮC:
-1. Trả về JSON thuần túy, KHÔNG markdown.
-2. Số liệu là số (number), không phải string.
-3. Nếu confidence < 85, đặt needs_review = true.
-4. Cột NHẬP trống hoặc gạch ngang → import_qty = 0.
-5. Chuẩn hóa tên: "sr" -> "Sữa tươi", "cf" -> "Cà phê", "bơ" -> "Bơ".
-6. Nếu có dạng "2 hộp + 150g": stock_qty=2, unit="hộp", partial_qty=150, partial_unit="g".
-7. Nếu chỉ có "2 hộp" (không có phần lẻ): partial_qty=null, partial_unit=null.
-8. DANH SÁCH ĐƠN VỊ:
-   - Đơn vị đếm: chai, lon, gói, hộp, cái, hũ, bịch, túi, cây, bó, thùng, quả
-   - Đơn vị khối lượng: g, kg
-   - Đơn vị thể tích: ml, L (hoặc lít)`;
+GOLDEN RULES:
+- Extract STT first for each row to maintain alignment.
+- Row 14 with name but no quantity → stock_qty: null (NOT 0, NOT skip).
+- NEVER fabricate data. NEVER copy values from adjacent rows.
+- Return pure JSON. No markdown code blocks.`;
 };
 
+// Accept array of images for multi-page support
 async function callGemini(
-  imageBase64: string,
+  imagesBase64: string[],
   model: string,
-  area: string
-): Promise<ParsedStockSheet> {
+  area: string,
+): Promise<{
+  items: AiTranscriptionItem[];
+  overall_confidence: number;
+  warnings: string[];
+  check_type?: string;
+}> {
   if (!GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY not configured");
   }
 
   const prompt = getPrompt(model, area);
 
+  // Build parts array: prompt text + all images
+  const parts: {
+    text?: string;
+    inline_data?: { mime_type: string; data: string };
+  }[] = [{ text: prompt }];
+
+  for (const imageBase64 of imagesBase64) {
+    parts.push({
+      inline_data: {
+        mime_type: "image/jpeg",
+        data: imageBase64,
+      },
+    });
+  }
+
   const response = await fetchWithRetry(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-001:generateContent?key=${GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [
           {
-            parts: [
-              { text: prompt },
-              {
-                inline_data: {
-                  mime_type: "image/jpeg",
-                  data: imageBase64,
-                },
-              },
-            ],
+            parts,
           },
         ],
         generationConfig: {
           temperature: 0.1,
-          maxOutputTokens: 2048,
+          maxOutputTokens: 8192, // Increased for multi-image support
           responseMimeType: "application/json",
         },
       }),
-    }
+    },
   );
 
   if (!response.ok) {
@@ -129,38 +142,81 @@ async function callGemini(
   }
 
   const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
 
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed.items) {
-      parsed.items = parsed.items.map((item: StockItem) => ({
-        ...item,
-        needs_review: item.needs_review ?? item.confidence < 85,
-      }));
-    }
-    return parsed;
-  } catch {
+  // Debug: Log full Gemini response structure
+  console.log(
+    `[ai-parse-handwriting] Gemini raw response: ${JSON.stringify(data).slice(0, 1000)}`,
+  );
+
+  // Check for safety blocks or empty candidates
+  if (!data.candidates || data.candidates.length === 0) {
+    console.error(
+      `[ai-parse-handwriting] No candidates returned. Possibly blocked by safety filter.`,
+    );
     return {
       items: [],
       overall_confidence: 0,
-      raw_text: text,
+      warnings: [
+        "Gemini không trả về dữ liệu. Có thể bị block bởi safety filter hoặc ảnh không hợp lệ.",
+      ],
+    };
+  }
+
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+  // Debug: Log the text we're trying to parse
+  console.log(`[ai-parse-handwriting] Text to parse: ${text.slice(0, 500)}`);
+
+  if (!text || text.trim() === "") {
+    console.error(`[ai-parse-handwriting] Empty text from Gemini`);
+    return {
+      items: [],
+      overall_confidence: 0,
+      warnings: ["Gemini trả về text rỗng. Thử chụp lại ảnh rõ hơn."],
+    };
+  }
+
+  try {
+    // Try to extract JSON if it's wrapped in markdown code blocks
+    let jsonText = text;
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonText = jsonMatch[1].trim();
+      console.log(`[ai-parse-handwriting] Extracted JSON from code block`);
+    }
+
+    const parsed = JSON.parse(jsonText);
+    return parsed;
+  } catch (parseError) {
+    console.error(`[ai-parse-handwriting] JSON parse failed: ${parseError}`);
+    console.error(`[ai-parse-handwriting] Raw text was: ${text}`);
+    return {
+      items: [],
+      overall_confidence: 0,
       warnings: ["Không thể parse JSON từ Gemini response"],
     };
   }
 }
 
+function sanitizeQuantity(
+  rawQty: number | string | null | undefined,
+): number | null {
+  if (rawQty === null || rawQty === undefined || rawQty === "") return null;
+  const str = String(rawQty).trim().toLowerCase();
+
+  // Handle empty indicators
+  if (["-", "/", "x", "none", "null", "."].includes(str)) return null;
+
+  // Keep numbers and dots
+  const numbers = str.replace(/[^0-9.]/g, "");
+  const parsed = parseFloat(numbers);
+
+  return isNaN(parsed) ? null : parsed;
+}
+
 /**
  * Merge compound quantity (e.g., "2 hộp + 150g") into a single quantity
  * Uses ingredient's unit_weight to convert partial to base unit
- *
- * @param stockQty - Main quantity (e.g., 2)
- * @param unit - Main unit (e.g., "hộp")
- * @param partialQty - Partial quantity (e.g., 150)
- * @param partialUnit - Partial unit (e.g., "g")
- * @param unitWeight - Weight per unit (e.g., 500g/hộp)
- * @param unitWeightUnit - Unit of weight (e.g., "g")
- * @returns Merged quantity in base unit
  */
 function mergeCompoundQuantity(
   stockQty: number,
@@ -168,7 +224,7 @@ function mergeCompoundQuantity(
   partialQty: number | null | undefined,
   partialUnit: string | null | undefined,
   unitWeight: number | null | undefined,
-  unitWeightUnit: string | null | undefined
+  unitWeightUnit: string | null | undefined,
 ): number {
   // If no partial quantity, return stock_qty as-is
   if (!partialQty || !partialUnit) {
@@ -181,9 +237,7 @@ function mergeCompoundQuantity(
   }
 
   // Check if partial_unit matches unit_weight_unit (simple case)
-  // Example: partial_unit="g", unit_weight_unit="g" -> direct division
   if (partialUnit.toLowerCase() === unitWeightUnit.toLowerCase()) {
-    // partial in same unit as unit_weight_unit: 150g / 500g = 0.3
     const partialInBaseUnit = partialQty / unitWeight;
     return stockQty + partialInBaseUnit;
   }
@@ -207,60 +261,105 @@ function mergeCompoundQuantity(
 async function matchIngredients(
   supabase: SupabaseClient<unknown>,
   businessId: string,
-  items: StockItem[]
-): Promise<(StockItem & { ingredient_id?: string })[]> {
+  items: AiTranscriptionItem[],
+): Promise<StockItem[]> {
+  // 1. Fetch DB ingredients
   const { data: ingredients } = (await supabase
     .from("ingredients")
-    .select("id, name, base_unit, unit_weight, unit_weight_unit")
+    .select("id, name, base_unit, unit_weight, unit_weight_unit, aliases")
     .eq("business_id", businessId)
-    .eq("archived", false)) as {
-    data:
-      | {
-          id: string;
-          name: string;
-          base_unit: string;
-          unit_weight: number | null;
-          unit_weight_unit: string | null;
-        }[]
-      | null;
-  };
+    .eq("archived", false)) as { data: any[] | null };
 
-  if (!ingredients) return items;
+  if (!ingredients || ingredients.length === 0) {
+    // Fallback if no specific ingredients found, return mapped as raw
+    return items.map(
+      (item) =>
+        ({
+          ingredient_name: item.name_on_paper,
+          stock_qty: item.stock_qty || 0,
+          unit: item.unit || "",
+          partial_qty: item.partial_qty,
+          partial_unit: item.partial_unit,
+          import_qty: item.import_qty || 0,
+          confidence: item.confidence,
+          needs_review: true,
+          linkedIngredientId: undefined,
+        }) as any,
+    );
+  }
 
+  // 2. Setup Fuse.js - handle null aliases safely
+  const normalizedIngredients = ingredients.map((ing) => ({
+    ...ing,
+    aliases: ing.aliases || [], // Ensure aliases is never null
+  }));
+
+  const fuse = new Fuse(normalizedIngredients, {
+    keys: ["name", "aliases"], // Search in both name and aliases
+    threshold: 0.6, // Increased from 0.4 to allow more lenient Vietnamese matching
+    ignoreLocation: true,
+    includeScore: true, // Enable score for debugging
+  });
+
+  console.log(
+    `[ai-parse-handwriting] Fuse setup with ${normalizedIngredients.length} ingredients`,
+  );
+
+  // 3. Map items
   return items.map((item) => {
-    const normalizedName = item.ingredient_name.toLowerCase().trim();
-    let match = ingredients.find(
-      (ing) => ing.name.toLowerCase() === normalizedName
+    // Sanitize first
+    const cleanStockQty = sanitizeQuantity(item.stock_qty);
+    const cleanImportQty = sanitizeQuantity(item.import_qty);
+
+    // Fuzzy search - guard against null search term
+    const searchTerm = item.name_on_paper || "";
+    const searchResult = searchTerm ? fuse.search(searchTerm) : [];
+    const bestMatch = searchResult.length > 0 ? searchResult[0].item : null;
+
+    // Debug log for fuzzy matching
+    console.log(
+      `[ai-parse-handwriting] Fuzzy: "${item.name_on_paper}" -> ${bestMatch ? bestMatch.name : "NO MATCH"} (score: ${searchResult[0]?.score?.toFixed(3) || "N/A"})`,
     );
 
-    if (!match) {
-      match = ingredients.find(
-        (ing) =>
-          ing.name.toLowerCase().includes(normalizedName) ||
-          normalizedName.includes(ing.name.toLowerCase())
-      );
-    }
-
-    // Calculate merged_qty if we have compound quantities
+    // Calculate merged_qty if matched
     let mergedQty: number | undefined;
-    if (match && (item.partial_qty || item.partial_unit)) {
+    if (bestMatch && (item.partial_qty || item.partial_unit)) {
       mergedQty = mergeCompoundQuantity(
-        item.stock_qty,
-        item.unit || match.base_unit,
+        cleanStockQty || 0,
+        item.unit || bestMatch.base_unit,
         item.partial_qty,
         item.partial_unit,
-        match.unit_weight,
-        match.unit_weight_unit
+        bestMatch.unit_weight,
+        bestMatch.unit_weight_unit,
       );
     }
 
+    const isMapped = !!bestMatch;
+
     return {
-      ...item,
-      ingredient_id: match?.id,
-      unit: item.unit || match?.base_unit,
+      // Map to standard StockItem structure
+      ingredient_name: isMapped ? bestMatch.name : item.name_on_paper,
+      stock_qty: cleanStockQty || 0,
+      unit: item.unit || (isMapped ? bestMatch.base_unit : ""),
+      partial_qty: item.partial_qty,
+      partial_unit: item.partial_unit,
+      import_qty: cleanImportQty || 0,
+      confidence: item.confidence,
+
+      // Critical mapping fields
+      ingredient_id: bestMatch?.id,
+      linkedIngredientId: bestMatch?.id,
       merged_qty: mergedQty,
-      needs_review: item.needs_review || !match,
-    };
+
+      // Flags
+      needs_review: !isMapped || item.confidence < 85,
+      is_new_ingredient: !isMapped,
+
+      // Debug info
+      raw_text: item.raw_text,
+      stt: item.stt,
+      original_name: item.name_on_paper,
+    } as any;
   });
 }
 
@@ -278,71 +377,76 @@ Deno.serve(async (req: Request) => {
   try {
     const {
       image_base64,
+      images_base64,
       business_id,
       area_type,
       inventory_model = "SIMPLE",
     } = await req.json();
 
-    if (!image_base64) {
+    const images = images_base64 || (image_base64 ? [image_base64] : []);
+
+    if (images.length === 0) {
       return new Response(
-        JSON.stringify({ success: false, error: "image_base64 is required" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+        JSON.stringify({
+          success: false,
+          error: "image_base64 or images_base64 is required",
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }
 
-    const parsed = await callGemini(image_base64, inventory_model, area_type);
+    console.log(
+      `[ai-parse-handwriting] Processing ${images.length} image(s)...`,
+    );
 
-    let matchedItems = parsed.items;
+    // 1. Call AI (Pure Transcription)
+    const transcription = await callGemini(images, inventory_model, area_type);
+
+    // 2. Output Raw AI for debugging
+    console.log(
+      `[ai-parse-handwriting] Raw Items: ${transcription.items.length}`,
+    );
+    if (transcription.items.length > 0) {
+      console.log(
+        `[ai-parse-handwriting] Sample Raw: ${JSON.stringify(transcription.items[0])}`,
+      );
+    }
+
+    // 3. Fuzzy Match & Aggregation
+    let processedItems: any[] = transcription.items;
+
     if (business_id) {
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-      matchedItems = await matchIngredients(
+      processedItems = await matchIngredients(
         supabase as SupabaseClient<unknown>,
         business_id,
-        parsed.items
+        processedItems,
       );
-    }
-
-    // Count items needing review
-    const itemsNeedingReview = matchedItems.filter(
-      (item) => item.needs_review
-    ).length;
-
-    // Add warning if many items need review
-    const warnings = [...(parsed.warnings || [])];
-    if (itemsNeedingReview > matchedItems.length * 0.5) {
-      warnings.push("Nhiều mục cần kiểm tra lại (chữ viết khó đọc)");
+      console.log(
+        `[ai-parse-handwriting] Mapped ${processedItems.length} items. Sample: ${JSON.stringify(processedItems[0])}`,
+      );
     }
 
     return new Response(
       JSON.stringify({
-        success: true,
-        check_type: parsed.check_type || area_type,
-        items: matchedItems,
-        confidence: parsed.overall_confidence,
-        items_needing_review: itemsNeedingReview,
-        warnings,
+        check_type: area_type,
+        items: processedItems,
+        overall_confidence: transcription.overall_confidence,
+        warnings: transcription.warnings,
       }),
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-        },
-      }
+      { status: 200, headers: { "Content-Type": "application/json" } },
     );
-  } catch (error) {
-    console.error("Error parsing handwriting:", error);
+  } catch (error: any) {
+    console.error(
+      `[ai-parse-handwriting] Unexpected error: ${error.message}`,
+      error,
+    );
     return new Response(
       JSON.stringify({
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: error.message,
       }),
-      {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-        },
-      }
+      { status: 500, headers: { "Content-Type": "application/json" } },
     );
   }
 });

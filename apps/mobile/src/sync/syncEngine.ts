@@ -24,7 +24,7 @@ const SYNC_TASK_NAME = "SNAPKO_BACKGROUND_SYNC";
 export const addToSyncQueue = async (
   tableName: "recipes" | "ingredients",
   action: "UPSERT" | "DELETE",
-  data: any
+  data: any,
 ) => {
   try {
     const { getDB } = await import("../db");
@@ -37,7 +37,7 @@ export const addToSyncQueue = async (
     const payload = JSON.stringify(data);
     await db.runAsync(
       `INSERT INTO local_sync_queue (action, table_name, payload, status) VALUES (?, ?, ?, 'PENDING')`,
-      [action, tableName, payload]
+      [action, tableName, payload],
     );
 
     // C. Trigger Sync Immediately if Online
@@ -61,7 +61,7 @@ export const processSyncQueue = async () => {
       table_name: string;
       payload: string;
     }>(
-      `SELECT * FROM local_sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC`
+      `SELECT * FROM local_sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC`,
     );
 
     if (pendingItems.length === 0) return;
@@ -72,6 +72,24 @@ export const processSyncQueue = async () => {
         let error = null;
 
         if (item.action === "UPSERT") {
+          // SELF-HEAL: Fix malformed aliases (Legacy bug: stored as JSON string but Supabase expects Array)
+          if (payload.aliases && typeof payload.aliases === "string") {
+            try {
+              const parsedAliases = JSON.parse(payload.aliases);
+              if (Array.isArray(parsedAliases)) {
+                payload.aliases = parsedAliases;
+                console.log(
+                  `[SyncEngine] 🩹 Self-healed aliases for item ${item.id}`,
+                );
+              }
+            } catch (e) {
+              console.warn(
+                `[SyncEngine] Failed to heal aliases for item ${item.id}`,
+                e,
+              );
+            }
+          }
+
           const { error: err } = await supabase
             .from(item.table_name)
             .upsert(payload);
@@ -82,6 +100,14 @@ export const processSyncQueue = async () => {
             .delete()
             .eq("id", payload.id);
           error = err;
+        }
+
+        // Graceful handling for Permission Denied (Staff trying to create items)
+        if (error && error.code === "42501") {
+          console.warn(
+            `[SyncEngine] ⚠️ Permission denied for item ${item.id} (Role restricted). Skipping.`,
+          );
+          error = null; // Clear error to allow removal from queue
         }
 
         if (error) throw error;
@@ -108,7 +134,7 @@ export const fetchMasterDataUpdates = async () => {
 
     // Get last sync time
     const settings = await db.getFirstAsync<{ value: string }>(
-      `SELECT value FROM app_settings WHERE key = 'last_sync_time'`
+      `SELECT value FROM app_settings WHERE key = 'last_sync_time'`,
     );
     const lastSyncTime = settings?.value || "1970-01-01T00:00:00Z";
     const now = new Date().toISOString();
@@ -119,7 +145,7 @@ export const fetchMasterDataUpdates = async () => {
     const { data: recipes, error: rError } = await supabase
       .from("recipes")
       .select(
-        "id, business_id, name, price, category, is_active, created_at, updated_at"
+        "id, business_id, name, price, category, is_active, created_at, updated_at",
       )
       .gt("updated_at", lastSyncTime);
 
@@ -138,7 +164,7 @@ export const fetchMasterDataUpdates = async () => {
             r.is_active ? 1 : 0,
             r.created_at,
             r.updated_at,
-          ]
+          ],
         );
       }
     }
@@ -172,7 +198,7 @@ export const fetchMasterDataUpdates = async () => {
             i.warehouse_qty ?? 0,
             i.bar_qty ?? 0,
             i.created_at,
-          ]
+          ],
         );
       }
     }
@@ -180,7 +206,7 @@ export const fetchMasterDataUpdates = async () => {
     // 3. Update Timestamp
     await db.runAsync(
       `INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_sync_time', ?)`,
-      [now]
+      [now],
     );
 
     return true;
@@ -240,7 +266,7 @@ function notifyStatusChange() {
 
 // Subscribe to sync status updates
 export function subscribeSyncStatus(
-  listener: (status: SyncStatus) => void
+  listener: (status: SyncStatus) => void,
 ): () => void {
   statusListeners.push(listener);
   listener({ ...syncStatus }); // Immediate callback
@@ -300,7 +326,7 @@ export async function initSyncSchema(db: SQLite.SQLiteDatabase): Promise<void> {
 // Add a log to the pending queue
 export async function addPendingLog(
   db: SQLite.SQLiteDatabase,
-  log: Omit<PendingSyncLog, "synced" | "sync_error">
+  log: Omit<PendingSyncLog, "synced" | "sync_error">,
 ): Promise<void> {
   await db.runAsync(
     `INSERT OR REPLACE INTO pending_sync_logs 
@@ -328,7 +354,7 @@ export async function addPendingLog(
       log.is_new_ingredient ? 1 : 0,
       log.new_ingredient_name,
       log.new_ingredient_unit,
-    ]
+    ],
   );
 
   // Update pending count
@@ -343,7 +369,7 @@ export async function addPendingLog(
 // Update pending count in status
 async function updatePendingCount(db: SQLite.SQLiteDatabase): Promise<void> {
   const result = await db.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) as count FROM pending_sync_logs WHERE synced = 0"
+    "SELECT COUNT(*) as count FROM pending_sync_logs WHERE synced = 0",
   );
   syncStatus.pendingCount = result?.count ?? 0;
   notifyStatusChange();
@@ -353,7 +379,7 @@ async function updatePendingCount(db: SQLite.SQLiteDatabase): Promise<void> {
 // Enhanced: Uses business_id folder structure for RLS compliance
 export async function uploadImageToStorage(
   localUri: string,
-  businessId?: string
+  businessId?: string,
 ): Promise<string | null> {
   try {
     // Read image as base64 using new File API
@@ -381,7 +407,7 @@ export async function uploadImageToStorage(
               "x-upsert": "true",
             },
             body: Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)),
-          }
+          },
         );
 
         if (response.ok) {
@@ -436,7 +462,7 @@ export async function cleanupLocalImage(logId: string): Promise<void> {
 // Sync pending logs to server
 // Enhanced: Upload local images first, then sync data
 export async function syncPendingLogs(
-  db: SQLite.SQLiteDatabase
+  db: SQLite.SQLiteDatabase,
 ): Promise<{ synced: number; failed: number }> {
   if (syncStatus.isSyncing) {
     return { synced: 0, failed: 0 };
@@ -448,21 +474,21 @@ export async function syncPendingLogs(
   try {
     // FIX: Migrate old logs with invalid location="mobile" to "BAR"
     await db.runAsync(
-      `UPDATE pending_sync_logs SET location = 'BAR' WHERE location = 'mobile' AND synced = 0`
+      `UPDATE pending_sync_logs SET location = 'BAR' WHERE location = 'mobile' AND synced = 0`,
     );
     // FIX: Migrate old logs with invalid type values
     await db.runAsync(
-      `UPDATE pending_sync_logs SET type = 'LENT' WHERE type = 'LOAN' AND synced = 0`
+      `UPDATE pending_sync_logs SET type = 'LENT' WHERE type = 'LOAN' AND synced = 0`,
     );
     await db.runAsync(
-      `UPDATE pending_sync_logs SET type = 'WASTE' WHERE type = 'MARKETING' AND synced = 0`
+      `UPDATE pending_sync_logs SET type = 'WASTE' WHERE type = 'MARKETING' AND synced = 0`,
     );
 
     // Get unsynced logs
     const rows = await db.getAllAsync<
       PendingSyncLog & { local_image_path: string | null }
     >(
-      "SELECT * FROM pending_sync_logs WHERE synced = 0 ORDER BY created_at ASC LIMIT 50"
+      "SELECT * FROM pending_sync_logs WHERE synced = 0 ORDER BY created_at ASC LIMIT 50",
     );
 
     console.log("[SyncEngine] Pending logs count:", rows.length);
@@ -487,11 +513,11 @@ export async function syncPendingLogs(
         if (!imageUrl) {
           // Image upload failed - skip this log, retry later
           console.warn(
-            `[SyncEngine] Image upload failed for ${row.id}, will retry later`
+            `[SyncEngine] Image upload failed for ${row.id}, will retry later`,
           );
           await db.runAsync(
             "UPDATE pending_sync_logs SET sync_error = ? WHERE id = ?",
-            ["Image upload failed", row.id]
+            ["Image upload failed", row.id],
           );
           continue;
         }
@@ -502,7 +528,7 @@ export async function syncPendingLogs(
 
       // Step 2: Prepare log data with uploaded image URL
       const existingPhotos = JSON.parse(
-        (row.source_photo_urls as unknown as string) || "[]"
+        (row.source_photo_urls as unknown as string) || "[]",
       );
       const sourcePhotos = imageUrl
         ? [...existingPhotos, imageUrl]
@@ -561,7 +587,7 @@ export async function syncPendingLogs(
     const result = await response.json();
     console.log(
       "[SyncEngine] sync-up result:",
-      JSON.stringify(result).slice(0, 500)
+      JSON.stringify(result).slice(0, 500),
     );
 
     let syncedCount = 0;
@@ -572,16 +598,36 @@ export async function syncPendingLogs(
         if (r.success) {
           await db.runAsync(
             "UPDATE pending_sync_logs SET synced = 1, sync_error = NULL, local_image_path = NULL WHERE id = ?",
-            [r.id]
+            [r.id],
           );
           // Step 4: Cleanup local image after DB sync confirmed
           await cleanupLocalImage(r.id);
           syncedCount++;
         } else {
-          await db.runAsync(
-            "UPDATE pending_sync_logs SET sync_error = ? WHERE id = ?",
-            [r.error || "Unknown error", r.id]
-          );
+          // Check for permanent failures (foreign key = ingredient deleted on server)
+          const isPermanentFailure =
+            r.error &&
+            (r.error.includes("foreign key constraint") ||
+              r.error.includes("violates foreign key") ||
+              r.error.includes("is not present in table"));
+
+          if (isPermanentFailure) {
+            // Mark as synced with error note - stop retrying
+            console.warn(
+              `[SyncEngine] ⚠️ Marking log ${r.id} as permanently failed:`,
+              r.error,
+            );
+            await db.runAsync(
+              "UPDATE pending_sync_logs SET synced = 1, sync_error = ? WHERE id = ?",
+              [`PERMANENT_FAILURE: ${r.error}`, r.id],
+            );
+          } else {
+            // Temporary failure - will retry later
+            await db.runAsync(
+              "UPDATE pending_sync_logs SET sync_error = ? WHERE id = ?",
+              [r.error || "Unknown error", r.id],
+            );
+          }
           failedCount++;
         }
       }
@@ -594,7 +640,7 @@ export async function syncPendingLogs(
     if (syncedCount > 0) {
       try {
         const profile = await db.getFirstAsync<{ business_id: string }>(
-          "SELECT business_id FROM local_profiles LIMIT 1"
+          "SELECT business_id FROM local_profiles LIMIT 1",
         );
         if (profile?.business_id) {
           const { triggerStockUpdateSignal } = await import("./realtimeSync");
@@ -606,7 +652,7 @@ export async function syncPendingLogs(
     }
 
     console.log(
-      `[SyncEngine] Sync complete: ${syncedCount} synced, ${failedCount} failed`
+      `[SyncEngine] Sync complete: ${syncedCount} synced, ${failedCount} failed`,
     );
     return { synced: syncedCount, failed: failedCount };
   } catch (err) {
@@ -659,7 +705,7 @@ export function startAppStateListener(db: SQLite.SQLiteDatabase): void {
         console.log("[SyncEngine] App foregrounded, syncing...");
         syncPendingLogs(db);
       }
-    }
+    },
   );
 }
 
@@ -776,7 +822,7 @@ export async function syncPendingLends(): Promise<{ synced: number }> {
     }
 
     console.log(
-      `[SyncEngine] Pushing ${unsyncedLends.length} pending lends...`
+      `[SyncEngine] Pushing ${unsyncedLends.length} pending lends...`,
     );
 
     let syncedCount = 0;
@@ -797,7 +843,7 @@ export async function syncPendingLends(): Promise<{ synced: number }> {
             return_location: lend.return_location,
             related_log_id: lend.related_log_id,
           },
-          { onConflict: "id" }
+          { onConflict: "id" },
         );
 
         if (error) {
@@ -806,7 +852,7 @@ export async function syncPendingLends(): Promise<{ synced: number }> {
           // Mark as synced locally
           await db.runAsync(
             "UPDATE local_pending_lends SET synced = 1 WHERE id = ?",
-            [lend.id]
+            [lend.id],
           );
           syncedCount++;
         }
@@ -820,6 +866,86 @@ export async function syncPendingLends(): Promise<{ synced: number }> {
   } catch (err) {
     console.error("[SyncEngine] syncPendingLends error:", err);
     return { synced: 0 };
+  }
+}
+
+/**
+ * Pull pending lends from Supabase to local SQLite
+ * This enables cross-device visibility of lend reminders
+ */
+export async function pullPendingLends(
+  businessId: string,
+): Promise<{ pulled: number }> {
+  try {
+    const { getDB } = await import("../db");
+    const db = await getDB();
+
+    // Fetch unreturned lends from Supabase
+    const { data, error } = await supabase
+      .from("pending_lends")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("is_returned", false);
+
+    if (error) {
+      console.error("[SyncEngine] pullPendingLends query error:", error);
+      return { pulled: 0 };
+    }
+
+    if (!data || data.length === 0) {
+      // Also clear local lends that might be stale (returned on another device)
+      await db.runAsync(
+        `DELETE FROM local_pending_lends WHERE business_id = ? AND is_returned = 0`,
+        [businessId],
+      );
+      return { pulled: 0 };
+    }
+
+    console.log(`[SyncEngine] Pulling ${data.length} pending lends from cloud`);
+
+    let pulledCount = 0;
+    for (const lend of data) {
+      try {
+        await db.runAsync(
+          `INSERT OR REPLACE INTO local_pending_lends 
+           (id, business_id, ingredient_id, ingredient_name, quantity, unit, 
+            source_location, lent_at, returned_at, is_returned, return_location, 
+            related_log_id, synced)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          [
+            lend.id,
+            lend.business_id,
+            lend.ingredient_id,
+            lend.ingredient_name,
+            lend.quantity,
+            lend.unit,
+            lend.source_location,
+            lend.lent_at,
+            lend.returned_at,
+            lend.is_returned ? 1 : 0,
+            lend.return_location,
+            lend.related_log_id,
+          ],
+        );
+        pulledCount++;
+      } catch (itemError) {
+        console.error("[SyncEngine] Pull item failed:", itemError);
+      }
+    }
+
+    // Clean up local lends that are no longer in cloud (returned on another device)
+    const cloudIds = data.map((l: any) => `'${l.id}'`).join(",");
+    await db.runAsync(
+      `DELETE FROM local_pending_lends 
+       WHERE business_id = ? AND is_returned = 0 AND id NOT IN (${cloudIds})`,
+      [businessId],
+    );
+
+    console.log(`[SyncEngine] Pulled ${pulledCount} pending lends`);
+    return { pulled: pulledCount };
+  } catch (err) {
+    console.error("[SyncEngine] pullPendingLends error:", err);
+    return { pulled: 0 };
   }
 }
 

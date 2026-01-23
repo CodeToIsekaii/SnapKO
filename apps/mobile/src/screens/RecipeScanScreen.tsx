@@ -18,6 +18,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { File } from "expo-file-system";
 import * as SQLite from "expo-sqlite";
+import { getDB } from "../db";
 import * as Haptics from "expo-haptics";
 import { Env } from "../env";
 import { Ionicons } from "@expo/vector-icons";
@@ -83,20 +84,24 @@ interface RecipeScanScreenProps {
 function getMatchScore(
   aiName: string,
   ingName: string,
-  aliases: string[]
+  aliases: string[],
 ): number {
   const normalized = aiName.toLowerCase().trim();
   const name = ingName.toLowerCase();
 
   if (name === normalized) return 100;
   if (aliases.some((a) => a.toLowerCase() === normalized)) return 95;
-  if (name.includes(normalized) || normalized.includes(name)) {
-    return Math.round(
-      (Math.min(name.length, normalized.length) /
-        Math.max(name.length, normalized.length)) *
-        80
-    );
+
+  // If DB ingredient name is fully contained in AI name, high confidence
+  if (normalized.includes(name) && name.length >= 3) {
+    return 85;
   }
+
+  // If AI name is fully contained in DB name
+  if (name.includes(normalized) && normalized.length >= 3) {
+    return 85;
+  }
+
   return 0;
 }
 
@@ -112,7 +117,7 @@ export default function RecipeScanScreen({
     MappedIngredient[]
   >([]);
   const [localIngredients, setLocalIngredients] = useState<LocalIngredient[]>(
-    []
+    [],
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -122,9 +127,9 @@ export default function RecipeScanScreen({
 
   const loadLocalIngredients = async () => {
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
       const rows = await db.getAllAsync<LocalIngredient>(
-        "SELECT id, name, base_unit, unit_cost, aliases FROM local_ingredients WHERE archived = 0"
+        "SELECT id, name, base_unit, unit_cost, aliases FROM local_ingredients WHERE archived = 0",
       );
       setLocalIngredients(rows);
     } catch (err) {
@@ -173,7 +178,7 @@ export default function RecipeScanScreen({
     const manipulated = await ImageManipulator.manipulateAsync(
       uri,
       [{ resize: { width: 1024 } }],
-      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+      { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
     );
     const file = new File(manipulated.uri);
     const base64 = await file.base64();
@@ -182,7 +187,7 @@ export default function RecipeScanScreen({
 
   // Auto-map AI ingredients to local DB
   const autoMapIngredients = (
-    aiIngredients: ParsedIngredient[]
+    aiIngredients: ParsedIngredient[],
   ): MappedIngredient[] => {
     return aiIngredients.map((aiIng) => {
       let bestMatch: LocalIngredient | null = null;
@@ -245,7 +250,7 @@ export default function RecipeScanScreen({
             mimeType: "image/jpeg",
           }),
           signal: controller.signal,
-        }
+        },
       );
 
       clearTimeout(timeoutId);
@@ -310,7 +315,7 @@ export default function RecipeScanScreen({
                 ingredients: linkedIngredients,
               }),
           },
-        ]
+        ],
       );
     } else {
       onCreateRecipe({
@@ -558,7 +563,7 @@ export default function RecipeScanScreen({
                 <View
                   style={{
                     backgroundColor: getConfidenceColor(
-                      parsedRecipe.confidence
+                      parsedRecipe.confidence,
                     ),
                     paddingHorizontal: 8,
                     paddingVertical: 4,

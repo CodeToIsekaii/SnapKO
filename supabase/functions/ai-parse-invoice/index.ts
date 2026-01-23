@@ -9,7 +9,10 @@
  */
 
 // deno-lint-ignore-file
-import { createClient, SupabaseClient } from "supabase";
+import {
+  createClient,
+  SupabaseClient,
+} from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchWithRetry } from "../_shared/retry.ts";
 import type { InvoiceItem, ParsedInvoice } from "../_shared/types.ts";
 
@@ -77,11 +80,11 @@ async function callGemini(imageBase64: string): Promise<ParsedInvoice> {
         ],
         generationConfig: {
           temperature: 0.1,
-          maxOutputTokens: 2048,
+          maxOutputTokens: 8192, // Increased for multi-image support
           responseMimeType: "application/json",
         },
       }),
-    }
+    },
   );
 
   if (!response.ok) {
@@ -111,7 +114,7 @@ interface IngredientData {
 async function matchIngredients(
   supabase: SupabaseClientType,
   businessId: string,
-  items: InvoiceItem[]
+  items: InvoiceItem[],
 ): Promise<(InvoiceItem & { ingredient_id?: string })[]> {
   // Get existing ingredients for this business
   const { data: ingredients } = (await supabase
@@ -127,7 +130,7 @@ async function matchIngredients(
     const match = ingredients.find(
       (ing) =>
         ing.name.toLowerCase().includes(item.ingredient_name.toLowerCase()) ||
-        item.ingredient_name.toLowerCase().includes(ing.name.toLowerCase())
+        item.ingredient_name.toLowerCase().includes(ing.name.toLowerCase()),
     );
 
     return {
@@ -155,7 +158,7 @@ Deno.serve(async (req: Request) => {
     if (!image_base64) {
       return new Response(
         JSON.stringify({ success: false, error: "image_base64 is required" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+        { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }
 
@@ -169,7 +172,7 @@ Deno.serve(async (req: Request) => {
       matchedItems = await matchIngredients(
         supabase,
         business_id,
-        parsed.items
+        parsed.items,
       );
     }
 
@@ -188,7 +191,7 @@ Deno.serve(async (req: Request) => {
           "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
         },
-      }
+      },
     );
   } catch (error) {
     console.error("Error parsing invoice:", error);
@@ -203,7 +206,7 @@ Deno.serve(async (req: Request) => {
           "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
         },
-      }
+      },
     );
   }
 });

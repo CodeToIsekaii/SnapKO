@@ -12,6 +12,7 @@ import {
   syncPendingLogs,
 } from "../sync/syncEngine";
 import * as SQLite from "expo-sqlite";
+import { getDB } from "../db";
 
 interface SyncStatusIndicatorProps {
   compact?: boolean; // Show only icon in compact mode
@@ -41,7 +42,7 @@ export function SyncStatusIndicator({
           toValue: 1,
           duration: 1000,
           useNativeDriver: true,
-        })
+        }),
       ).start();
     } else {
       spinAnim.setValue(0);
@@ -59,7 +60,7 @@ export function SyncStatusIndicator({
       return;
 
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
       await syncPendingLogs(db);
     } catch (err) {
       console.error("Manual sync failed:", err);

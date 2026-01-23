@@ -1,21 +1,27 @@
-import React from "react";
+import React, { useState } from "react";
 import { COLORS, SHADOWS } from "../styles/theme";
-import { ScrollText } from "lucide-react";
-
-interface ActivityLog {
-  id: string;
-  created_at: string;
-  staff_name: string;
-  action: string;
-  details: string;
-}
+import { ScrollText, ChevronDown, ChevronUp } from "lucide-react";
+import { ActivityLog, ActivityLogItem } from "../types";
 
 interface ActivityLogTableProps {
   logs: ActivityLog[];
 }
 
 export const ActivityLogTable: React.FC<ActivityLogTableProps> = ({ logs }) => {
-  console.log("ActivityLogTable rendering. Logs:", logs);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const toggleRow = (id: string) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
   return (
     <div
       style={{ ...styles.container, minHeight: 100, boxShadow: SHADOWS.card }}
@@ -49,31 +55,91 @@ export const ActivityLogTable: React.FC<ActivityLogTableProps> = ({ logs }) => {
                 </td>
               </tr>
             ) : (
-              logs.map((log) => (
-                <tr key={log.id} style={styles.tr}>
-                  <td style={styles.td}>
-                    {new Date(log.created_at).toLocaleTimeString("vi-VN", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}{" "}
-                    <span style={styles.date}>
-                      {new Date(log.created_at).toLocaleDateString("vi-VN", {
-                        day: "2-digit",
-                        month: "2-digit",
-                      })}
-                    </span>
-                  </td>
-                  <td style={styles.td}>
-                    <div style={styles.badge}>{log.staff_name}</div>
-                  </td>
-                  <td style={styles.td}>
-                    <span style={getActionStyle(log.action)}>{log.action}</span>
-                  </td>
-                  <td style={{ ...styles.td, color: COLORS.textSecondary }}>
-                    {log.details}
-                  </td>
-                </tr>
-              ))
+              logs.map((log) => {
+                const isExpandable = log.items && log.items.length > 0;
+                const isExpanded = expandedRows.has(log.id);
+
+                return (
+                  <React.Fragment key={log.id}>
+                    <tr
+                      style={{
+                        ...styles.tr,
+                        cursor: isExpandable ? "pointer" : "default",
+                      }}
+                      onClick={() => isExpandable && toggleRow(log.id)}
+                    >
+                      <td style={styles.td}>
+                        {new Date(log.created_at).toLocaleTimeString("vi-VN", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}{" "}
+                        <span style={styles.date}>
+                          {new Date(log.created_at).toLocaleDateString(
+                            "vi-VN",
+                            {
+                              day: "2-digit",
+                              month: "2-digit",
+                            },
+                          )}
+                        </span>
+                      </td>
+                      <td style={styles.td}>
+                        <div style={styles.badge}>{log.staff_name}</div>
+                      </td>
+                      <td style={styles.td}>
+                        <span style={getActionStyle(log.action)}>
+                          {log.action}
+                        </span>
+                      </td>
+                      <td style={{ ...styles.td, color: COLORS.textSecondary }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                          }}
+                        >
+                          <span style={{ flex: 1 }}>{log.details}</span>
+                          {isExpandable && (
+                            <span style={styles.expandIcon}>
+                              {isExpanded ? (
+                                <ChevronUp size={16} />
+                              ) : (
+                                <ChevronDown size={16} />
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    {/* Expanded row with items */}
+                    {isExpanded && log.items && (
+                      <tr style={styles.expandedRow}>
+                        <td colSpan={4} style={styles.expandedTd}>
+                          <div style={styles.itemsGrid}>
+                            {log.items.map(
+                              (item: ActivityLogItem, idx: number) => (
+                                <div key={idx} style={styles.itemCard}>
+                                  <span style={styles.itemName}>
+                                    {item.ingredient_name ||
+                                      item.name ||
+                                      item.rawName ||
+                                      item.original_name ||
+                                      "—"}
+                                  </span>
+                                  <span style={styles.itemQty}>
+                                    {item.quantity ?? "—"} {item.unit || ""}
+                                  </span>
+                                </div>
+                              ),
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -88,7 +154,11 @@ const getActionStyle = (action: string): React.CSSProperties => {
   let bg: string = "#F3F4F6";
 
   const lower = action.toLowerCase();
-  if (lower.includes("nhập") || lower.includes("stock")) {
+  if (
+    lower.includes("nhập") ||
+    lower.includes("stock") ||
+    lower.includes("import")
+  ) {
     color = "#059669"; // Green
     bg = "#D1FAE5";
   } else if (lower.includes("xuất") || lower.includes("hủy")) {
@@ -97,7 +167,11 @@ const getActionStyle = (action: string): React.CSSProperties => {
   } else if (lower.includes("kiểm") || lower.includes("audit")) {
     color = "#D97706"; // Amber
     bg = "#FEF3C7";
-  } else if (lower.includes("kết ca") || lower.includes("shift")) {
+  } else if (
+    lower.includes("kết ca") ||
+    lower.includes("shift") ||
+    lower.includes("sales")
+  ) {
     color = "#2563EB"; // Blue
     bg = "#DBEAFE";
   }
@@ -173,5 +247,39 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "center",
     color: COLORS.textSecondary,
     fontStyle: "italic",
+  },
+  expandIcon: {
+    color: COLORS.textSecondary,
+    display: "flex",
+    alignItems: "center",
+  },
+  expandedRow: {
+    backgroundColor: "#F9FAFB",
+  },
+  expandedTd: {
+    padding: "12px 40px 16px 40px",
+  },
+  itemsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+    gap: 8,
+  },
+  itemCard: {
+    display: "flex",
+    justifyContent: "space-between",
+    padding: "8px 12px",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 6,
+    border: `1px solid ${COLORS.border}`,
+  },
+  itemName: {
+    fontWeight: 500,
+    color: COLORS.textPrimary,
+    fontSize: 13,
+  },
+  itemQty: {
+    color: COLORS.primary,
+    fontWeight: 600,
+    fontSize: 13,
   },
 };

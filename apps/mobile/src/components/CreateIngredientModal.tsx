@@ -18,6 +18,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import * as SQLite from "expo-sqlite";
+import { getDB } from "../db";
 import {
   createIngredientSchema,
   INGREDIENT_UNITS,
@@ -81,12 +82,12 @@ export default function CreateIngredientModal({
 
     setCheckingDuplicates(true);
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
       const results = await db.getAllAsync<SimilarIngredient>(
         `SELECT id, name, aliases FROM local_ingredients 
          WHERE (name LIKE ? OR aliases LIKE ?) AND archived = 0
          LIMIT 5`,
-        [`%${searchName}%`, `%${searchName}%`]
+        [`%${searchName}%`, `%${searchName}%`],
       );
       setSimilarIngredients(results);
     } catch (err) {
@@ -132,7 +133,7 @@ export default function CreateIngredientModal({
 
     setSaving(true);
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
       const id = `ing_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
       await db.runAsync(
@@ -144,7 +145,7 @@ export default function CreateIngredientModal({
           result.data.aliases.join(","),
           result.data.baseUnit,
           result.data.unitCost,
-        ]
+        ],
       );
 
       onCreated(id);
@@ -171,7 +172,7 @@ export default function CreateIngredientModal({
             onClose();
           },
         },
-      ]
+      ],
     );
   };
 

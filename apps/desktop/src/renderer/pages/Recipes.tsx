@@ -109,120 +109,124 @@ export default function RecipesPage() {
 
       setScanning(true);
       try {
-        // Convert to base64
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = async () => {
-          const base64 = (reader.result as string).split(",")[1];
+        // Convert to base64 using Promise wrapper
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            resolve(result.split(",")[1]);
+          };
+          reader.onerror = () => reject(new Error("Failed to read file"));
+          reader.readAsDataURL(file);
+        });
 
-          // Call Edge Function
-          const response = await fetch(
-            "https://kxeervlkzyitlbksbfvp.supabase.co/functions/v1/ai-parse-recipe",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                // Note: In a real app, we'd use the user's session token
-                apikey: (window as any).electronAPI?.getSupabaseKey?.() || "",
+        // Call Edge Function
+        const response = await fetch(
+          "https://kxeervlkzyitlbksbfvp.supabase.co/functions/v1/ai-parse-recipe",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: (window as any).electronAPI?.getSupabaseKey?.() || "",
+            },
+            body: JSON.stringify({ imageBase64: base64 }),
+          },
+        );
+
+        if (!response.ok) throw new Error("AI Scan failed");
+        const data = await response.json();
+
+        // Handle multiple recipes from AI response
+        const recipesToProcess = data.recipes || (data.name ? [data] : []);
+
+        if (recipesToProcess.length > 0) {
+          // Map all recipes with ingredient matching
+          const mappedRecipes = recipesToProcess.map((recipe: any) => {
+            const mappedIngredients = (recipe.ingredients || []).map(
+              (aiIng: any) => {
+                const aiName = aiIng.name.toLowerCase().trim();
+
+                const matched = ingredients.find((i) => {
+                  const ingName = i.name.toLowerCase().trim();
+                  const cleanAiName = aiName.replace(
+                    /\s*(blend|note|tươi|đậm|nhạt)\s*/gi,
+                    "",
+                  );
+                  const cleanIngName = ingName.replace(
+                    /\s*(blend|note|tươi|đậm|nhạt)\s*/gi,
+                    "",
+                  );
+
+                  return (
+                    ingName.includes(cleanAiName) ||
+                    cleanAiName.includes(ingName) ||
+                    ingName.includes(aiName) ||
+                    aiName.includes(ingName)
+                  );
+                });
+
+                const unit = aiIng.unit || matched?.base_unit || "g";
+                const qty = aiIng.quantity || 0;
+
+                return {
+                  ingredient_id:
+                    matched?.id ||
+                    `temp_${Date.now()}_${Math.random()
+                      .toString(36)
+                      .slice(2, 8)}`,
+                  name: matched?.name || aiIng.name + " (Chưa có)",
+                  quantity: qty,
+                  unit: unit,
+                  cost: matched
+                    ? calculateIngredientCost(qty, unit, {
+                        base_unit: matched.base_unit,
+                        unit_cost: matched.unit_cost,
+                        density: matched.density,
+                        unit_weight: matched.unit_weight,
+                        unit_weight_unit: matched.unit_weight_unit,
+                      })
+                    : 0,
+                };
               },
-              body: JSON.stringify({ imageBase64: base64 }),
-            }
-          );
+            );
 
-          if (!response.ok) throw new Error("AI Scan failed");
-          const data = await response.json();
+            return {
+              name: recipe.name,
+              price: recipe.price || 0,
+              category: recipe.category || "",
+              ingredients: mappedIngredients,
+              confidence: recipe.confidence || 0,
+            };
+          });
 
-          // NEW: Handle multiple recipes from AI response
-          const recipesToProcess = data.recipes || (data.name ? [data] : []);
+          // Store all scanned recipes
+          setScannedRecipes(mappedRecipes);
 
-          if (recipesToProcess.length > 0) {
-            // Map all recipes with ingredient matching
-            const mappedRecipes = recipesToProcess.map((recipe: any) => {
-              const mappedIngredients = (recipe.ingredients || []).map(
-                (aiIng: any) => {
-                  const aiName = aiIng.name.toLowerCase().trim();
+          // Set first recipe to form
+          const firstRecipe = mappedRecipes[0];
+          setNewRecipe({
+            name: firstRecipe.name,
+            price: firstRecipe.price,
+            category: firstRecipe.category,
+            ingredients: firstRecipe.ingredients,
+          });
 
-                  // Better matching: check if AI name contains ingredient OR ingredient contains AI name
-                  const matched = ingredients.find((i) => {
-                    const ingName = i.name.toLowerCase().trim();
-                    // Remove common prefixes/suffixes for better matching
-                    const cleanAiName = aiName.replace(
-                      /\s*(blend|note|tươi|đậm|nhạt)\s*/gi,
-                      ""
-                    );
-                    const cleanIngName = ingName.replace(
-                      /\s*(blend|note|tươi|đậm|nhạt)\s*/gi,
-                      ""
-                    );
-
-                    return (
-                      ingName.includes(cleanAiName) ||
-                      cleanAiName.includes(ingName) ||
-                      ingName.includes(aiName) ||
-                      aiName.includes(ingName)
-                    );
-                  });
-
-                  const unit = aiIng.unit || matched?.base_unit || "g";
-                  const qty = aiIng.quantity || 0;
-                  const baseQty = matched
-                    ? convertUnit(qty, unit, matched.base_unit)
-                    : qty;
-
-                  return {
-                    // Use matched id, or generate temp id for unmatched ingredients
-                    ingredient_id:
-                      matched?.id ||
-                      `temp_${Date.now()}_${Math.random()
-                        .toString(36)
-                        .slice(2, 8)}`,
-                    name: matched?.name || aiIng.name + " (Chưa có)",
-                    quantity: qty,
-                    unit: unit,
-                    cost: baseQty * (matched?.unit_cost || 0),
-                  };
-                }
-              );
-
-              return {
-                name: recipe.name,
-                price: recipe.price || 0,
-                category: recipe.category || "",
-                ingredients: mappedIngredients,
-                confidence: recipe.confidence || 0,
-              };
-            });
-
-            // Store all scanned recipes
-            setScannedRecipes(mappedRecipes);
-
-            // Set first recipe to form
-            const firstRecipe = mappedRecipes[0];
-            setNewRecipe({
-              name: firstRecipe.name,
-              price: firstRecipe.price,
-              category: firstRecipe.category,
-              ingredients: firstRecipe.ingredients,
-            });
-
-            // Use toast instead of alert to prevent focus loss
-            const totalCount = mappedRecipes.length;
-            setToast({
-              message:
-                totalCount > 1
-                  ? `✨ AI đã trích xuất ${totalCount} công thức! Chọn từ danh sách bên dưới.`
-                  : `✨ AI đã trích xuất: ${firstRecipe.name} (${firstRecipe.confidence}%)`,
-              type: "success",
-            });
-            setTimeout(() => setToast(null), 5000);
-          } else {
-            setToast({
-              message: "Không tìm thấy công thức trong ảnh",
-              type: "error",
-            });
-            setTimeout(() => setToast(null), 4000);
-          }
-        };
+          const totalCount = mappedRecipes.length;
+          setToast({
+            message:
+              totalCount > 1
+                ? `✨ AI đã trích xuất ${totalCount} công thức! Chọn từ danh sách bên dưới.`
+                : `✨ AI đã trích xuất: ${firstRecipe.name} (${firstRecipe.confidence}%)`,
+            type: "success",
+          });
+          setTimeout(() => setToast(null), 5000);
+        } else {
+          setToast({
+            message: "Không tìm thấy công thức trong ảnh",
+            type: "error",
+          });
+          setTimeout(() => setToast(null), 4000);
+        }
       } catch (err: any) {
         setToast({ message: "Lỗi quét AI: " + err.message, type: "error" });
         setTimeout(() => setToast(null), 4000);
@@ -249,7 +253,13 @@ export default function RecipesPage() {
           name: ing.name,
           quantity: 1,
           unit: ing.base_unit,
-          cost: ing.unit_cost,
+          cost: calculateIngredientCost(1, ing.base_unit, {
+            base_unit: ing.base_unit,
+            unit_cost: ing.unit_cost,
+            density: ing.density,
+            unit_weight: ing.unit_weight,
+            unit_weight_unit: ing.unit_weight_unit,
+          }),
         },
       ],
     }));
@@ -257,19 +267,37 @@ export default function RecipesPage() {
 
   function updateIngredient(
     ingredientId: string,
-    updates: Partial<Recipe["ingredients"][0]>
+    updates: Partial<Recipe["ingredients"][0]>,
   ) {
     setNewRecipe((prev) => ({
       ...prev,
       ingredients: prev.ingredients.map((i) => {
         if (i.ingredient_id !== ingredientId) return i;
 
-        const matched = ingredients.find((ing) => ing.id === ingredientId);
+        // Try to find matched ingredient by ID first, then fallback to name
+        let matched = ingredients.find((ing) => ing.id === ingredientId);
+
+        // Fallback: if ID doesn't match (temp ID from AI scan), try matching by name
+        if (!matched && i.name) {
+          const cleanName = i.name
+            .replace(" (Chưa có)", "")
+            .toLowerCase()
+            .trim();
+          matched = ingredients.find(
+            (ing) =>
+              ing.name.toLowerCase().trim() === cleanName ||
+              ing.name.toLowerCase().includes(cleanName) ||
+              cleanName.includes(ing.name.toLowerCase()),
+          );
+        }
+
         const newUnit = updates.unit || i.unit;
         const newQty =
           updates.quantity !== undefined ? updates.quantity : i.quantity;
 
         let newCost = i.cost;
+        let updatedIngredientId = i.ingredient_id;
+
         if (matched) {
           // Use centralized cost calculation (handles all conversion scenarios)
           newCost = calculateIngredientCost(newQty, newUnit, {
@@ -279,19 +307,24 @@ export default function RecipesPage() {
             unit_weight: matched.unit_weight,
             unit_weight_unit: matched.unit_weight_unit,
           });
+          // Update ingredient_id to real ID if matched by name
+          updatedIngredientId = matched.id;
         }
 
-        return { ...i, ...updates, cost: newCost };
+        return {
+          ...i,
+          ...updates,
+          ingredient_id: updatedIngredientId,
+          cost: newCost,
+        };
       }),
     }));
   }
 
-  function removeIngredient(ingredientId: string) {
+  function removeIngredient(index: number) {
     setNewRecipe((prev) => ({
       ...prev,
-      ingredients: prev.ingredients.filter(
-        (i) => i.ingredient_id !== ingredientId
-      ),
+      ingredients: prev.ingredients.filter((_, i) => i !== index),
     }));
   }
 
@@ -321,10 +354,10 @@ export default function RecipesPage() {
       });
       setTimeout(() => setToast(null), 3000);
 
-      // Reset form
+      // Reset form but keep scannedRecipes for user to continue selecting
       setNewRecipe({ name: "", price: 0, category: "", ingredients: [] });
       setEditing(null);
-      setScannedRecipes([]);
+      // NOTE: Removed setScannedRecipes([]) to preserve AI suggestions after save
 
       // Reload from database
       await loadData();
@@ -464,8 +497,11 @@ export default function RecipesPage() {
           >
             {scanning ? (
               <>
-                <Loader2 size={16} className="animate-spin" />
-                Đang quét...
+                <Loader2
+                  size={16}
+                  style={{ animation: "spin 1s linear infinite" }}
+                />
+                Đang xử lý...
               </>
             ) : (
               <>
@@ -608,8 +644,8 @@ export default function RecipesPage() {
           {/* Ingredients */}
           <div style={styles.field}>
             <label style={styles.label}>Nguyên liệu</label>
-            {newRecipe.ingredients.map((ing) => (
-              <div key={ing.ingredient_id} style={styles.ingRow}>
+            {newRecipe.ingredients.map((ing, idx) => (
+              <div key={`${ing.ingredient_id}-${idx}`} style={styles.ingRow}>
                 <span style={{ flex: 1, fontWeight: 500 }}>{ing.name}</span>
                 <input
                   type="number"
@@ -648,10 +684,10 @@ export default function RecipesPage() {
                     fontWeight: 600,
                   }}
                 >
-                  = {ing.cost.toLocaleString("vi-VN")} đ
+                  = {Math.round(ing.cost).toLocaleString("vi-VN")} đ
                 </span>
                 <button
-                  onClick={() => removeIngredient(ing.ingredient_id)}
+                  onClick={() => removeIngredient(idx)}
                   style={styles.removeBtn}
                 >
                   <X size={14} />
@@ -673,7 +709,9 @@ export default function RecipesPage() {
             {ingredients
               .filter(
                 (i) =>
-                  !newRecipe.ingredients.find((ni) => ni.ingredient_id === i.id)
+                  !newRecipe.ingredients.find(
+                    (ni) => ni.ingredient_id === i.id,
+                  ),
               )
               .map((ing) => (
                 <option key={ing.id} value={ing.id}>
@@ -687,12 +725,12 @@ export default function RecipesPage() {
           <div style={styles.summary}>
             <div style={styles.summaryRow}>
               <span>Giá vốn (COGS)</span>
-              <span>{cogs.toLocaleString("vi-VN")} đ</span>
+              <span>{Math.round(cogs).toLocaleString("vi-VN")} đ</span>
             </div>
             <div style={styles.summaryRow}>
               <span>Lãi gộp</span>
               <span style={{ color: profit >= 0 ? "#55A630" : "#EF4444" }}>
-                {profit.toLocaleString("vi-VN")} đ
+                {Math.round(profit).toLocaleString("vi-VN")} đ
               </span>
             </div>
             <div style={styles.summaryRow}>
@@ -703,8 +741,8 @@ export default function RecipesPage() {
                     margin >= 50
                       ? "#55A630"
                       : margin >= 30
-                      ? "#F59E0B"
-                      : "#EF4444",
+                        ? "#F59E0B"
+                        : "#EF4444",
                 }}
               >
                 {margin.toFixed(1)}%
@@ -740,18 +778,59 @@ export default function RecipesPage() {
                   <span
                     style={{ marginLeft: 8, color: "#55A630", fontSize: 13 }}
                   >
-                    {r.price.toLocaleString("vi-VN")} đ
+                    {Math.round(r.price).toLocaleString("vi-VN")} đ
                   </span>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button
                     onClick={() => {
                       setEditing(r);
+                      // Recalculate costs for all ingredients using current ingredient data
+                      const recalculatedIngredients = r.ingredients.map(
+                        (recipeIng) => {
+                          // Try to find matched ingredient by ID first
+                          let matched = ingredients.find(
+                            (i) => i.id === recipeIng.ingredient_id,
+                          );
+
+                          // Fallback: if ID doesn't match (temp ID or old data), try matching by name
+                          if (!matched && recipeIng.name) {
+                            const cleanName = recipeIng.name
+                              .replace(" (Chưa có)", "")
+                              .toLowerCase()
+                              .trim();
+                            matched = ingredients.find(
+                              (i) =>
+                                i.name.toLowerCase().trim() === cleanName ||
+                                i.name.toLowerCase().includes(cleanName) ||
+                                cleanName.includes(i.name.toLowerCase()),
+                            );
+                          }
+
+                          if (!matched) return recipeIng;
+
+                          return {
+                            ...recipeIng,
+                            ingredient_id: matched.id, // Update to real ID
+                            cost: calculateIngredientCost(
+                              recipeIng.quantity,
+                              recipeIng.unit,
+                              {
+                                base_unit: matched.base_unit,
+                                unit_cost: matched.unit_cost,
+                                density: matched.density,
+                                unit_weight: matched.unit_weight,
+                                unit_weight_unit: matched.unit_weight_unit,
+                              },
+                            ),
+                          };
+                        },
+                      );
                       setNewRecipe({
                         name: r.name,
                         price: r.price,
                         category: r.category,
-                        ingredients: r.ingredients,
+                        ingredients: recalculatedIngredients,
                       });
                     }}
                     style={{
@@ -773,12 +852,12 @@ export default function RecipesPage() {
                         try {
                           if ((window as any).electronAPI?.deleteRecipe) {
                             await (window as any).electronAPI.deleteRecipe(
-                              r.id
+                              r.id,
                             );
                             await loadData(); // Reload from DB
                           } else {
                             setRecipes((prev) =>
-                              prev.filter((x) => x.id !== r.id)
+                              prev.filter((x) => x.id !== r.id),
                             );
                           }
                           setToast({

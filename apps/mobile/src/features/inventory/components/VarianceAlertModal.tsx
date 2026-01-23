@@ -63,6 +63,12 @@ interface VarianceAlertModalProps {
   actualQty: number;
   unit: string;
   variancePercentage: number;
+  // Optional breakdown for UI display (per user feedback Phase 3)
+  breakdown?: {
+    startingQty: number;
+    transfersIn: number;
+    salesConsumption: number;
+  };
   onConfirm: (data: {
     reason: string;
     evidencePhotoUrl?: string;
@@ -78,6 +84,7 @@ export function VarianceAlertModal({
   actualQty,
   unit,
   variancePercentage,
+  breakdown,
   onConfirm,
   onCancel,
 }: VarianceAlertModalProps) {
@@ -153,6 +160,48 @@ export function VarianceAlertModal({
           {/* Variance Info */}
           <View style={styles.varianceCard}>
             <Text style={styles.ingredientName}>{ingredientName}</Text>
+
+            {/* Calculation Breakdown (per user feedback Phase 3) */}
+            {breakdown && (
+              <View style={styles.breakdownContainer}>
+                <Text style={styles.breakdownTitle}>📊 Cách tính:</Text>
+                <View style={styles.breakdownRow}>
+                  <Text style={styles.breakdownLabel}>Tồn đầu:</Text>
+                  <Text style={styles.breakdownValue}>
+                    {breakdown.startingQty.toFixed(1)} {unit}
+                  </Text>
+                </View>
+                {breakdown.transfersIn > 0 && (
+                  <View style={styles.breakdownRow}>
+                    <Text style={styles.breakdownLabel}>+ Nhập thêm:</Text>
+                    <Text
+                      style={[styles.breakdownValue, { color: COLORS.success }]}
+                    >
+                      +{breakdown.transfersIn.toFixed(1)} {unit}
+                    </Text>
+                  </View>
+                )}
+                {breakdown.salesConsumption > 0 && (
+                  <View style={styles.breakdownRow}>
+                    <Text style={styles.breakdownLabel}>- Đã bán:</Text>
+                    <Text
+                      style={[styles.breakdownValue, { color: COLORS.error }]}
+                    >
+                      -{breakdown.salesConsumption.toFixed(1)} {unit}
+                    </Text>
+                  </View>
+                )}
+                <View style={[styles.breakdownRow, styles.breakdownTotal]}>
+                  <Text style={styles.breakdownLabel}>= Lý thuyết:</Text>
+                  <Text
+                    style={[styles.breakdownValue, styles.breakdownTotalValue]}
+                  >
+                    {theoreticalQty.toFixed(1)} {unit}
+                  </Text>
+                </View>
+              </View>
+            )}
+
             <View style={styles.varianceRow}>
               <View style={styles.varianceItem}>
                 <Text style={styles.varianceLabel}>Lý thuyết</Text>
@@ -343,6 +392,47 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     textAlign: "center",
     marginBottom: 12,
+  },
+  // Breakdown styles for calculation formula display
+  breakdownContainer: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  breakdownTitle: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: COLORS.textSecondary,
+    marginBottom: 8,
+  },
+  breakdownRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 4,
+  },
+  breakdownLabel: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+  },
+  breakdownValue: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: COLORS.textPrimary,
+  },
+  breakdownTotal: {
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    marginTop: 6,
+    paddingTop: 8,
+  },
+  breakdownTotalValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.primary,
   },
   varianceRow: {
     flexDirection: "row",

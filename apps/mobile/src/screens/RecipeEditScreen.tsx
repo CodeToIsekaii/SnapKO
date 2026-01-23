@@ -16,6 +16,7 @@ import {
   Alert,
 } from "react-native";
 import * as SQLite from "expo-sqlite";
+import { getDB } from "../db";
 import * as Haptics from "expo-haptics";
 import * as Crypto from "expo-crypto";
 import {
@@ -103,16 +104,16 @@ export default function RecipeEditScreen({
   }, [recipeId]);
 
   const loadIngredients = async () => {
-    const db = await SQLite.openDatabaseAsync("snapko.db");
+    const db = await getDB();
     const rows = await db.getAllAsync<LocalIngredient>(
-      "SELECT id, name, base_unit, unit_cost, density, unit_weight, unit_weight_unit FROM local_ingredients WHERE archived = 0"
+      "SELECT id, name, base_unit, unit_cost, density, unit_weight, unit_weight_unit FROM local_ingredients WHERE archived = 0",
     );
     setAllIngredients(rows);
   };
 
   const loadRecipe = async () => {
     if (!recipeId) return; // Guard clause to satisfy TypeScript
-    const db = await SQLite.openDatabaseAsync("snapko.db");
+    const db = await getDB();
     const recipe = await db.getFirstAsync<{
       name: string;
       price: number;
@@ -144,7 +145,7 @@ export default function RecipeEditScreen({
         unit_weight_unit: string | null;
       }>(
         "SELECT name, base_unit, unit_cost, density, unit_weight, unit_weight_unit FROM local_ingredients WHERE id = ?",
-        [item.ingredient_id]
+        [item.ingredient_id],
       );
       if (ing) {
         const selectedUnit = item.unit || ing.base_unit;
@@ -190,7 +191,7 @@ export default function RecipeEditScreen({
   // Update quantity
   const updateQty = (id: string, qty: number) => {
     setIngredients((prev) =>
-      prev.map((i) => (i.ingredient_id === id ? { ...i, quantity: qty } : i))
+      prev.map((i) => (i.ingredient_id === id ? { ...i, quantity: qty } : i)),
     );
   };
 
@@ -201,7 +202,7 @@ export default function RecipeEditScreen({
         if (i.ingredient_id !== id) return i;
         const compatible = areUnitsCompatible(newUnit, i.base_unit);
         return { ...i, unit: newUnit, isCompatible: compatible };
-      })
+      }),
     );
   };
 
@@ -223,7 +224,7 @@ export default function RecipeEditScreen({
 
   const cogs = ingredients.reduce(
     (sum, i) => sum + calculateIngredientCost(i),
-    0
+    0,
   );
   const sellingPrice = parseInt(price) || 0;
   const profit = calculateGrossProfit(sellingPrice, cogs);
@@ -237,25 +238,25 @@ export default function RecipeEditScreen({
     }
 
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
       const id = recipeId || Crypto.randomUUID();
 
       await db.runAsync(
         `INSERT OR REPLACE INTO local_recipes (id, name, price, category, created_at)
          VALUES (?, ?, ?, ?, datetime('now'))`,
-        [id, name.trim(), sellingPrice, category.trim()]
+        [id, name.trim(), sellingPrice, category.trim()],
       );
 
       await db.runAsync(
         "DELETE FROM local_recipe_ingredients WHERE recipe_id = ?",
-        [id]
+        [id],
       );
 
       for (const ing of ingredients) {
         await db.runAsync(
           `INSERT INTO local_recipe_ingredients (id, recipe_id, ingredient_id, quantity, unit)
            VALUES (?, ?, ?, ?, ?)`,
-          [Crypto.randomUUID(), id, ing.ingredient_id, ing.quantity, ing.unit]
+          [Crypto.randomUUID(), id, ing.ingredient_id, ing.quantity, ing.unit],
         );
       }
 
@@ -265,7 +266,7 @@ export default function RecipeEditScreen({
         id,
         business_id: (
           await db.getFirstAsync<{ business_id: string }>(
-            "SELECT business_id FROM local_profiles LIMIT 1"
+            "SELECT business_id FROM local_profiles LIMIT 1",
           )
         )?.business_id, // Ensure business_id
         name: name.trim(),
@@ -446,7 +447,7 @@ export default function RecipeEditScreen({
                       UNIT_OPTIONS.map((u) => ({
                         text: u + (u === ing.base_unit ? " (gốc)" : ""),
                         onPress: () => updateUnit(ing.ingredient_id, u),
-                      }))
+                      })),
                     );
                   }}
                   style={{
@@ -538,8 +539,8 @@ export default function RecipeEditScreen({
                   margin >= 50
                     ? "#55A630"
                     : margin >= 30
-                    ? "#F59E0B"
-                    : "#EF4444",
+                      ? "#F59E0B"
+                      : "#EF4444",
                 fontWeight: "600",
               }}
             >
@@ -572,7 +573,7 @@ export default function RecipeEditScreen({
             </Text>
             <FlatList
               data={allIngredients.filter(
-                (i) => !ingredients.find((s) => s.ingredient_id === i.id)
+                (i) => !ingredients.find((s) => s.ingredient_id === i.id),
               )}
               keyExtractor={(i) => i.id}
               renderItem={({ item }) => (

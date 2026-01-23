@@ -5,6 +5,7 @@
 
 import React from "react";
 import { View, Text, Pressable, Modal, StyleSheet } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 export type StorageArea = "BAR" | "WAREHOUSE";
 export type CheckMode = "FULL" | "SPOT";
@@ -13,15 +14,17 @@ interface AreaSelectorModalProps {
   visible: boolean;
   onClose: () => void;
   onSelect: (area: StorageArea, mode?: CheckMode) => void;
+  hasTodaySales?: boolean; // If true, auto-select FULL mode for Warehouse (skip mode selection)
 }
 
 export default function AreaSelectorModal({
   visible,
   onClose,
   onSelect,
+  hasTodaySales,
 }: AreaSelectorModalProps) {
   const [selectedArea, setSelectedArea] = React.useState<StorageArea | null>(
-    null
+    null,
   );
 
   const handleAreaSelect = (area: StorageArea) => {
@@ -30,8 +33,15 @@ export default function AreaSelectorModal({
       onSelect("BAR");
       onClose();
     } else {
-      // Warehouse needs mode selection
-      setSelectedArea("WAREHOUSE");
+      // Warehouse: if user already has sales today, auto-select FULL (Tồn cuối)
+      // This is the expected workflow: Kết ca → Kiểm tồn cuối
+      if (hasTodaySales) {
+        onSelect("WAREHOUSE", "FULL");
+        onClose();
+      } else {
+        // No sales yet - show mode selection
+        setSelectedArea("WAREHOUSE");
+      }
     }
   };
 
@@ -65,7 +75,9 @@ export default function AreaSelectorModal({
                 style={[styles.optionButton, styles.optionPrimary]}
                 onPress={() => handleAreaSelect("BAR")}
               >
-                <Text style={styles.optionIcon}>🍸</Text>
+                <View style={styles.iconContainer}>
+                  <Ionicons name="wine" size={28} color="#6B8E23" />
+                </View>
                 <View style={styles.optionContent}>
                   <Text style={styles.optionTitle}>QUẦY BAR</Text>
                   <Text style={styles.optionSubtitle}>
@@ -78,7 +90,9 @@ export default function AreaSelectorModal({
                 style={styles.optionButton}
                 onPress={() => handleAreaSelect("WAREHOUSE")}
               >
-                <Text style={styles.optionIcon}>📦</Text>
+                <View style={styles.iconContainer}>
+                  <Ionicons name="cube" size={28} color="#B8B3A8" />
+                </View>
                 <View style={styles.optionContent}>
                   <Text style={styles.optionTitle}>KHO TỔNG</Text>
                   <Text style={styles.optionSubtitle}>
@@ -97,27 +111,35 @@ export default function AreaSelectorModal({
               <Text style={styles.subtitle}>Chọn chế độ kiểm kê:</Text>
 
               <Pressable
-                style={[styles.optionButton, styles.optionWarning]}
+                style={[styles.optionButton, styles.optionDanger]}
                 onPress={() => handleModeSelect("FULL")}
               >
-                <Text style={styles.optionIcon}>📋</Text>
+                <View style={styles.iconContainer}>
+                  <Ionicons name="alert-circle" size={28} color="#E63946" />
+                </View>
                 <View style={styles.optionContent}>
-                  <Text style={styles.optionTitle}>Kiểm Toàn Bộ</Text>
+                  <Text style={[styles.optionTitle, { color: "#E63946" }]}>
+                    Kiểm Toàn Bộ
+                  </Text>
                   <Text style={styles.optionSubtitle}>
-                    Chốt sổ cuối tháng/chu kỳ
+                    Chốt sổ cuối tháng - MÓN KHÔNG ĐẾM = 0
                   </Text>
                 </View>
               </Pressable>
 
               <Pressable
-                style={styles.optionButton}
+                style={[styles.optionButton, styles.optionCalm]}
                 onPress={() => handleModeSelect("SPOT")}
               >
-                <Text style={styles.optionIcon}>🔍</Text>
+                <View style={styles.iconContainer}>
+                  <Ionicons name="search" size={28} color="#3B82F6" />
+                </View>
                 <View style={styles.optionContent}>
-                  <Text style={styles.optionTitle}>Kiểm 1 Phần</Text>
+                  <Text style={[styles.optionTitle, { color: "#3B82F6" }]}>
+                    Kiểm 1 Phần
+                  </Text>
                   <Text style={styles.optionSubtitle}>
-                    Kiểm tra 1 vài món nghi ngờ
+                    Chỉ cập nhật món bạn đếm
                   </Text>
                 </View>
               </Pressable>
@@ -178,6 +200,23 @@ const styles = StyleSheet.create({
   },
   optionWarning: {
     borderColor: "#FFC857",
+  },
+  optionDanger: {
+    borderColor: "#E63946",
+    backgroundColor: "#E6394615",
+  },
+  optionCalm: {
+    borderColor: "#3B82F6",
+    backgroundColor: "#3B82F610",
+  },
+  iconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
   },
   optionIcon: {
     fontSize: 28,

@@ -55,7 +55,7 @@ interface DashboardScreenProps {
   onOpenInventory: (
     snapMode?: string,
     areaType?: StorageArea,
-    checkMode?: CheckMode
+    checkMode?: CheckMode,
   ) => void;
   onOpenPendingList: () => void;
   onOpenRecipes?: () => void;
@@ -106,7 +106,7 @@ export default function DashboardScreen({
   const subscription = useSubscription(
     profile?.tier,
     profile?.subscriptionExpiresAt,
-    profile?.businessCreatedAt
+    profile?.businessCreatedAt,
   );
 
   // Check for subscription notification on mount
@@ -176,7 +176,7 @@ export default function DashboardScreen({
 
       // 2. Pending sync items
       const pendingSync = await db.getFirstAsync<{ count: number }>(
-        "SELECT COUNT(*) as count FROM pending_sync_logs WHERE synced = 0"
+        "SELECT COUNT(*) as count FROM pending_sync_logs WHERE synced = 0",
       );
 
       if (pendingSync && pendingSync.count > 0) {
@@ -255,7 +255,7 @@ export default function DashboardScreen({
       } else {
         // Fallback to DB only if AuthContext is not ready yet
         const userProfile = await db.getFirstAsync<{ role: string }>(
-          "SELECT role FROM local_profiles ORDER BY created_at DESC LIMIT 1"
+          "SELECT role FROM local_profiles ORDER BY created_at DESC LIMIT 1",
         );
         isOwnerRole = userProfile?.role === "OWNER";
         console.log(
@@ -263,7 +263,7 @@ export default function DashboardScreen({
           isOwnerRole,
           "(Role:",
           userProfile?.role,
-          ")"
+          ")",
         );
       }
 
@@ -271,16 +271,16 @@ export default function DashboardScreen({
 
       // FIX: Migrate old logs with incorrect type values (one-time fix)
       await db.runAsync(
-        `UPDATE pending_sync_logs SET type = 'LENT' WHERE type = 'LOAN'`
+        `UPDATE pending_sync_logs SET type = 'LENT' WHERE type = 'LOAN'`,
       );
       await db.runAsync(
-        `UPDATE pending_sync_logs SET type = 'WASTE' WHERE type = 'MARKETING'`
+        `UPDATE pending_sync_logs SET type = 'WASTE' WHERE type = 'MARKETING'`,
       );
 
       // Check if today has any SALES type logs
       const salesLogs = await db.getAllAsync<any>(
         `SELECT id FROM pending_sync_logs WHERE type = 'SALES' AND date(created_at) = ?`,
-        [today]
+        [today],
       );
       setHasTodaySales(salesLogs.length > 0);
 
@@ -291,7 +291,7 @@ export default function DashboardScreen({
          LEFT JOIN local_ingredients li ON psl.ingredient_id = li.id
          WHERE psl.type = 'TRANSFER' AND date(psl.created_at) = ?
          ORDER BY psl.created_at DESC`,
-        [today]
+        [today],
       );
       setTodayTransfers(transfers);
 
@@ -317,27 +317,54 @@ export default function DashboardScreen({
       const allActivities = await db.getAllAsync<any>(
         `SELECT id, type, created_at, ai_parsed_json, ingredient_id, ingredient_name, 'pending' as source
          FROM (
-           -- 1. Local Pending (Not synced yet)
-           SELECT psl.id, psl.type, psl.created_at, psl.ai_parsed_json, psl.ingredient_id, li.name as ingredient_name
+          -- 1. Local Pending Logs (Both synced and unsynced) - Source of truth for local actions
+           SELECT psl.id, psl.type, psl.created_at, psl.ai_parsed_json, psl.ingredient_id, 
+                  li.name as ingredient_name, 
+                  COALESCE(psl.final_confirmed_quantity, psl.ai_parsed_quantity) as quantity
            FROM pending_sync_logs psl 
            LEFT JOIN local_ingredients li ON psl.ingredient_id = li.id
-           WHERE psl.synced = 0 
-             AND psl.type IN ('TRANSFER', 'WASTE', 'LENT', 'IMPORT', 'STOCK', 'STOCK_CHECK', 'AUDIT')
+           WHERE psl.type IN ('TRANSFER', 'WASTE', 'LENT', 'RETURN_FROM_LOAN', 'IMPORT', 'STOCK', 'STOCK_CHECK', 'AUDIT', 'SALES')
            
            UNION ALL
            
-           -- 2. Server History (Synced) - Limit to last 10 days per user request
-           SELECT log.id, log.type, log.created_at, log.ai_parsed_json, log.ingredient_id, li.name as ingredient_name
+           -- 2. Server History (Synced from others) - Exclude IDs already in pending_sync_logs
+           SELECT log.id, log.type, log.created_at, log.ai_parsed_json, log.ingredient_id, 
+                  li.name as ingredient_name,
+                  COALESCE(log.final_confirmed_quantity, log.ai_parsed_quantity) as quantity
            FROM local_inventory_logs log
            LEFT JOIN local_ingredients li ON log.ingredient_id = li.id
-           WHERE log.type IN ('TRANSFER', 'WASTE', 'LENT', 'IMPORT', 'STOCK', 'STOCK_CHECK', 'AUDIT')
+           WHERE log.type IN ('TRANSFER', 'WASTE', 'LENT', 'IMPORT', 'STOCK', 'STOCK_CHECK', 'AUDIT', 'SALES')
              AND log.created_at >= ?
+             AND log.id NOT IN (SELECT id FROM pending_sync_logs)
          )
          ORDER BY created_at DESC
          LIMIT 20`,
-        [retentionDateStr]
+        [retentionDateStr],
       );
-      setTodayActivity(allActivities);
+
+      // Post-process: Extract ingredient name from ai_parsed_json if ingredient_name is null
+      const processedActivities = allActivities.map((activity: any) => {
+        if (!activity.ingredient_name && activity.ai_parsed_json) {
+          try {
+            const parsed =
+              typeof activity.ai_parsed_json === "string"
+                ? JSON.parse(activity.ai_parsed_json)
+                : activity.ai_parsed_json;
+            const firstItem = parsed?.items?.[0];
+            if (firstItem?.ingredient_name) {
+              return {
+                ...activity,
+                ingredient_name: firstItem.ingredient_name,
+              };
+            }
+          } catch {
+            // Malformed JSON - ignore and keep ingredient_name as null
+          }
+        }
+        return activity;
+      });
+
+      setTodayActivity(processedActivities);
 
       // Load today's Quick Outs (WASTE/LENT) for dedicated widget
       // Note: LOAN maps to LENT, MARKETING maps to WASTE in database
@@ -348,7 +375,7 @@ export default function DashboardScreen({
          WHERE psl.type IN ('WASTE', 'LENT') 
            AND psl.created_at >= ? AND psl.created_at <= ?
          ORDER BY psl.created_at DESC`,
-        [todayStart.toISOString(), todayEnd.toISOString()]
+        [todayStart.toISOString(), todayEnd.toISOString()],
       );
       setTodayQuickOuts(quickOuts);
 
@@ -358,7 +385,7 @@ export default function DashboardScreen({
           `SELECT * FROM local_reminders 
            WHERE is_done = 0 AND date(remind_at) <= ?
            ORDER BY remind_at ASC`,
-          [today]
+          [today],
         );
         setPendingReminders(reminders);
       } catch {
@@ -382,7 +409,7 @@ export default function DashboardScreen({
       const ings = await InventoryService.getAll();
       const total = ings.reduce(
         (sum: number, i) => sum + (i.warehouse_qty + i.bar_qty) * i.unit_cost,
-        0
+        0,
       );
       setTotalValue(total);
       setIngredientCount(ings.length);
@@ -408,11 +435,11 @@ export default function DashboardScreen({
         `SELECT id, type, ai_parsed_json, created_at, location 
          FROM pending_sync_logs 
          ORDER BY created_at DESC 
-         LIMIT 10`
+         LIMIT 10`,
       );
       console.log(
         "[Dashboard] Local pending_sync_logs count:",
-        recentActivity.length
+        recentActivity.length,
       );
       setRecentLogs(
         recentActivity.map((log) => ({
@@ -422,7 +449,7 @@ export default function DashboardScreen({
           ai_parsed_json: log.ai_parsed_json,
           ingredient_name: null,
           quantity: null,
-        }))
+        })),
       );
 
       // Also load today's data for guards
@@ -449,42 +476,38 @@ export default function DashboardScreen({
     }
   }, [refreshKey, loadTodayData]);
 
-  // SALES → STOCK GUARD: Check if user has done Sales Snap today before Stock Snap
+  // SALES → STOCK GUARD: Now handled in AreaSelectorModal.onSelect for BAR area only
+  // This allows user to access WAREHOUSE stock check without needing sales data
   const handleStockSnapPress = () => {
-    if (!hasTodaySales) {
-      // Show blocking alert
-      Alert.alert(
-        "⚠️ Chưa Có Doanh Thu Hôm Nay",
-        "Bạn chưa nhập Doanh thu (Kết ca) hôm nay. Nếu kiểm kho ngay bây giờ, số liệu chênh lệch sẽ KHÔNG CHÍNH XÁC (vì chưa trừ hàng bán).\n\nBạn muốn làm gì?",
-        [
-          {
-            text: "📉 Nhập Doanh Thu Trước",
-            onPress: () => onOpenInventory("sales"),
-            style: "default",
-          },
-          {
-            text: "⚠️ Bỏ Qua (Chấp nhận sai số)",
-            onPress: () => {
-              if (isStandard) {
-                setCurrentSnapMode("stock");
-                setShowAreaModal(true);
-              } else {
-                onOpenInventory("stock");
-              }
-            },
-            style: "destructive",
-          },
-          {
-            text: "Hủy",
-            style: "cancel",
-          },
-        ]
-      );
+    if (isStandard) {
+      // STANDARD mode: Show area selector modal first
+      // Sales warning will be shown only when BAR area is selected (in onSelect callback)
+      setCurrentSnapMode("stock");
+      setShowAreaModal(true);
     } else {
-      // Has sales data, proceed normally
-      if (isStandard) {
-        setCurrentSnapMode("stock");
-        setShowAreaModal(true);
+      // LITE mode: Direct to stock check (no area selection needed)
+      // Still check for sales in non-STANDARD mode
+      if (!hasTodaySales) {
+        Alert.alert(
+          "⚠️ Chưa Có Doanh Thu Hôm Nay",
+          "Bạn chưa nhập Doanh thu (Kết ca) hôm nay. Nếu kiểm kho ngay bây giờ, số liệu chênh lệch sẽ KHÔNG CHÍNH XÁC (vì chưa trừ hàng bán).\n\nBạn muốn làm gì?",
+          [
+            {
+              text: "📉 Nhập Doanh Thu Trước",
+              onPress: () => onOpenInventory("sales"),
+              style: "default",
+            },
+            {
+              text: "⚠️ Bỏ Qua (Chấp nhận sai số)",
+              onPress: () => onOpenInventory("stock"),
+              style: "destructive",
+            },
+            {
+              text: "Hủy",
+              style: "cancel",
+            },
+          ],
+        );
       } else {
         onOpenInventory("stock");
       }
@@ -522,7 +545,7 @@ export default function DashboardScreen({
       const ings = await InventoryService.getAll();
       const total = ings.reduce(
         (sum: number, i) => sum + (i.warehouse_qty + i.bar_qty) * i.unit_cost,
-        0
+        0,
       );
       setTotalValue(total);
       setIngredientCount(ings.length);
@@ -535,7 +558,7 @@ export default function DashboardScreen({
       console.error("Refresh error:", err);
       Alert.alert(
         "Lỗi cập nhật",
-        "Không thể đồng bộ dữ liệu. Vui lòng thử lại."
+        "Không thể đồng bộ dữ liệu. Vui lòng thử lại.",
       );
     } finally {
       setRefreshing(false);
@@ -567,8 +590,8 @@ export default function DashboardScreen({
               log.type === "IMPORT"
                 ? "#E07A2F"
                 : log.type === "WASTE"
-                ? "#EF4444"
-                : "#94A3B8",
+                  ? "#EF4444"
+                  : "#94A3B8",
             fontSize: 12,
             fontWeight: "600",
           }}
@@ -671,17 +694,6 @@ export default function DashboardScreen({
             Dashboard
           </Text>
           {/* Sync Status */}
-          <Pressable
-            onPress={onRefresh}
-            style={{ marginLeft: 16, padding: 8 }}
-            disabled={refreshing}
-          >
-            <Ionicons
-              name="refresh-outline"
-              size={20}
-              color={refreshing ? "#64748B" : "#94A3B8"}
-            />
-          </Pressable>
         </View>
 
         {/* Right Actions Group */}
@@ -928,7 +940,7 @@ export default function DashboardScreen({
                     const db = await getDB();
                     await db.runAsync(
                       "UPDATE local_reminders SET is_done = 1 WHERE id = ?",
-                      [r.id]
+                      [r.id],
                     );
                     loadTodayData();
                   }}
@@ -1373,8 +1385,57 @@ export default function DashboardScreen({
         <AreaSelectorModal
           visible={showAreaModal}
           onClose={() => setShowAreaModal(false)}
+          hasTodaySales={hasTodaySales}
           onSelect={(area, mode) => {
-            onOpenInventory(currentSnapMode, area, mode);
+            // For BAR area: require SALES snap first (same logic as handleStockSnapPress)
+            if (area === "BAR" && !hasTodaySales) {
+              Alert.alert(
+                "⚠️ Chưa Có Doanh Thu Hôm Nay",
+                "Bạn chưa nhập Doanh thu (Kết ca) hôm nay. Nếu kiểm kho Bar ngay bây giờ, số liệu chênh lệch sẽ KHÔNG CHÍNH XÁC.\n\nBạn muốn làm gì?",
+                [
+                  {
+                    text: "📉 Nhập Doanh Thu Trước",
+                    onPress: () => {
+                      setShowAreaModal(false);
+                      onOpenInventory("sales");
+                    },
+                    style: "default",
+                  },
+                  {
+                    text: "⚠️ Bỏ Qua (Chấp nhận sai số)",
+                    onPress: () => onOpenInventory(currentSnapMode, area, mode),
+                    style: "destructive",
+                  },
+                  {
+                    text: "Hủy",
+                    style: "cancel",
+                  },
+                ],
+              );
+              return;
+            }
+
+            // Show Freeze Alert for FULL_COUNT mode (Warehouse only)
+            if (mode === "FULL") {
+              Alert.alert(
+                "⚠️ ĐÓNG BĂNG KHO",
+                "Hãy chuyển HẾT hàng cần thiết qua Bar NGAY BÂY GIỜ.\n\nSau khi bắt đầu kiểm, bạn KHÔNG ĐƯỢC lấy hàng từ Kho Tổng nữa.\n\n⚠️ LƯU Ý: Món nào KHÔNG ĐẾM sẽ bị set về 0!",
+                [
+                  {
+                    text: "Hủy",
+                    style: "cancel",
+                  },
+                  {
+                    text: "Đã hiểu, Tiếp tục",
+                    style: "destructive",
+                    onPress: () => onOpenInventory(currentSnapMode, area, mode),
+                  },
+                ],
+              );
+            } else {
+              // SPOT check or BAR (already passed hasTodaySales check) - proceed normally
+              onOpenInventory(currentSnapMode, area, mode);
+            }
           }}
         />
 
@@ -1430,6 +1491,8 @@ export default function DashboardScreen({
     // Parse reason from ai_parsed_json for accurate icon display (MARKETING vs WASTE)
     let displayType = activity.type;
     let reasonLabel = "";
+    let checkType = ""; // For STOCK: FULL, SPOT, BAR
+    let location = ""; // For STOCK: WAREHOUSE, BAR
     try {
       const parsed =
         typeof activity.ai_parsed_json === "string"
@@ -1437,6 +1500,9 @@ export default function DashboardScreen({
           : activity.ai_parsed_json;
       if (parsed?.reason) displayType = parsed.reason;
       if (parsed?.reason_label) reasonLabel = parsed.reason_label;
+      // Extract STOCK-specific fields
+      if (parsed?.check_type) checkType = parsed.check_type;
+      if (parsed?.location) location = parsed.location;
     } catch {}
 
     // Activity type config - using Ionicons per UI/UX guidelines (no emojis)
@@ -1460,11 +1526,36 @@ export default function DashboardScreen({
       IMPORT: {
         icon: "arrow-down-circle",
         color: "#E07A2F",
-        label: "Trả hàng",
+        label: "Nhập hàng",
       },
+      SALES: {
+        icon: "cart",
+        color: "#22C55E",
+        label: "Kết ca",
+      },
+      RETURN_FROM_LOAN: {
+        icon: "arrow-undo-circle",
+        color: "#F59E0B",
+        label: "Nhận lại hàng",
+      },
+      STOCK: { icon: "clipboard", color: "#22C55E", label: "Kiểm kho" },
       STOCK_CHECK: { icon: "clipboard", color: "#3B82F6", label: "Kiểm kho" },
       AUDIT: { icon: "search", color: "#3B82F6", label: "Kiểm kê" },
     };
+
+    // Generate detailed label for STOCK type
+    let stockDetailLabel = "";
+    if (activity.type === "STOCK" || activity.type === "STOCK_CHECK") {
+      if (location === "BAR" || checkType === "BAR") {
+        stockDetailLabel = "Kiểm quầy bar";
+      } else if (checkType === "FULL" || checkType === "STORAGE") {
+        stockDetailLabel = "Kiểm kho toàn phần";
+      } else if (checkType === "SPOT") {
+        stockDetailLabel = "Kiểm kho 1 phần";
+      } else {
+        stockDetailLabel = "Kiểm kho";
+      }
+    }
 
     const config = typeConfig[displayType] ||
       typeConfig[activity.type] || {
@@ -1472,8 +1563,8 @@ export default function DashboardScreen({
         color: "#94A3B8",
         label: activity.type,
       };
-    // Override label with reasonLabel if available
-    const finalLabel = reasonLabel || config.label;
+    // Override label with reasonLabel or stockDetailLabel if available
+    const finalLabel = stockDetailLabel || reasonLabel || config.label;
     // Parse quantity info
     let quantityText = "";
     if (activity.ai_parsed_json) {
@@ -1482,11 +1573,65 @@ export default function DashboardScreen({
           typeof activity.ai_parsed_json === "string"
             ? JSON.parse(activity.ai_parsed_json)
             : activity.ai_parsed_json;
-        const items = parsed?.items || [];
-        if (items.length > 0) {
-          quantityText = items
-            .map((i: any) => `${i.ingredient_name || i.name}: ${i.quantity}`)
-            .join(", ");
+
+        // Special format for SALES: show summary instead of items
+        if (activity.type === "SALES") {
+          const items = parsed?.items || parsed?.items_sold || [];
+          const totalRevenue = parsed?.total_revenue || 0;
+          const itemCount = items.reduce(
+            (sum: number, i: any) => sum + (i.quantity || i.quantity_sold || 1),
+            0,
+          );
+
+          if (totalRevenue > 0) {
+            quantityText = `${itemCount} món, ${formatCurrency(totalRevenue)}`;
+          } else if (items.length > 0) {
+            quantityText = `${itemCount} món`;
+          }
+        } else if (
+          activity.type === "STOCK" ||
+          activity.type === "STOCK_CHECK"
+        ) {
+          // Special format for STOCK: show counts by type (nguyên liệu vs vật dụng)
+          const items = parsed?.items || [];
+          if (items.length > 0) {
+            // Count ingredients (type !== 'SUPPLY') vs supplies (type === 'SUPPLY')
+            let ingredientCount = 0;
+            let supplyCount = 0;
+            for (const i of items) {
+              if (i.type === "SUPPLY" || i.ingredient_type === "SUPPLY") {
+                supplyCount++;
+              } else {
+                ingredientCount++;
+              }
+            }
+            const parts: string[] = [];
+            if (ingredientCount > 0)
+              parts.push(`${ingredientCount} nguyên liệu`);
+            if (supplyCount > 0) parts.push(`${supplyCount} vật dụng`);
+            quantityText = parts.join(", ") || `${items.length} mục`;
+          }
+        } else {
+          // Normal format for other types
+          const items = parsed?.items || [];
+          if (items.length > 0) {
+            quantityText = items
+              .map((i: any) => {
+                // Try multiple fields for ingredient name
+                const name =
+                  i.ingredient_name ||
+                  i.name ||
+                  i.rawName ||
+                  i.original_name ||
+                  "";
+                const qty = i.quantity ?? i.stock_qty ?? "";
+                const unit = i.unit || "";
+                if (!name && !qty) return null;
+                return `${name || "—"}: ${qty}${unit ? " " + unit : ""}`;
+              })
+              .filter(Boolean)
+              .join(", ");
+          }
         }
       } catch {}
     }

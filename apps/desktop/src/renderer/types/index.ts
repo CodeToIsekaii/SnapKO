@@ -55,6 +55,15 @@ export interface COGSReport {
   losses: Array<{ name: string; value: number; color: string }>;
 }
 
+export interface ActivityLogItem {
+  ingredient_name?: string;
+  name?: string;
+  rawName?: string;
+  original_name?: string;
+  quantity?: number;
+  unit?: string;
+}
+
 export interface ActivityLog {
   id: string;
   created_at: string;
@@ -62,4 +71,5 @@ export interface ActivityLog {
   action: string;
   details: string;
   quantity_change?: number;
+  items?: ActivityLogItem[]; // For expandable dropdown
 }

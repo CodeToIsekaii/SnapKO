@@ -31,7 +31,7 @@ function sleep(ms: number): Promise<void> {
 export async function fetchWithRetry(
   url: string,
   options: RequestInit,
-  retryOptions?: RetryOptions
+  retryOptions?: RetryOptions,
 ): Promise<Response> {
   const opts = { ...DEFAULT_OPTIONS, ...retryOptions };
   let lastError: Error | null = null;
@@ -59,7 +59,7 @@ export async function fetchWithRetry(
           console.log(
             `[Retry] Attempt ${attempt + 1}/${opts.maxRetries} failed with ${
               response.status
-            }. Retrying in ${delay}ms...`
+            }. Retrying in ${delay}ms...`,
           );
           await sleep(delay);
           delay = Math.min(delay * opts.backoffMultiplier, opts.maxDelayMs);
@@ -75,7 +75,7 @@ export async function fetchWithRetry(
         console.log(
           `[Retry] Attempt ${attempt + 1}/${
             opts.maxRetries
-          } failed with error: ${lastError.message}. Retrying in ${delay}ms...`
+          } failed with error: ${lastError.message}. Retrying in ${delay}ms...`,
         );
         await sleep(delay);
         delay = Math.min(delay * opts.backoffMultiplier, opts.maxDelayMs);
@@ -93,7 +93,7 @@ export function callGeminiWithRetry(
   apiKey: string,
   model: string,
   contents: unknown[],
-  generationConfig?: Record<string, unknown>
+  generationConfig?: Record<string, unknown>,
 ): Promise<Response> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
@@ -104,7 +104,7 @@ export function callGeminiWithRetry(
       contents,
       generationConfig: generationConfig || {
         temperature: 0.1,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 8192, // Increased for multi-image support
         responseMimeType: "application/json",
       },
     }),

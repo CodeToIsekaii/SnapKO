@@ -16,6 +16,7 @@ import {
   RefreshControl,
 } from "react-native";
 import * as SQLite from "expo-sqlite";
+import { getDB } from "../db";
 import * as Crypto from "expo-crypto";
 
 interface LocalIngredient {
@@ -69,11 +70,11 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
     try {
       setLoading(true);
 
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
 
       // Load ingredients
       const ings = await db.getAllAsync<LocalIngredient>(
-        "SELECT id, name, base_unit, unit_cost FROM local_ingredients WHERE archived = 0"
+        "SELECT id, name, base_unit, unit_cost FROM local_ingredients WHERE archived = 0",
       );
       setIngredients(ings);
 
@@ -186,15 +187,15 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
   const updateIngredientQty = (ingredientId: string, qty: number) => {
     setSelectedIngredients((prev) =>
       prev.map((i) =>
-        i.ingredient_id === ingredientId ? { ...i, quantity: qty } : i
-      )
+        i.ingredient_id === ingredientId ? { ...i, quantity: qty } : i,
+      ),
     );
   };
 
   // Remove ingredient
   const removeIngredient = (ingredientId: string) => {
     setSelectedIngredients((prev) =>
-      prev.filter((i) => i.ingredient_id !== ingredientId)
+      prev.filter((i) => i.ingredient_id !== ingredientId),
     );
   };
 
@@ -206,7 +207,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
     }
 
     try {
-      const db = await SQLite.openDatabaseAsync("snapko.db");
+      const db = await getDB();
       const id = editingRecipe?.id ?? Crypto.randomUUID();
       const price = parseInt(recipePrice) || 0;
 
@@ -214,13 +215,13 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
       await db.runAsync(
         `INSERT OR REPLACE INTO local_recipes (id, name, price, category, created_at)
          VALUES (?, ?, ?, ?, datetime('now'))`,
-        [id, recipeName.trim(), price, recipeCategory.trim()]
+        [id, recipeName.trim(), price, recipeCategory.trim()],
       );
 
       // Delete old ingredients
       await db.runAsync(
         "DELETE FROM local_recipe_ingredients WHERE recipe_id = ?",
-        [id]
+        [id],
       );
 
       // Insert new ingredients
@@ -228,7 +229,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
         await db.runAsync(
           `INSERT INTO local_recipe_ingredients (id, recipe_id, ingredient_id, quantity, unit)
            VALUES (?, ?, ?, ?, ?)`,
-          [Crypto.randomUUID(), id, ing.ingredient_id, ing.quantity, ing.unit]
+          [Crypto.randomUUID(), id, ing.ingredient_id, ing.quantity, ing.unit],
         );
       }
 
@@ -247,11 +248,11 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
         text: "Xóa",
         style: "destructive",
         onPress: async () => {
-          const db = await SQLite.openDatabaseAsync("snapko.db");
+          const db = await getDB();
           await db.runAsync("DELETE FROM local_recipes WHERE id = ?", [id]);
           await db.runAsync(
             "DELETE FROM local_recipe_ingredients WHERE recipe_id = ?",
-            [id]
+            [id],
           );
           loadData();
         },
@@ -347,8 +348,8 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
                       margin >= 50
                         ? "#55A630"
                         : margin >= 30
-                        ? "#F59E0B"
-                        : "#EF4444",
+                          ? "#F59E0B"
+                          : "#EF4444",
                     fontSize: 12,
                     fontWeight: "600",
                   }}
@@ -574,7 +575,7 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
             <FlatList
               data={ingredients.filter(
                 (i) =>
-                  !selectedIngredients.find((s) => s.ingredient_id === i.id)
+                  !selectedIngredients.find((s) => s.ingredient_id === i.id),
               )}
               keyExtractor={(i) => i.id}
               renderItem={({ item }) => (

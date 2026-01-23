@@ -60,8 +60,14 @@ export const PendingLendsWidget = ({
     };
   }, [businessId, refreshKey]);
 
+  // Pull from cloud then load local data
   const loadLends = async () => {
     try {
+      // Pull from Supabase first (cross-device sync)
+      const { pullPendingLends } = await import("../sync/syncEngine");
+      await pullPendingLends(businessId);
+
+      // Then load from local SQLite
       const data = await getPendingLends(businessId);
       setLends(data);
     } catch (err) {
@@ -119,6 +125,7 @@ export const PendingLendsWidget = ({
             items: [
               {
                 ingredient_id: returningItem.ingredient_id,
+                ingredient_name: returningItem.ingredient_name,
                 quantity: returningItem.quantity,
                 unit: returningItem.unit,
               },
@@ -137,8 +144,11 @@ export const PendingLendsWidget = ({
 
       // 4. Trigger Sync (to push update to Cloud)
       try {
-        const { syncPendingLends } = await import("../sync/syncEngine");
+        const { syncPendingLends, syncPendingLogs } = await import(
+          "../sync/syncEngine"
+        );
         await syncPendingLends();
+        await syncPendingLogs(db);
       } catch (syncErr) {
         console.warn("[Widget] Sync after return failed:", syncErr);
       }

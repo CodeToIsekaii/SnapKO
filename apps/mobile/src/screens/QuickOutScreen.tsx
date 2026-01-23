@@ -245,14 +245,21 @@ export default function QuickOutScreen({
             related_log_id: id,
           });
         }
+      }
 
-        // Trigger sync immediately
-        try {
-          const { syncPendingLends } = await import("../sync/syncEngine");
+      // Trigger sync immediately for all reasons
+      try {
+        const { syncPendingLends, syncPendingLogs } = await import(
+          "../sync/syncEngine"
+        );
+        // Always sync logs
+        await syncPendingLogs(db);
+        // If Loan, also sync lends
+        if (reason === "LOAN") {
           await syncPendingLends();
-        } catch (syncErr) {
-          console.warn("[QuickOut] Sync after lend failed:", syncErr);
         }
+      } catch (syncErr) {
+        console.warn("[QuickOut] Sync failed:", syncErr);
       }
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
