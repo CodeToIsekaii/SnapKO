@@ -94,21 +94,17 @@ export default function StaffManagementScreen({
 
       if (!token) throw new Error("No session");
 
-      const response = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/admin-reset-password`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: Env.SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            staffId: selectedStaff.id,
-            newPassword: newPassword,
-          }),
-        }
-      );
+      const response = await fetch(`${Env.BACKEND_URL}/admin/reset-password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          staffId: selectedStaff.id,
+          newPassword: newPassword,
+        }),
+      });
 
       const result = await response.json();
 
@@ -119,7 +115,7 @@ export default function StaffManagementScreen({
       Alert.alert(
         "Thành công",
         `Đã đổi mật khẩu cho ${selectedStaff.full_name}`,
-        [{ text: "OK", onPress: () => setResetModalVisible(false) }]
+        [{ text: "OK", onPress: () => setResetModalVisible(false) }],
       );
       setNewPassword("");
       setConfirmPassword("");

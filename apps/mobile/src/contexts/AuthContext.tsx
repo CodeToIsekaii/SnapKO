@@ -90,7 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             subscription_expires_at,
             created_at
           )
-        `
+        `,
         )
         .eq("id", userId)
         .maybeSingle();
@@ -112,7 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         businessCreatedAt: businessData?.created_at || null,
       };
     },
-    []
+    [],
   );
 
   // Initialize auth state on mount
@@ -137,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (profile.status === "REJECTED" || profile.status === "INACTIVE") {
             // User was rejected/deactivated - sign them out
             console.log(
-              "[AuthContext] Profile is REJECTED/INACTIVE, signing out"
+              "[AuthContext] Profile is REJECTED/INACTIVE, signing out",
             );
             await supabase.auth.signOut();
             setAuthState({ status: "unauthenticated" });
@@ -147,7 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (profile.status === "PENDING") {
             // Staff still pending - show pending screen
             console.log(
-              "[AuthContext] Profile is PENDING, showing pending screen"
+              "[AuthContext] Profile is PENDING, showing pending screen",
             );
             await SecureStore.setItemAsync("pending_profile_id", profile.id);
             setAuthState({ status: "pending", profileId: profile.id });
@@ -202,7 +202,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }
         }
-      }
+      },
     );
 
     return () => {
@@ -244,7 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setAuthState({ status: "unauthenticated" });
             // Alert will be shown after redirect to login
           }
-        }
+        },
       )
       .subscribe((status) => {
         console.log("[AuthContext] Deactivation listener status:", status);
@@ -281,7 +281,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
       });
     },
-    [fetchProfile]
+    [fetchProfile],
   );
 
   // Sign up new Owner
@@ -300,11 +300,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const token = (await supabase.auth.getSession()).data.session
         ?.access_token;
       if (token) {
-        await fetch(`${Env.SUPABASE_URL}/functions/v1/invite-create`, {
+        await fetch(`${Env.BACKEND_URL}/invite/create`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            apikey: Env.SUPABASE_ANON_KEY,
             Authorization: `Bearer ${token}`,
           },
         });
@@ -320,7 +319,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       }
     },
-    [fetchProfile]
+    [fetchProfile],
   );
 
   // Sign out
@@ -378,13 +377,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setAuthState((prev) =>
             prev.status === "authenticated" || prev.status === "needs_setup"
               ? { status: "needs_setup", user: prev.user, profile }
-              : prev
+              : prev,
           );
         } else {
           setAuthState((prev) =>
             prev.status === "authenticated" || prev.status === "needs_setup"
               ? { status: "authenticated", user: prev.user, profile }
-              : prev
+              : prev,
           );
         }
       }
@@ -404,7 +403,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (profile && profile.status === "ACTIVE") {
           // Staff has been approved! Transition to authenticated
           console.log(
-            "[AuthContext] Staff approved! Transitioning to authenticated"
+            "[AuthContext] Staff approved! Transitioning to authenticated",
           );
           await SecureStore.deleteItemAsync("pending_profile_id");
           setAuthState({
@@ -446,7 +445,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Refresh profile to update state to authenticated
       await refreshProfile();
     },
-    [authState.status, refreshProfile]
+    [authState.status, refreshProfile],
   );
 
   // Staff pending flow

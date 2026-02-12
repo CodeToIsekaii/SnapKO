@@ -573,11 +573,10 @@ export async function syncPendingLogs(
     }
 
     // Step 4: Call sync-up API with user's access token
-    const response = await fetch(`${Env.SUPABASE_URL}/functions/v1/sync-up`, {
+    const response = await fetch(`${Env.BACKEND_URL}/sync/up`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: Env.SUPABASE_ANON_KEY,
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ logs: logsForSync }),

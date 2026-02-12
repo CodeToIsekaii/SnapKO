@@ -20,6 +20,7 @@ import { File } from "expo-file-system";
 import * as SQLite from "expo-sqlite";
 import { getDB } from "../db";
 import * as Haptics from "expo-haptics";
+import { supabase } from "../lib/supabase";
 import { Env } from "../env";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -237,21 +238,23 @@ export default function RecipeScanScreen({
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-      const response = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/ai-parse-recipe`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${Env.SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({
-            imageBase64: base64,
-            mimeType: "image/jpeg",
-          }),
-          signal: controller.signal,
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const response = await fetch(`${Env.BACKEND_URL}/ai/parse-recipe`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
-      );
+        body: JSON.stringify({
+          imageBase64: base64,
+          mimeType: "image/jpeg",
+        }),
+        signal: controller.signal,
+      });
 
       clearTimeout(timeoutId);
 

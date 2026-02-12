@@ -29,6 +29,7 @@ const schema = z.object({
   VITE_SUPABASE_ANON_KEY: z
     .string()
     .min(1, "VITE_SUPABASE_ANON_KEY is required"),
+  VITE_BACKEND_URL: z.string().url("VITE_BACKEND_URL must be a valid URL"),
 });
 
 // Get env vars from appropriate source
@@ -36,10 +37,12 @@ const envSource = isMainProcess
   ? {
       VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
       VITE_SUPABASE_ANON_KEY: process.env.VITE_SUPABASE_ANON_KEY,
+      VITE_BACKEND_URL: process.env.VITE_BACKEND_URL,
     }
   : {
       VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
       VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      VITE_BACKEND_URL: import.meta.env.VITE_BACKEND_URL,
     };
 
 // Parse and validate env vars at startup
@@ -50,6 +53,7 @@ if (!_env.success) {
   console.error("Check your .env file has these variables:");
   console.error("  VITE_SUPABASE_URL=https://your-project.supabase.co");
   console.error("  VITE_SUPABASE_ANON_KEY=your-anon-key");
+  console.error("  VITE_BACKEND_URL=http://localhost:5000");
   throw new Error("Invalid environment variables - check console for details");
 }
 

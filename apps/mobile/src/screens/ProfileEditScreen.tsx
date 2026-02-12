@@ -123,22 +123,18 @@ export default function ProfileEditScreen({
       }
 
       // Update profile via Edge Function
-      const response = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/update-profile`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: Env.SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            fullName: formData.fullName.trim(),
-            businessName: isOwner ? formData.businessName.trim() : undefined,
-            phoneNumber: formData.phoneNumber.trim() || null,
-          }),
-        }
-      );
+      const response = await fetch(`${Env.BACKEND_URL}/user/update-profile`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          fullName: formData.fullName.trim(),
+          businessName: isOwner ? formData.businessName.trim() : undefined,
+          phoneNumber: formData.phoneNumber.trim() || null,
+        }),
+      });
 
       const result = await response.json();
 

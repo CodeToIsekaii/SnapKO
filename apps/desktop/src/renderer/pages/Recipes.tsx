@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { Env } from "../../env";
 import { COLORS } from "../styles/theme";
 import GuideModal from "../components/GuideModal";
 import {
@@ -120,14 +121,15 @@ export default function RecipesPage() {
           reader.readAsDataURL(file);
         });
 
-        // Call Edge Function
+        // Call NestJS Backend
+        const token = await (window as any).electronAPI?.getAccessToken?.();
         const response = await fetch(
-          "https://kxeervlkzyitlbksbfvp.supabase.co/functions/v1/ai-parse-recipe",
+          `${Env.VITE_BACKEND_URL}/ai/parse-recipe`,
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              apikey: (window as any).electronAPI?.getSupabaseKey?.() || "",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
             },
             body: JSON.stringify({ imageBase64: base64 }),
           },

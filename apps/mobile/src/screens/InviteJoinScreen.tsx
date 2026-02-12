@@ -99,19 +99,14 @@ export default function InviteJoinScreen({
     setError(null);
 
     try {
-      // Call the new auth-join-staff Edge Function (creates shadow account + returns session)
-      const response = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/auth-join-staff`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: Env.SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${Env.SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify(data),
-        }
-      );
+      const response = await fetch(`${Env.BACKEND_URL}/staff/join`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${Env.SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify(data),
+      });
 
       const result = await response.json();
 

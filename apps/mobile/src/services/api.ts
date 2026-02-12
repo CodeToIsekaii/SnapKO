@@ -1,5 +1,6 @@
 /**
- * Mobile Services - API Client for Edge Functions
+ * Mobile Services - API Client for NestJS Backend
+ * Migrated from Edge Functions
  */
 
 import { Env } from "../env";
@@ -11,24 +12,30 @@ interface ApiOptions {
 
 async function callEdgeFunction<T>(
   functionName: string,
-  options: ApiOptions = {}
+  options: ApiOptions = {},
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    apikey: Env.SUPABASE_ANON_KEY,
+    // apikey: Env.SUPABASE_ANON_KEY, // Not needed for NestJS
     Authorization: options.auth
       ? `Bearer ${options.auth}`
-      : `Bearer ${Env.SUPABASE_ANON_KEY}`,
+      : `Bearer ${Env.SUPABASE_ANON_KEY}`, // Fallback if needed, or remove if NestJS doesn't use anon key
   };
 
-  const response = await fetch(
-    `${Env.SUPABASE_URL}/functions/v1/${functionName}`,
-    {
-      method: "POST",
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    }
-  );
+  // Map Edge Function names to NestJS endpoints
+  const endpointMap: Record<string, string> = {
+    "invite-join": "invite/join",
+    // Add others if needed
+  };
+
+  const route = endpointMap[functionName] || functionName;
+  const url = `${Env.BACKEND_URL}/${route}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -40,7 +47,7 @@ async function callEdgeFunction<T>(
 
 // Invite APIs
 export async function inviteCreate(
-  auth: string
+  auth: string,
 ): Promise<{ inviteCode: string }> {
   return callEdgeFunction("invite-create", { auth });
 }
@@ -56,7 +63,7 @@ export async function inviteJoin(input: {
 export async function inviteApprove(
   auth: string,
   profileId: string,
-  approve: boolean
+  approve: boolean,
 ): Promise<{ success: true; activated: boolean }> {
   return callEdgeFunction("invite-approve", {
     auth,
@@ -95,7 +102,7 @@ export async function aiParseMenu(input: {
 // Sync API
 export async function syncUp(
   auth: string,
-  logs: Array<Record<string, unknown>>
+  logs: Array<Record<string, unknown>>,
 ): Promise<{
   synced: number;
   total: number;

@@ -84,14 +84,14 @@ export default function SettingsScreen() {
     "authState:",
     authState.status,
     "role:",
-    authState.status === "authenticated" ? authState.profile?.role : "N/A"
+    authState.status === "authenticated" ? authState.profile?.role : "N/A",
   );
 
   // Load profile on screen focus
   useFocusEffect(
     useCallback(() => {
       loadProfileAndConfig();
-    }, [])
+    }, []),
   );
 
   const loadProfileAndConfig = async () => {
@@ -99,7 +99,7 @@ export default function SettingsScreen() {
       setLoading(true);
       const db = await getDB();
       const localUser = await db.getFirstAsync<LocalProfile>(
-        "SELECT * FROM local_profiles LIMIT 1"
+        "SELECT * FROM local_profiles LIMIT 1",
       );
 
       if (localUser) {
@@ -126,13 +126,13 @@ export default function SettingsScreen() {
       "[Settings] handleToggleModel called, business_id:",
       profile?.business_id,
       "profile:",
-      profile?.id
+      profile?.id,
     );
 
     if (!profile?.business_id) {
       Alert.alert(
         "Lỗi",
-        "Không tìm thấy thông tin cửa hàng. Vui lòng đăng xuất và đăng nhập lại."
+        "Không tìm thấy thông tin cửa hàng. Vui lòng đăng xuất và đăng nhập lại.",
       );
       return;
     }
@@ -169,7 +169,7 @@ export default function SettingsScreen() {
       const db = await getDB();
       await db.runAsync(
         "UPDATE local_profiles SET inventory_model = ? WHERE id = ?",
-        [newModel, profile.id]
+        [newModel, profile.id],
       );
 
       // 4. Show success message
@@ -178,7 +178,7 @@ export default function SettingsScreen() {
         `Đã đổi sang ${
           newModel === "SIMPLE" ? "Kho Đơn" : "Kho Kép"
         }.\n\nTất cả thiết bị sẽ tự đồng bộ sau vài giây.`,
-        [{ text: "OK" }]
+        [{ text: "OK" }],
       );
     } catch (err: any) {
       console.error("[Settings] Toggle model error:", err);
@@ -226,7 +226,7 @@ export default function SettingsScreen() {
           style: "destructive",
           onPress: confirmDeleteAccount,
         },
-      ]
+      ],
     );
   };
 
@@ -243,17 +243,13 @@ export default function SettingsScreen() {
         return;
       }
 
-      const response = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/user-delete`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: Env.SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+      const response = await fetch(`${Env.BACKEND_URL}/user/delete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
       const result = await response.json();
 
@@ -266,7 +262,7 @@ export default function SettingsScreen() {
         Alert.alert(
           "Đã yêu cầu xóa tài khoản",
           result.message || "Dữ liệu sẽ bị xóa hoàn toàn sau 30 ngày.",
-          [{ text: "OK", onPress: () => router.replace("/(auth)/login") }]
+          [{ text: "OK", onPress: () => router.replace("/(auth)/login") }],
         );
       } else {
         Alert.alert("Lỗi", result.error || "Không thể xóa tài khoản");

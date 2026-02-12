@@ -32,7 +32,7 @@ export default function PricingPage() {
   const [user, setUser] = useState<User | null>(null);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(
-    null
+    null,
   );
 
   const [isLoading, setIsLoading] = useState(true);
@@ -65,7 +65,7 @@ export default function PricingPage() {
       const { data } = await supabase.auth.getSession();
       console.log(
         "PricingPage: Session result:",
-        data.session ? "Found" : "Null"
+        data.session ? "Found" : "Null",
       );
 
       if (!data.session) {
@@ -117,12 +117,11 @@ export default function PricingPage() {
       const origin = window.location.origin;
 
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-payos-link`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/payment/create-link`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
@@ -132,7 +131,7 @@ export default function PricingPage() {
             returnUrl: `${origin}/pricing?status=success`, // Stay on pricing page for success msg
             cancelUrl: `${origin}/pricing?status=cancelled`,
           }),
-        }
+        },
       );
 
       const data = await res.json();

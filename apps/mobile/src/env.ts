@@ -15,6 +15,7 @@ const schema = z.object({
     .string()
     .min(1, "EXPO_PUBLIC_SUPABASE_ANON_KEY is required"),
   EAS_PROJECT_ID: z.string().optional(),
+  BACKEND_URL: z.string().url("EXPO_PUBLIC_BACKEND_URL must be a valid URL"),
 });
 
 // Parse and validate env vars at startup
@@ -22,6 +23,7 @@ const _env = schema.safeParse({
   SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL,
   SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
   EAS_PROJECT_ID: process.env.EXPO_PUBLIC_EAS_PROJECT_ID,
+  BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
 });
 
 if (!_env.success) {
@@ -30,9 +32,10 @@ if (!_env.success) {
   if (__DEV__) {
     console.error("Check your .env file has these variables:");
     console.error(
-      "  EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co"
+      "  EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co",
     );
     console.error("  EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key");
+    console.error("  EXPO_PUBLIC_BACKEND_URL=http://your-ip:3000");
   }
   throw new Error("Invalid environment variables - check console for details");
 }

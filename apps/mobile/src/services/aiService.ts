@@ -1,5 +1,6 @@
 /**
- * AI Service - Wrapper for Edge Functions
+ * AI Service - Wrapper for NestJS AI Module
+ * Migrated from Edge Functions
  * Per .antigravityrules: Uses expo-image-manipulator for compression
  *
  * Flow:
@@ -128,7 +129,7 @@ class AIService {
       {
         compress: IMAGE_CONFIG.quality,
         format: IMAGE_CONFIG.format,
-      }
+      },
     );
 
     console.log(`[AIService] Compressed: ${uri} -> ${result.uri}`);
@@ -149,9 +150,20 @@ class AIService {
    */
   private async callEdgeFunction<T>(
     functionName: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
   ): Promise<T> {
-    const url = `${SUPABASE_URL}/functions/v1/${functionName}`;
+    // Map function names to NestJS routes
+    const routeMap: Record<string, string> = {
+      "ai-parse-invoice": "ai/parse-invoice",
+      "ai-parse-handwriting": "ai/parse-handwriting",
+      "ai-parse-menu": "ai/parse-menu",
+      "ai-parse-recipe": "ai/parse-recipe",
+      "ai-parse-sales": "ai/parse-sales",
+      "fraud-detection": "fraud/detect",
+    };
+
+    const route = routeMap[functionName] || functionName;
+    const url = `${Env.BACKEND_URL}/${route}`;
 
     console.log(`[AIService] Calling ${functionName}...`);
 
@@ -185,7 +197,7 @@ class AIService {
    */
   async parseInvoice(
     imageUri: string,
-    businessId: string
+    businessId: string,
   ): Promise<ParsedInvoiceResponse> {
     try {
       // 1. Compress image
@@ -200,7 +212,7 @@ class AIService {
         {
           image_base64: base64,
           business_id: businessId,
-        }
+        },
       );
 
       return result;
@@ -221,7 +233,7 @@ class AIService {
    */
   async parseSalesReport(
     imageUri: string,
-    businessId: string
+    businessId: string,
   ): Promise<ParsedSalesResponse> {
     try {
       const compressedUri = await this.compressImage(imageUri);
@@ -232,7 +244,7 @@ class AIService {
         {
           image_base64: base64,
           business_id: businessId,
-        }
+        },
       );
 
       return result;
@@ -258,7 +270,7 @@ class AIService {
     imageUri: string,
     businessId: string,
     areaType: "warehouse" | "bar",
-    inventoryModel: "SIMPLE" | "STANDARD" = "SIMPLE"
+    inventoryModel: "SIMPLE" | "STANDARD" = "SIMPLE",
   ): Promise<ParsedStockResponse> {
     try {
       const compressedUri = await this.compressImage(imageUri);
@@ -271,7 +283,7 @@ class AIService {
           business_id: businessId,
           area_type: areaType,
           inventory_model: inventoryModel,
-        }
+        },
       );
 
       return result;
@@ -293,7 +305,7 @@ class AIService {
    */
   async runFraudDetection(
     businessId: string,
-    checkTypes?: string[]
+    checkTypes?: string[],
   ): Promise<{
     success: boolean;
     alerts_generated: number;

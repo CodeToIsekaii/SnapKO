@@ -51,18 +51,14 @@ export default function InviteCodeGeneratorModal({
         throw new Error("Chưa đăng nhập");
       }
 
-      const res = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/invite-create`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: Env.SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({}),
-        }
-      );
+      const res = await fetch(`${Env.BACKEND_URL}/invite/create`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
 
       const data = await res.json();
 

@@ -54,7 +54,7 @@ export default function OwnerPendingListScreen({
             apikey: Env.SUPABASE_ANON_KEY,
             Authorization: `Bearer ${token}`,
           },
-        }
+        },
       );
 
       if (res.ok) {
@@ -109,7 +109,7 @@ export default function OwnerPendingListScreen({
                 }),
               ]).start();
               loadPending();
-            }
+            },
           )
           .subscribe((status) => {
             setIsRealtime(status === "SUBSCRIBED");
@@ -137,18 +137,14 @@ export default function OwnerPendingListScreen({
       const token = session?.access_token;
       if (!token) throw new Error("Not logged in");
 
-      const res = await fetch(
-        `${Env.SUPABASE_URL}/functions/v1/invite-approve`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: Env.SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ profileId, approve }),
-        }
-      );
+      const res = await fetch(`${Env.BACKEND_URL}/invite/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ profileId, approve }),
+      });
 
       const result = await res.json();
 
@@ -157,7 +153,7 @@ export default function OwnerPendingListScreen({
           approve ? "✅ Đã duyệt" : "❌ Đã từ chối",
           approve
             ? "Nhân viên có thể bắt đầu sử dụng app."
-            : "Yêu cầu đã bị từ chối."
+            : "Yêu cầu đã bị từ chối.",
         );
         loadPending();
       } else {

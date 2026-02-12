@@ -27,6 +27,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import * as Crypto from "expo-crypto";
+import { supabase } from "../lib/supabase";
 import { Env } from "../env";
 import { calculateNetVolume, convertToIngredientBase } from "@snapko/shared";
 import { getDB } from "../db";
@@ -666,7 +667,7 @@ export default function InventoryCaptureScreen({
 
       switch (snapMode) {
         case "IMPORT":
-          endpoint = `${Env.SUPABASE_URL}/functions/v1/ai-parse-invoice`;
+          endpoint = `${Env.BACKEND_URL}/ai/parse-invoice`;
           // Support both single and multi-image: backend handles both
           payload = {
             images_base64: compressedImages,
@@ -694,7 +695,7 @@ export default function InventoryCaptureScreen({
             `[Capture] SALES: Sending ${processedImages.length} full images (no slicing)`,
           );
 
-          endpoint = `${Env.SUPABASE_URL}/functions/v1/ai-parse-sales`;
+          endpoint = `${Env.BACKEND_URL}/ai/parse-sales`;
           payload = {
             images_base64: processedImages,
             image_base64: processedImages[0],
@@ -716,7 +717,7 @@ export default function InventoryCaptureScreen({
             `[Capture] Sliced ${imageCount} images into ${allSlices.length} parts`,
           );
 
-          endpoint = `${Env.SUPABASE_URL}/functions/v1/ai-parse-handwriting`;
+          endpoint = `${Env.BACKEND_URL}/ai/parse-handwriting`;
           payload = {
             images_base64: allSlices, // Send all slices
             image_base64: allSlices[0],
@@ -737,12 +738,17 @@ export default function InventoryCaptureScreen({
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 seconds for multi-image AI processing
 
+      // Get session for NestJS Auth
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          apikey: Env.SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${Env.SUPABASE_ANON_KEY}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(payload),
         signal: controller.signal,
