@@ -18,6 +18,7 @@ apps/web-landing/out/
 
 # electron-vite
 apps/desktop/dist/
+apps/desktop/dist-exes/
 
 # supabase
 supabase/.branches/

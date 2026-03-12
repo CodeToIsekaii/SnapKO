@@ -8,6 +8,7 @@ export default defineConfig({
       externalizeDepsPlugin({
         // Explicitly externalize native modules
         include: ["better-sqlite3"],
+        exclude: ["electron-store"],
       }),
     ],
     build: {
