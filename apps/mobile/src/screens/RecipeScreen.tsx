@@ -210,12 +210,17 @@ export default function RecipeScreen({ onBack }: RecipeScreenProps) {
       const db = await getDB();
       const id = editingRecipe?.id ?? Crypto.randomUUID();
       const price = parseInt(recipePrice) || 0;
+      const existingRecipe = await db.getFirstAsync<{ aliases: string }>(
+        "SELECT aliases FROM local_recipes WHERE id = ?",
+        [id],
+      );
+      const aliases = existingRecipe?.aliases ?? "[]";
 
       // Upsert recipe
       await db.runAsync(
-        `INSERT OR REPLACE INTO local_recipes (id, name, price, category, created_at)
-         VALUES (?, ?, ?, ?, datetime('now'))`,
-        [id, recipeName.trim(), price, recipeCategory.trim()],
+        `INSERT OR REPLACE INTO local_recipes (id, name, aliases, price, category, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        [id, recipeName.trim(), aliases, price, recipeCategory.trim()],
       );
 
       // Delete old ingredients

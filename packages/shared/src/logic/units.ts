@@ -368,8 +368,12 @@ export function convertToIngredientBase(
   inputValue: number,
   inputUnit: string,
   ingredientBaseUnit: string,
-  density?: number,
-): number | "NEED_DENSITY" {
+  density?: number | null,
+  unitWeight?: number | null,
+  unitWeightUnit?: string | null,
+): number | "NEED_DENSITY" | "NEED_UNIT_WEIGHT" {
+  const effectiveUnitWeightUnit = unitWeight ? unitWeightUnit || "g" : null;
+
   // Same unit, no conversion
   if (inputUnit === ingredientBaseUnit) {
     return inputValue;
@@ -392,6 +396,73 @@ export function convertToIngredientBase(
       density,
     );
     return typeof result === "number" ? result : "NEED_DENSITY";
+  }
+
+  const inputGroup = getUnitGroup(inputUnit);
+  const baseGroup = getUnitGroup(ingredientBaseUnit);
+  if (
+    inputGroup === "COUNT" &&
+    (baseGroup === "WEIGHT" || baseGroup === "VOLUME")
+  ) {
+    if (!unitWeight || unitWeight <= 0 || !effectiveUnitWeightUnit) {
+      return "NEED_UNIT_WEIGHT";
+    }
+
+    const unitWeightGroup = getUnitGroup(effectiveUnitWeightUnit);
+    if (!unitWeightGroup || unitWeightGroup === "COUNT") {
+      return "NEED_UNIT_WEIGHT";
+    }
+
+    const amountInUnitWeightUnit = inputValue * unitWeight;
+    if (unitWeightGroup === baseGroup) {
+      return convertUnit(amountInUnitWeightUnit, effectiveUnitWeightUnit, ingredientBaseUnit);
+    }
+
+    if (!density || density <= 0) {
+      return "NEED_DENSITY";
+    }
+    const converted = crossFamilyConvert(
+      amountInUnitWeightUnit,
+      effectiveUnitWeightUnit,
+      ingredientBaseUnit,
+      density,
+    );
+    return typeof converted === "number" ? converted : "NEED_DENSITY";
+  }
+
+  if (
+    baseGroup === "COUNT" &&
+    (inputGroup === "WEIGHT" || inputGroup === "VOLUME")
+  ) {
+    if (!unitWeight || unitWeight <= 0 || !effectiveUnitWeightUnit) {
+      return "NEED_UNIT_WEIGHT";
+    }
+
+    const unitWeightGroup = getUnitGroup(effectiveUnitWeightUnit);
+    if (!unitWeightGroup || unitWeightGroup === "COUNT") {
+      return "NEED_UNIT_WEIGHT";
+    }
+
+    let comparableValue: number;
+    if (inputGroup === unitWeightGroup) {
+      comparableValue = convertUnit(inputValue, inputUnit, effectiveUnitWeightUnit);
+    } else {
+      if (!density || density <= 0) {
+        return "NEED_DENSITY";
+      }
+      const converted = crossFamilyConvert(
+        inputValue,
+        inputUnit,
+        effectiveUnitWeightUnit,
+        density,
+      );
+      if (typeof converted !== "number") {
+        return converted === "NEED_DENSITY" ? "NEED_DENSITY" : "NEED_UNIT_WEIGHT";
+      }
+      comparableValue = converted;
+    }
+
+    return comparableValue / unitWeight;
   }
 
   // Incompatible units (e.g., kg to chai)
@@ -422,6 +493,8 @@ export function convertToCountUnit(
   unitWeight: number | null,
   unitWeightUnit: string | null,
 ): number | null {
+  const effectiveUnitWeightUnit = unitWeight ? unitWeightUnit || "g" : null;
+
   // If same unit, no conversion needed
   if (targetUnit === baseUnit) return value;
 
@@ -429,16 +502,16 @@ export function convertToCountUnit(
   if (getUnitGroup(baseUnit) !== "COUNT") return null;
 
   // If no unit_weight defined, can't convert
-  if (!unitWeight || !unitWeightUnit) return null;
+  if (!unitWeight || !effectiveUnitWeightUnit) return null;
 
   // Check if target unit is compatible with unit_weight_unit
   const targetGroup = getUnitGroup(targetUnit);
-  const weightGroup = getUnitGroup(unitWeightUnit);
+  const weightGroup = getUnitGroup(effectiveUnitWeightUnit);
 
   if (targetGroup !== weightGroup) return null;
 
   // Convert target to unit_weight_unit first (e.g., 1kg → 1000g)
-  const normalizedValue = convertUnit(value, targetUnit, unitWeightUnit);
+  const normalizedValue = convertUnit(value, targetUnit, effectiveUnitWeightUnit);
 
   // Then divide by unit_weight to get COUNT units
   return normalizedValue / unitWeight;

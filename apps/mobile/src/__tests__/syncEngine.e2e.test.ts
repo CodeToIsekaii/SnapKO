@@ -3,7 +3,12 @@
  * Tests for offline/online edge cases, retry logic, and cleanup workflow
  */
 
-import { PendingSyncLog, SyncStatus } from "../sync/syncEngine";
+import {
+  buildSalesPendingFingerprint,
+  findDuplicatePendingSalesLogs,
+  PendingSyncLog,
+  SyncStatus,
+} from "../sync/syncEngine";
 
 // Mock types for testing
 interface MockLog extends Omit<PendingSyncLog, "synced" | "sync_error"> {}
@@ -163,6 +168,150 @@ describe("Sync Engine E2E Tests", () => {
       // Second sync should be blocked
       const canStartNewSync = !isSyncing;
       expect(canStartNewSync).toBe(false);
+    });
+  });
+
+  describe("SALES Duplicate Detection", () => {
+    it("should build the same fingerprint for equivalent SALES payloads", () => {
+      const first = buildSalesPendingFingerprint({
+        type: "SALES",
+        location: "BAR",
+        ai_parsed_json: JSON.stringify({
+          total_revenue: 6798001,
+          total_items: 91,
+          items: [
+            {
+              recipe_id: "recipe-1",
+              quantity: 2,
+              unit: "phần",
+              unit_cost: 49000,
+            },
+            {
+              ingredient_id: "resale-1",
+              quantity: 1,
+              unit: "chai",
+              unit_cost: 15000,
+            },
+          ],
+        }),
+      });
+
+      const second = buildSalesPendingFingerprint({
+        type: "SALES",
+        location: "BAR",
+        ai_parsed_json: JSON.stringify({
+          total_revenue: 6798001,
+          total_items: 91,
+          items: [
+            {
+              ingredient_id: "resale-1",
+              quantity: 1,
+              unit: "chai",
+              unit_cost: 15000,
+            },
+            {
+              recipe_id: "recipe-1",
+              quantity: 2,
+              unit: "phần",
+              unit_cost: 49000,
+            },
+          ],
+        }),
+      });
+
+      expect(first).toBeTruthy();
+      expect(first).toBe(second);
+    });
+
+    it("should mark later SALES rows within 15 seconds as duplicates", () => {
+      const payload = JSON.stringify({
+        total_revenue: 6798001,
+        total_items: 91,
+        items: [
+          {
+            recipe_id: "recipe-1",
+            quantity: 2,
+            unit: "phần",
+            unit_cost: 49000,
+          },
+        ],
+      });
+
+      const duplicates = findDuplicatePendingSalesLogs([
+        {
+          id: "sales-1",
+          ingredient_id: null,
+          location: "BAR",
+          type: "SALES",
+          ai_parsed_quantity: null,
+          ai_confidence_score: null,
+          final_confirmed_quantity: null,
+          quantity_change_base: null,
+          unit_cost_at_time: null,
+          source_photo_urls: [],
+          local_image_path: null,
+          ai_parsed_json: payload,
+          staff_note: null,
+          is_verified: true,
+          diff_percentage: null,
+          created_at: "2026-05-15T08:02:00.000Z",
+          synced: false,
+          sync_error: null,
+          is_new_ingredient: false,
+          new_ingredient_name: null,
+          new_ingredient_unit: null,
+        },
+        {
+          id: "sales-2",
+          ingredient_id: null,
+          location: "BAR",
+          type: "SALES",
+          ai_parsed_quantity: null,
+          ai_confidence_score: null,
+          final_confirmed_quantity: null,
+          quantity_change_base: null,
+          unit_cost_at_time: null,
+          source_photo_urls: [],
+          local_image_path: null,
+          ai_parsed_json: payload,
+          staff_note: null,
+          is_verified: true,
+          diff_percentage: null,
+          created_at: "2026-05-15T08:02:10.000Z",
+          synced: false,
+          sync_error: null,
+          is_new_ingredient: false,
+          new_ingredient_name: null,
+          new_ingredient_unit: null,
+        },
+        {
+          id: "sales-3",
+          ingredient_id: null,
+          location: "BAR",
+          type: "SALES",
+          ai_parsed_quantity: null,
+          ai_confidence_score: null,
+          final_confirmed_quantity: null,
+          quantity_change_base: null,
+          unit_cost_at_time: null,
+          source_photo_urls: [],
+          local_image_path: null,
+          ai_parsed_json: payload,
+          staff_note: null,
+          is_verified: true,
+          diff_percentage: null,
+          created_at: "2026-05-15T08:02:20.100Z",
+          synced: false,
+          sync_error: null,
+          is_new_ingredient: false,
+          new_ingredient_name: null,
+          new_ingredient_unit: null,
+        },
+      ]);
+
+      expect(duplicates).toEqual([
+        { duplicateId: "sales-2", canonicalId: "sales-1" },
+      ]);
     });
   });
 });

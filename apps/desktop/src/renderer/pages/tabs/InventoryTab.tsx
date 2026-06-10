@@ -5,6 +5,13 @@ import React, { useState, useMemo } from "react";
 import { Ingredient } from "../../types";
 import { COLORS, dashboardStyles } from "../../styles/theme";
 import {
+  calculateInventoryItemValue,
+  formatInventoryQuantity,
+  getInventoryDisplayQuantities,
+  getInventoryDisplayUnits,
+  getInventoryQuantitiesInBase,
+} from "../../../shared/inventoryValue";
+import {
   Package,
   RefreshCw,
   Download,
@@ -50,11 +57,11 @@ export function InventoryTab({
   // Calculate stats for current tab
   const tabStats = useMemo(() => {
     const total = filteredIngredients.reduce(
-      (sum, item) => sum + (item.warehouse_qty + item.bar_qty) * item.unit_cost,
+      (sum, item) => sum + calculateInventoryItemValue(item),
       0
     );
     const lowStock = filteredIngredients.filter((item) => {
-      const qty = item.warehouse_qty + item.bar_qty;
+      const qty = getInventoryQuantitiesInBase(item).totalQtyInBase;
       const threshold = item.min_threshold || 0;
       return threshold > 0 && qty < threshold;
     }).length;
@@ -194,7 +201,7 @@ export function InventoryTab({
             <th style={dashboardStyles.tableHeader}>Đơn vị</th>
             <th style={dashboardStyles.tableHeader}>Kho</th>
             <th style={dashboardStyles.tableHeader}>Quầy</th>
-            <th style={dashboardStyles.tableHeader}>Giá (đ)</th>
+            <th style={dashboardStyles.tableHeader}>Giá / ĐV gốc (đ)</th>
             <th style={dashboardStyles.tableHeader}>Thành tiền</th>
           </tr>
         </thead>
@@ -209,10 +216,12 @@ export function InventoryTab({
             </tr>
           ) : (
             filteredIngredients.map((item) => {
-              const totalQty = item.warehouse_qty + item.bar_qty;
-              const rowValue = totalQty * item.unit_cost;
+              const { totalQtyInBase } = getInventoryQuantitiesInBase(item);
+              const rowValue = calculateInventoryItemValue(item);
+              const { warehouseUnit, barUnit } = getInventoryDisplayUnits(item);
+              const { warehouseQty, barQty } = getInventoryDisplayQuantities(item);
               const threshold = item.min_threshold || 0;
-              const isLowStock = threshold > 0 && totalQty < threshold;
+              const isLowStock = threshold > 0 && totalQtyInBase < threshold;
 
               return (
                 <tr key={item.id}>
@@ -228,11 +237,16 @@ export function InventoryTab({
                   </td>
                   <td style={dashboardStyles.tableCell}>{item.base_unit}</td>
                   <td style={dashboardStyles.tableCell}>
-                    {item.warehouse_qty}
+                    {formatInventoryQuantity(warehouseQty, warehouseUnit, item)}
                   </td>
-                  <td style={dashboardStyles.tableCell}>{item.bar_qty}</td>
+                  <td style={dashboardStyles.tableCell}>
+                    {formatInventoryQuantity(barQty, barUnit, item)}
+                  </td>
                   <td style={dashboardStyles.tableCell}>
                     {item.unit_cost.toLocaleString("vi-VN")}
+                    {item.base_unit ? (
+                      <span style={styles.unitCostSuffix}> / {item.base_unit}</span>
+                    ) : null}
                   </td>
                   <td style={dashboardStyles.tableCell}>
                     {rowValue.toLocaleString("vi-VN")}
@@ -346,5 +360,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   lowStockBadge: {
     marginRight: 8,
+  },
+  unitCostSuffix: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
   },
 };

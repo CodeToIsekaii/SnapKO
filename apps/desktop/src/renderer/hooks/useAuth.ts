@@ -133,65 +133,22 @@ export function useAuth() {
       setState((s) => ({ ...s, loading: true, error: null }));
 
       try {
-        // 1. Sign up
-        const { data: authData, error: signupError } =
-          await supabase.auth.signUp({
-            email: data.email,
-            password: data.password,
-            options: {
-              data: {
-                full_name: data.fullName,
-                role: "OWNER",
-              },
-            },
-          });
+        const result = await window.electronAPI.register(
+          data.email,
+          data.password,
+          data.fullName,
+          data.businessName
+        );
 
-        if (signupError) {
+        if (!result.success) {
           setState((s) => ({
             ...s,
             loading: false,
-            error: signupError.message,
+            error: result.error || "Đăng ký thất bại",
           }));
-          return { success: false, error: signupError.message };
+          return { success: false, error: result.error };
         }
 
-        if (!authData.user) {
-          setState((s) => ({
-            ...s,
-            loading: false,
-            error: "Không thể tạo tài khoản",
-          }));
-          return { success: false, error: "Không thể tạo tài khoản" };
-        }
-
-        // 2. Create business
-        const { error: businessError } = await supabase
-          .from("businesses")
-          .insert({
-            id: authData.user.id,
-            name: data.businessName,
-            owner_id: authData.user.id,
-          });
-
-        if (businessError) {
-          setState((s) => ({
-            ...s,
-            loading: false,
-            error: "Lỗi tạo doanh nghiệp: " + businessError.message,
-          }));
-          return { success: false, error: businessError.message };
-        }
-
-        // 3. Create profile
-        await supabase.from("profiles").insert({
-          id: authData.user.id,
-          business_id: authData.user.id,
-          full_name: data.fullName,
-          role: "OWNER",
-          status: "ACTIVE",
-        });
-
-        // 4. Auto login
         return await login(data.email, data.password);
       } catch (err: any) {
         const errorMsg = err.message || "Có lỗi xảy ra";

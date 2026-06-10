@@ -4,6 +4,7 @@
  */
 
 import type { SQLiteDatabase } from "expo-sqlite";
+import { incrementStockLevel, resolveLocalServiceAreaId } from "../../db/stockLevelHelper";
 
 export interface RecipeIngredientLocal {
   ingredient_id: string;
@@ -91,9 +92,8 @@ export async function deductInventoryForSale(
         id: string;
         name: string;
         base_unit: string;
-        bar_qty: number;
       }>(
-        "SELECT id, name, base_unit, bar_qty FROM local_ingredients WHERE id = ?",
+        "SELECT id, name, base_unit FROM local_ingredients WHERE id = ?",
         [ri.ingredient_id]
       );
 
@@ -104,7 +104,6 @@ export async function deductInventoryForSale(
 
       // Unit conversion: if recipe uses different unit than inventory
       if (ri.unit.toLowerCase() !== ing.base_unit.toLowerCase()) {
-        // Convert recipe unit to inventory unit
         const converted = convertRecipeToInventoryUnit(
           deductAmount,
           ri.unit,
@@ -113,13 +112,13 @@ export async function deductInventoryForSale(
         if (converted !== null) {
           deductAmount = converted;
         }
-        // If conversion fails, use as-is (same base assumption)
       }
 
-      await db.runAsync(
-        "UPDATE local_ingredients SET bar_qty = MAX(0, bar_qty - ?) WHERE id = ?",
-        [deductAmount, ri.ingredient_id]
-      );
+      // Deduct from SERVICE area (bar) via stock_levels
+      const serviceAreaId = await resolveLocalServiceAreaId(db);
+      if (serviceAreaId) {
+        await incrementStockLevel(db, ri.ingredient_id, serviceAreaId, -deductAmount);
+      }
 
       deducted.push(
         `${ing.name}: -${deductAmount.toFixed(2)} ${ing.base_unit}`

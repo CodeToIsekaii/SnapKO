@@ -20,8 +20,16 @@ if (isMainProcess) {
   // Dynamic import to avoid bundling issues in renderer
   const { config } = require("dotenv");
   const { join } = require("node:path");
-  // Use process.cwd() which is apps/desktop when running electron
-  config({ path: join(process.cwd(), ".env") });
+  const { app } = require("electron");
+
+  // In production, .env is packaged into the resources directory
+  // In development, it's at the project root
+  const envPath = app.isPackaged
+    ? join(process.resourcesPath, ".env")
+    : join(process.cwd(), ".env");
+
+  // Use the calculated path
+  config({ path: envPath });
 }
 
 const schema = z.object({

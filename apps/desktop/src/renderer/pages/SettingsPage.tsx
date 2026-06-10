@@ -19,6 +19,11 @@ import {
   AlertTriangle,
   Martini,
   Download,
+  Archive,
+  Plus,
+  Eye,
+  EyeOff,
+  X,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { SubscriptionInfo } from "../hooks/useSubscriptionStatus";
@@ -30,8 +35,17 @@ interface SettingsPageProps {
   userRole?: string;
   businessName?: string;
   inventoryModel?: string | null; // SIMPLE | STANDARD | CHAIN
+  storedInventoryModel?: string | null;
+  tier?: string | null; // FREE | PRO | CHAIN
+  effectiveTier?: string | null;
+  entitlements?: {
+    canUseDualWarehouse: boolean;
+    canUseCustomStorageAreas: boolean;
+    canInviteStaff: boolean;
+    canUseAdvancedReports: boolean;
+  } | null;
   onEditProfile?: () => void;
-  onChangeModel?: (model: "SIMPLE" | "STANDARD") => Promise<void>;
+  onChangeModel?: (model: "SIMPLE" | "STANDARD" | "CHAIN") => Promise<void>;
   subscription?: SubscriptionInfo;
 }
 
@@ -42,6 +56,10 @@ export default function SettingsPage({
   userRole,
   businessName,
   inventoryModel,
+  storedInventoryModel,
+  tier,
+  effectiveTier,
+  entitlements,
   onEditProfile,
   onChangeModel,
   subscription,
@@ -55,10 +73,114 @@ export default function SettingsPage({
   const [changingModel, setChangingModel] = useState(false);
   const [retentionDays, setRetentionDays] = useState(30);
   const [exportingHistory, setExportingHistory] = useState(false);
+  const [shareRecipes, setShareRecipes] = useState(false);
+  const [savingShareRecipes, setSavingShareRecipes] = useState(false);
+
+  // Storage Areas state
+  const [areas, setAreas] = useState<any[]>([]);
+  const [areasLoading, setAreasLoading] = useState(false);
+  const [areaModal, setAreaModal] = useState<{ open: boolean; editing: any | null }>({ open: false, editing: null });
+  const [areaNameInput, setAreaNameInput] = useState("");
+  const [areaSaving, setAreaSaving] = useState(false);
+
+  const displayedModel = inventoryModel || "SIMPLE";
+  const storedModel = storedInventoryModel || displayedModel;
+  const planTier = effectiveTier || tier || "FREE";
+  const isChain = planTier === "CHAIN";
+  const isPro = planTier === "PRO";
+  const canUseDualWarehouse =
+    entitlements?.canUseDualWarehouse ??
+    (subscription?.canUseDualWarehouse ?? false);
+  const canUseCustomStorageAreas =
+    entitlements?.canUseCustomStorageAreas ?? planTier === "CHAIN";
+  const storedModelLocked =
+    storedModel !== displayedModel &&
+    (storedModel === "STANDARD" || storedModel === "CHAIN");
+
+  const openPricing = async () => {
+    try {
+      const result = await (window as any).electronAPI?.openExternal?.(
+        "https://app.snapko.vn/pricing",
+      );
+      if (!result?.success) {
+        throw new Error(result?.error || "Không thể mở trình duyệt");
+      }
+    } catch (err) {
+      alert(
+        "Không thể mở trang nâng cấp. Vui lòng truy cập https://app.snapko.vn/pricing",
+      );
+      console.error("[Settings] openPricing failed:", err);
+    }
+  };
 
   useEffect(() => {
     loadRetention();
+    loadBusinessSettings();
+    if (isOwner) loadStorageAreas();
   }, []);
+
+  const loadStorageAreas = async () => {
+    setAreasLoading(true);
+    try {
+      const data = await (window as any).electronAPI?.listStorageAreas?.();
+      setAreas(data ?? []);
+    } catch (e) {
+      console.error("Failed to load storage areas", e);
+    } finally {
+      setAreasLoading(false);
+    }
+  };
+
+  const openCreateArea = () => {
+    setAreaNameInput("");
+    setAreaModal({ open: true, editing: null });
+  };
+
+  const openEditArea = (area: any) => {
+    setAreaNameInput(area.name);
+    setAreaModal({ open: true, editing: area });
+  };
+
+  const handleSaveArea = async () => {
+    if (!areaNameInput.trim()) return;
+    setAreaSaving(true);
+    try {
+      if (areaModal.editing) {
+        await (window as any).electronAPI?.updateStorageArea?.(areaModal.editing.id, { name: areaNameInput.trim() });
+      } else {
+        await (window as any).electronAPI?.createStorageArea?.({ name: areaNameInput.trim(), type: "STORAGE" });
+      }
+      setAreaModal({ open: false, editing: null });
+      loadStorageAreas();
+    } catch (e: any) {
+      alert("Lỗi: " + (e?.message ?? "Không thể lưu"));
+    } finally {
+      setAreaSaving(false);
+    }
+  };
+
+  const handleToggleAreaActive = async (area: any) => {
+    try {
+      await (window as any).electronAPI?.updateStorageArea?.(area.id, { isActive: !area.isActive });
+      loadStorageAreas();
+    } catch (e: any) {
+      alert("Lỗi: " + (e?.message ?? "Không thể cập nhật"));
+    }
+  };
+
+  const handleDeleteArea = async (area: any) => {
+    const confirmed = await (window as any).electronAPI?.confirmDialog?.(
+      `Xóa khu vực kho "${area.name}"?`,
+      "Khu vực kho phải không còn tồn kho."
+    );
+    if (!confirmed) return;
+    try {
+      await (window as any).electronAPI?.deleteStorageArea?.(area.id);
+      loadStorageAreas();
+    } catch (e: any) {
+      alert("Không thể xóa: " + (e?.message ?? "Lỗi không xác định"));
+    }
+  };
 
   const loadRetention = async () => {
     try {
@@ -70,6 +192,29 @@ export default function SettingsPage({
   };
 
   const isOwner = userRole === "OWNER";
+
+  const loadBusinessSettings = async () => {
+    try {
+      const res = await (window as any).electronAPI?.getProfile?.();
+      if (res?.profile?.business?.shareRecipesWithStaff !== undefined) {
+        setShareRecipes(res.profile.business.shareRecipesWithStaff);
+      }
+    } catch (e) {
+      console.error("Failed to load business settings", e);
+    }
+  };
+
+  const handleToggleShareRecipes = async (checked: boolean) => {
+    setSavingShareRecipes(true);
+    try {
+      await (window as any).electronAPI?.updateBusiness?.({ shareRecipesWithStaff: checked });
+      setShareRecipes(checked);
+    } catch (e) {
+      console.error("Failed to update shareRecipesWithStaff", e);
+    } finally {
+      setSavingShareRecipes(false);
+    }
+  };
 
   // Generate invite code for staff
   const handleGenerateInviteCode = async () => {
@@ -103,7 +248,7 @@ export default function SettingsPage({
   const handleSync = async () => {
     setSyncStatus("syncing");
     try {
-      const result = await (window as any).electronAPI?.syncFromServer?.();
+      const result = await (window as any).electronAPI?.syncFromServer?.({ force: true });
       if (result?.success) {
         setSyncStatus("success");
         setTimeout(() => setSyncStatus("idle"), 3000);
@@ -116,9 +261,10 @@ export default function SettingsPage({
   };
 
   // Delete account confirmation
-  const handleDeleteAccount = () => {
-    const confirmed = window.confirm(
-      "Xóa tài khoản\n\n• Tất cả dữ liệu sẽ bị xóa sau 30 ngày\n• Hành động này không thể hoàn tác\n\nBạn có chắc chắn?"
+  const handleDeleteAccount = async () => {
+    const confirmed = await (window as any).electronAPI?.confirmDialog?.(
+      "Xóa tài khoản?",
+      "• Tất cả dữ liệu sẽ bị xóa sau 30 ngày\n• Hành động này không thể hoàn tác"
     );
     if (confirmed) {
       // TODO: Call delete account API
@@ -216,13 +362,9 @@ export default function SettingsPage({
               justifyContent: "space-between",
             }}
           >
-            <span>⚠️ Gói của bạn đã hết hạn. Nâng cấp để sử dụng Kho Kép.</span>
+            <span>⚠️ Gói đã hết hạn. Tính năng Pro/Chain đang tạm khóa.</span>
             <button
-              onClick={() => {
-                (window as any).electronAPI?.openExternal?.(
-                  "https://app.snapko.vn/pricing"
-                );
-              }}
+              onClick={openPricing}
               style={{
                 backgroundColor: "white",
                 color: COLORS.error,
@@ -259,11 +401,7 @@ export default function SettingsPage({
               tính năng Kho Kép & Báo cáo doanh thu không bị gián đoạn.
             </span>
             <button
-              onClick={() => {
-                (window as any).electronAPI?.openExternal?.(
-                  "https://app.snapko.vn/pricing"
-                );
-              }}
+              onClick={openPricing}
               style={{
                 backgroundColor: "white",
                 color: "#F59E0B",
@@ -299,11 +437,7 @@ export default function SettingsPage({
               🎉 Bản dùng thử miễn phí: còn {subscription.daysLeft} ngày
             </span>
             <button
-              onClick={() => {
-                (window as any).electronAPI?.openExternal?.(
-                  "https://app.snapko.vn/pricing"
-                );
-              }}
+              onClick={openPricing}
               style={{
                 backgroundColor: "rgba(255,255,255,0.2)",
                 color: "white",
@@ -388,88 +522,90 @@ export default function SettingsPage({
               Chọn mô hình vận hành phù hợp với quán của bạn. Điều này ảnh hưởng
               đến cách nhân viên kiểm kho trên app.
             </p>
+            {storedModelLocked && (
+              <p
+                style={{
+                  ...styles.hint,
+                  color: COLORS.error,
+                  fontWeight: 600,
+                }}
+              >
+                Gói hết hạn, mô hình đã lưu là {storedModel} nhưng hiện đang chạy
+                BASIC/Kho Đơn theo quyền hiệu lực.
+              </p>
+            )}
 
             <div style={styles.modelToggleContainer}>
-              {/* SIMPLE Button */}
-              <button
-                style={{
-                  ...styles.modelButton,
-                  ...(inventoryModel === "SIMPLE"
-                    ? styles.modelButtonActive
-                    : {}),
-                }}
-                onClick={async () => {
-                  if (inventoryModel !== "SIMPLE") {
-                    setChangingModel(true);
-                    await onChangeModel("SIMPLE");
-                    setChangingModel(false);
-                  }
-                }}
-                disabled={changingModel}
-              >
-                <span style={styles.modelIcon}>
-                  <Home size={28} />
-                </span>
-                <span style={styles.modelName}>KHO ĐƠN</span>
-                <span style={styles.modelDesc}>1 kho duy nhất</span>
-                {inventoryModel === "SIMPLE" && (
-                  <span style={styles.modelCheck}>
-                    <Check size={12} color="white" />
-                  </span>
-                )}
-              </button>
-
-              <button
-                disabled={
-                  changingModel ||
-                  (!subscription?.canUseDualWarehouse &&
-                    inventoryModel !== "STANDARD")
-                }
-                style={{
-                  ...styles.modelButton,
-                  ...(inventoryModel === "STANDARD"
-                    ? styles.modelButtonActive
-                    : {}),
-                  opacity:
-                    !subscription?.canUseDualWarehouse &&
-                    inventoryModel !== "STANDARD"
-                      ? 0.5
-                      : 1,
-                  cursor:
-                    !subscription?.canUseDualWarehouse &&
-                    inventoryModel !== "STANDARD"
-                      ? "not-allowed"
-                      : "pointer",
-                }}
-                onClick={async () => {
-                  if (inventoryModel !== "STANDARD") {
-                    setChangingModel(true);
-                    await onChangeModel("STANDARD");
-                    setChangingModel(false);
-                  }
-                }}
-              >
-                <span style={styles.modelIcon}>
-                  <div
+              {([
+                {
+                  id: "SIMPLE" as const,
+                  name: "BASIC / KHO ĐƠN",
+                  desc: "1 kho duy nhất",
+                  locked: false,
+                  icon: <Home size={28} />,
+                },
+                {
+                  id: "STANDARD" as const,
+                  name: "PRO / KHO KÉP",
+                  desc: "Kho Tổng + Quầy Bar",
+                  locked: !canUseDualWarehouse,
+                  icon: (
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <Factory size={20} />
+                      <span>→</span>
+                      <Martini size={20} />
+                    </span>
+                  ),
+                },
+                {
+                  id: "CHAIN" as const,
+                  name: "CHAIN / NHIỀU KHU",
+                  desc: "Nhiều khu vực tùy chỉnh",
+                  locked: !canUseCustomStorageAreas,
+                  icon: <Store size={28} />,
+                },
+              ]).map((option) => {
+                const active = displayedModel === option.id;
+                const locked = option.locked && !active;
+                return (
+                  <button
+                    key={option.id}
+                    disabled={changingModel}
                     style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "4px",
+                      ...styles.modelButton,
+                      ...(active ? styles.modelButtonActive : {}),
+                      ...(locked ? styles.modelButtonLocked : {}),
+                    }}
+                    onClick={async () => {
+                      if (locked) {
+                        alert("Tính năng này cần gói phù hợp còn hiệu lực.");
+                        openPricing();
+                        return;
+                      }
+                      if (displayedModel !== option.id) {
+                        setChangingModel(true);
+                        await onChangeModel(option.id);
+                        setChangingModel(false);
+                      }
                     }}
                   >
-                    <Factory size={20} />
-                    <span>→</span>
-                    <Martini size={20} />
-                  </div>
-                </span>
-                <span style={styles.modelName}>KHO KÉP</span>
-                <span style={styles.modelDesc}>Kho Tổng + Quầy Bar</span>
-                {inventoryModel === "STANDARD" && (
-                  <span style={styles.modelCheck}>
-                    <Check size={12} color="white" />
-                  </span>
-                )}
-              </button>
+                    <span style={styles.modelIcon}>{option.icon}</span>
+                    <span style={styles.modelName}>{option.name}</span>
+                    <span style={styles.modelDesc}>{option.desc}</span>
+                    {locked && (
+                      <span style={styles.modelLock}>
+                        <AlertTriangle size={12} />
+                        Khóa
+                      </span>
+                    )}
+                    {active && (
+                      <span style={styles.modelCheck}>
+                        <Check size={12} color="white" />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
 
             {changingModel && (
@@ -477,6 +613,38 @@ export default function SettingsPage({
                 ⏳ Đang cập nhật...
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Share Recipes with Staff - Owner Only */}
+      {isOwner && (
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <Settings size={18} color={COLORS.textPrimary} />
+              <span style={styles.cardTitle}>Chia sẻ công thức bán thành phẩm</span>
+            </div>
+          </div>
+          <div style={styles.cardContent}>
+            <p style={styles.hint}>
+              Cho phép nhân viên xem công thức (nguyên liệu con) của bán thành phẩm. Nếu tắt, nhân viên chỉ thấy tên sản phẩm.
+            </p>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={shareRecipes}
+                  disabled={savingShareRecipes}
+                  onChange={(e) => handleToggleShareRecipes(e.target.checked)}
+                  style={{ width: 18, height: 18, cursor: "pointer" }}
+                />
+                <span style={{ fontSize: 14, color: COLORS.textPrimary }}>
+                  {shareRecipes ? "Đang bật — nhân viên thấy công thức" : "Đang tắt — nhân viên không thấy công thức"}
+                </span>
+              </label>
+              {savingShareRecipes && <span style={{ fontSize: 12, color: COLORS.textSecondary }}>Đang lưu...</span>}
+            </div>
           </div>
         </div>
       )}
@@ -498,12 +666,12 @@ export default function SettingsPage({
           </div>
           <div style={styles.cardContent}>
             <p style={styles.hint}>
-              Tự động xóa nhật ký cũ (đã đồng bộ) để giải phóng dung lượng máy
-              tính.
+              Cấu hình số ngày hiển thị nhật ký trên Dashboard (và dọn log cục bộ
+              đã đồng bộ để giải phóng dung lượng máy tính).
             </p>
 
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              {[3, 7, 30, 90].map((days) => (
+              {[3, 7, 30, 90, 365].map((days) => (
                 <button
                   key={days}
                   style={{
@@ -565,6 +733,116 @@ export default function SettingsPage({
                 {exportingHistory
                   ? "Đang tải..."
                   : "Xuất toàn bộ lịch sử (Excel)"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Storage Areas - Owner Only */}
+      {isOwner && (
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <Archive size={18} color={COLORS.textPrimary} />
+              <span style={styles.cardTitle}>Khu vực kho</span>
+            </div>
+            {isChain && (
+              <button onClick={openCreateArea} style={{ ...styles.editButton, display: "flex", alignItems: "center", gap: 4 }}>
+                <Plus size={14} />
+                Thêm
+              </button>
+            )}
+          </div>
+          <div style={styles.cardContent}>
+            {!isChain && (
+              <p style={{ ...styles.hint, marginBottom: 12 }}>
+                {isPro
+                  ? "Gói PRO có 2 khu vực cố định. Nâng lên CHAIN để thêm khu vực."
+                  : "Gói FREE có 1 kho tổng."}
+              </p>
+            )}
+            {areasLoading ? (
+              <p style={styles.hint}>Đang tải...</p>
+            ) : areas.length === 0 ? (
+              <p style={styles.hint}>Chưa có khu vực kho nào.</p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {areas.map((area) => (
+                  <div
+                    key={area.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "10px 12px",
+                      backgroundColor: area.isActive ? COLORS.surfaceHover : "#F9FAFB",
+                      borderRadius: 8,
+                      border: `1px solid ${COLORS.border}`,
+                      opacity: area.isActive ? 1 : 0.6,
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: COLORS.textPrimary }}>
+                        {area.name}
+                        {area.isDefault ? "  ✦" : ""}
+                      </span>
+                      <span style={{ fontSize: 12, color: COLORS.textSecondary, marginLeft: 8 }}>
+                        {area.type === "STORAGE" ? "Kho" : "Quầy phục vụ"}
+                        {area._count?.stockLevels ? `  ·  ${area._count.stockLevels} NL` : ""}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {(isChain || isPro) && (
+                        <button onClick={() => openEditArea(area)} style={styles.iconBtn} title="Đổi tên">
+                          <Pencil size={14} color={COLORS.textSecondary} />
+                        </button>
+                      )}
+                      {isChain && !area.isDefault && (
+                        <>
+                          <button onClick={() => handleToggleAreaActive(area)} style={styles.iconBtn} title={area.isActive ? "Ẩn" : "Hiện"}>
+                            {area.isActive ? <EyeOff size={14} color={COLORS.textSecondary} /> : <Eye size={14} color={COLORS.textSecondary} />}
+                          </button>
+                          <button onClick={() => handleDeleteArea(area)} style={styles.iconBtn} title="Xóa">
+                            <Trash2 size={14} color={COLORS.error} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Area Modal */}
+      {areaModal.open && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalBox}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: COLORS.textPrimary }}>
+                {areaModal.editing ? "Đổi tên khu vực" : "Thêm khu vực kho"}
+              </span>
+              <button onClick={() => setAreaModal({ open: false, editing: null })} style={{ background: "none", border: "none", cursor: "pointer" }}>
+                <X size={18} color={COLORS.textSecondary} />
+              </button>
+            </div>
+            <input
+              style={styles.textInput}
+              value={areaNameInput}
+              onChange={(e) => setAreaNameInput(e.target.value)}
+              placeholder="Tên khu vực (VD: Kho lạnh, Bar 2...)"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") handleSaveArea(); }}
+            />
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <button onClick={() => setAreaModal({ open: false, editing: null })} style={{ ...styles.secondaryButton, flex: 1 }}>
+                Hủy
+              </button>
+              <button onClick={handleSaveArea} disabled={areaSaving} style={{ ...styles.primaryButton, flex: 1, opacity: areaSaving ? 0.6 : 1 }}>
+                {areaSaving ? "Đang lưu..." : "Lưu"}
               </button>
             </div>
           </div>
@@ -820,6 +1098,42 @@ const styles: Record<string, React.CSSProperties> = {
   version: {
     color: COLORS.textMuted,
   },
+  iconBtn: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    padding: 6,
+    borderRadius: 6,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalOverlay: {
+    position: "fixed" as const,
+    inset: 0,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+  },
+  modalBox: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 24,
+    width: 360,
+    boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+  },
+  textInput: {
+    width: "100%",
+    padding: "10px 12px",
+    border: "1px solid #E5E7EB",
+    borderRadius: 8,
+    fontSize: 14,
+    color: "#1F2937",
+    outline: "none",
+    boxSizing: "border-box" as const,
+  },
   // Model Selection Styles
   modelToggleContainer: {
     display: "flex",
@@ -842,6 +1156,10 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: COLORS.primary,
     backgroundColor: `${COLORS.primary}15`,
   },
+  modelButtonLocked: {
+    opacity: 0.5,
+    cursor: "not-allowed",
+  },
   modelIcon: {
     fontSize: 28,
     marginBottom: 8,
@@ -855,6 +1173,15 @@ const styles: Record<string, React.CSSProperties> = {
   modelDesc: {
     fontSize: 12,
     color: COLORS.textSecondary,
+  },
+  modelLock: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: 600,
+    color: COLORS.error,
   },
   modelCheck: {
     position: "absolute",

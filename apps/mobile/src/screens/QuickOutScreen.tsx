@@ -23,6 +23,8 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Crypto from "expo-crypto";
 import * as Haptics from "expo-haptics";
 import { getDB } from "../db";
+import { incrementStockLevel, resolveLocalAreaByLocation } from "../db/stockLevelHelper";
+import { useInventoryModel } from "../contexts/InventoryModelContext";
 
 // Reason types for Quick Out per .script
 type OutReason = "DAMAGED" | "LOAN" | "MARKETING" | null;
@@ -77,6 +79,7 @@ export default function QuickOutScreen({
   const [selectedReason, setSelectedReason] = useState<OutReason>(null);
   const [showReasonModal, setShowReasonModal] = useState(false);
   const [showLoanSourceModal, setShowLoanSourceModal] = useState(false);
+  const { isStandard } = useInventoryModel();
 
   useEffect(() => {
     loadIngredients();
@@ -127,13 +130,17 @@ export default function QuickOutScreen({
 
     if (reason === "LOAN") {
       setShowReasonModal(false);
+      if (!isStandard) {
+        await processQuickOut("LOAN", "WAREHOUSE");
+        return;
+      }
       // Delay slightly to allow modal to close before opening next one
       setTimeout(() => setShowLoanSourceModal(true), 300);
       return;
     }
 
     // For standard waste/marketing, proceed directly
-    await processQuickOut(reason, "BAR"); // Default source for waste is BAR
+    await processQuickOut(reason, isStandard ? "BAR" : "WAREHOUSE");
   };
 
   const processQuickOut = async (
@@ -194,37 +201,11 @@ export default function QuickOutScreen({
         ]
       );
 
-      // 2. Deduct Stock based on sourceLocation (Strict logic)
-      for (const [ingId, qty] of selectedItems.entries()) {
-        if (sourceLocation === "WAREHOUSE") {
-          // Deduct ONLY from warehouse_qty
-          await db.runAsync(
-            `UPDATE local_ingredients 
-               SET warehouse_qty = CASE 
-                 WHEN warehouse_qty >= ? THEN warehouse_qty - ? 
-                 ELSE 0 
-               END
-               WHERE id = ?`,
-            [qty, qty, ingId]
-          );
-        } else {
-          // Deduct from BAR: first bar, then warehouse if needed?
-          // OR strict bar? User requested: "chọn từ kho tổng hay kho bar để hệ thống biết trừ thẳng kho tổng hay bar"
-          // Let's implement strict deduction from the selected source as verified in plan
-
-          // STRICT BAR DEDUCTION (If bar is empty, it goes negative or 0? Usually 0)
-          // But usually bar consumption might pull from warehouse if auto-replenish?
-          // User instruction: "trừ thẳng kho tổng hay bar". Defaulting to strict subtraction.
-
-          await db.runAsync(
-            `UPDATE local_ingredients 
-               SET bar_qty = CASE 
-                 WHEN bar_qty >= ? THEN bar_qty - ? 
-                 ELSE 0 
-               END
-               WHERE id = ?`,
-            [qty, qty, ingId]
-          );
+      // 2. Deduct Stock via stock_levels (syncLegacyQtyLocal keeps cache in sync)
+      const deductAreaId = await resolveLocalAreaByLocation(db, sourceLocation);
+      if (deductAreaId) {
+        for (const [ingId, qty] of selectedItems.entries()) {
+          await incrementStockLevel(db, ingId, deductAreaId, -qty);
         }
       }
 
@@ -427,23 +408,25 @@ export default function QuickOutScreen({
             <Text style={styles.modalTitle}>Chọn nguồn hàng cho mượn</Text>
             <Text style={styles.modalSubtitle}>Bạn lấy hàng từ kho nào?</Text>
 
-            <TouchableOpacity
-              style={[styles.reasonButton, { borderColor: "#6B8E23" }]}
-              onPress={() => processQuickOut("LOAN", "BAR")}
-            >
-              <Ionicons
-                name="wine"
-                size={24}
-                color="#6B8E23"
-                style={{ marginRight: 12 }}
-              />
-              <View>
-                <Text style={[styles.reasonLabel, { color: "#6B8E23" }]}>
-                  QUẦY BAR
-                </Text>
-                <Text style={styles.itemStock}>Lấy tại quầy pha chế / Bar</Text>
-              </View>
-            </TouchableOpacity>
+            {isStandard && (
+              <TouchableOpacity
+                style={[styles.reasonButton, { borderColor: "#6B8E23" }]}
+                onPress={() => processQuickOut("LOAN", "BAR")}
+              >
+                <Ionicons
+                  name="wine"
+                  size={24}
+                  color="#6B8E23"
+                  style={{ marginRight: 12 }}
+                />
+                <View>
+                  <Text style={[styles.reasonLabel, { color: "#6B8E23" }]}>
+                    QUẦY BAR
+                  </Text>
+                  <Text style={styles.itemStock}>Lấy tại quầy pha chế / Bar</Text>
+                </View>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={[styles.reasonButton, { borderColor: "#F59E0B" }]}

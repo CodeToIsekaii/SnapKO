@@ -59,6 +59,11 @@ export function Header({
             {new Date(syncStatus.lastSync).toLocaleTimeString("vi-VN")}
           </span>
         )}
+        {syncStatus.lastError && (
+          <span style={styles.syncError} title={syncStatus.lastError}>
+            Lỗi đồng bộ
+          </span>
+        )}
       </div>
 
       {/* Right: User Info */}
@@ -142,6 +147,11 @@ const styles: Record<string, React.CSSProperties> = {
   lastSync: {
     color: COLORS.textSecondary,
     fontSize: 12,
+  },
+  syncError: {
+    color: COLORS.error,
+    fontSize: 12,
+    fontWeight: 600,
   },
   userSection: {
     display: "flex",

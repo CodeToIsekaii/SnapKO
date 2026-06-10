@@ -86,6 +86,8 @@ export default function IngredientEditScreen({
   const [unitCost, setUnitCost] = useState("");
   const [minThreshold, setMinThreshold] = useState("0");
 
+  const [shelfLifeDays, setShelfLifeDays] = useState("");
+
   // Advanced
   const [density, setDensity] = useState("1");
   const [tareWeight, setTareWeight] = useState("0");
@@ -195,6 +197,7 @@ export default function IngredientEditScreen({
         allowable_variance: number;
         is_batch_item: number;
         batch_yield_qty: number;
+        shelf_life_days: number | null;
       }>("SELECT * FROM local_ingredients WHERE id = ?", [ingredientId!]);
 
       if (ing) {
@@ -213,6 +216,33 @@ export default function IngredientEditScreen({
         setAllowableVariance(((ing.allowable_variance || 0) * 100).toString());
         setIsBatchItem(!!ing.is_batch_item);
         setBatchYieldQty(ing.batch_yield_qty?.toString() || "");
+        setShelfLifeDays(ing.shelf_life_days?.toString() || "");
+
+        // Load batch components from local cache
+        if (ing.is_batch_item) {
+          const comps = await db.getAllAsync<{
+            id: string;
+            child_id: string;
+            quantity: number;
+            unit: string;
+          }>(
+            `SELECT ic.id, ic.child_id, ic.quantity, ic.unit, li.name, li.base_unit
+             FROM local_ingredient_components ic
+             LEFT JOIN local_ingredients li ON li.id = ic.child_id
+             WHERE ic.parent_id = ?`,
+            [ingredientId!]
+          ) as any[];
+          if (comps.length > 0) {
+            setBatchIngredients(
+              comps.map((c) => ({
+                id: c.child_id,
+                name: (c as any).name ?? c.child_id,
+                quantity: String(c.quantity),
+                unit: c.unit,
+              }))
+            );
+          }
+        }
       }
     } catch (err) {
       console.error(err);
@@ -244,15 +274,16 @@ export default function IngredientEditScreen({
       const uWeight = unitWeight ? parseFloat(unitWeight) : null;
       const variance = (parseFloat(allowableVariance) || 0) / 100; // Convert % to decimal
       const batchYield = batchYieldQty ? parseFloat(batchYieldQty) : null;
+      const shelfDays = shelfLifeDays ? parseInt(shelfLifeDays) : null;
 
       // Use user-selected itemType (not auto-derived from type anymore)
       const finalItemType = itemType;
 
       // 1. Local Insert/Update
       await db.runAsync(
-        `INSERT OR REPLACE INTO local_ingredients 
-         (id, business_id, name, type, base_unit, unit_cost, min_threshold, density, tare_weight, unit_weight, unit_weight_unit, item_type, tracking_mode, allowable_variance, is_batch_item, batch_yield_qty, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        `INSERT OR REPLACE INTO local_ingredients
+         (id, business_id, name, type, base_unit, unit_cost, min_threshold, density, tare_weight, unit_weight, unit_weight_unit, item_type, tracking_mode, allowable_variance, is_batch_item, batch_yield_qty, shelf_life_days, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
         [
           id,
           businessId || null,
@@ -270,6 +301,7 @@ export default function IngredientEditScreen({
           variance,
           isBatchItem ? 1 : 0,
           batchYield,
+          shelfDays,
         ]
       );
 
@@ -292,6 +324,7 @@ export default function IngredientEditScreen({
         allowable_variance: variance,
         is_batch_item: isBatchItem,
         batch_yield_qty: batchYield,
+        shelf_life_days: shelfDays,
         archived: false,
         updated_at: new Date().toISOString(),
       });
@@ -507,6 +540,16 @@ export default function IngredientEditScreen({
             onChangeText={setMinThreshold}
             keyboardType="numeric"
             placeholder="0"
+            placeholderTextColor="#475569"
+          />
+
+          <Label text="Số ngày bảo quản" />
+          <TextInput
+            style={styles.input}
+            value={shelfLifeDays}
+            onChangeText={setShelfLifeDays}
+            keyboardType="numeric"
+            placeholder="Để trống nếu không theo dõi hạn"
             placeholderTextColor="#475569"
           />
 

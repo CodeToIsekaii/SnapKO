@@ -11,8 +11,9 @@ const monorepoRoot = path.resolve(projectRoot, "../..");
 const config = getDefaultConfig(projectRoot);
 
 // 3. Cấu hình WatchFolders:
-// Bắt buộc để Metro theo dõi thay đổi trong `packages/shared` hoặc `packages/ts-types`
-config.watchFolders = [monorepoRoot];
+// Chỉ cần theo dõi các workspace packages mà mobile thật sự import.
+// Watch cả monorepo root dễ làm Metro reload liên tục khi desktop/web còn thay đổi.
+config.watchFolders = [path.resolve(monorepoRoot, "packages")];
 
 // 4. Cấu hình Node Modules Resolution:
 // Giúp Metro tìm thấy các thư viện được cài ở root (do cơ chế của pnpm workspaces)
@@ -25,5 +26,8 @@ config.resolver.nodeModulesPaths = [
 // Giúp build nhanh hơn và tránh xung đột phiên bản
 config.resolver.disableHierarchicalLookup = true;
 
-// 6. Kết hợp với NativeWind
+// 6. Windows local dev: avoid Metro worker spawn EPERM on some locked-down shells.
+config.maxWorkers = 1;
+
+// 7. Kết hợp với NativeWind
 module.exports = withNativeWind(config, { input: "./global.css" });

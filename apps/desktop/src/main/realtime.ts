@@ -10,7 +10,7 @@
 import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import { BrowserWindow } from "electron";
 import { Env } from "../env";
-import { pullIngredients } from "./sync";
+import { pullIngredients, invalidatePullCache } from "./sync";
 
 // Environment variables (validated via Zod in env.ts)
 const SUPABASE_URL = Env.VITE_SUPABASE_URL;
@@ -25,6 +25,40 @@ let supabaseClient: ReturnType<typeof createClient> | null = null;
 // Debounce for thundering herd prevention
 let pullTimeout: NodeJS.Timeout | null = null;
 const DEBOUNCE_MS = 500;
+
+// Fallback polling when realtime channel fails (TIMED_OUT / CHANNEL_ERROR)
+const fallbackTimers: Map<string, NodeJS.Timeout> = new Map();
+const FALLBACK_POLL_MS = 10 * 60 * 1000; // 10 min — realtime handles fresh updates, fallback chỉ cần catch stragglers
+
+function startFallbackPolling(
+  channelName: string,
+  mainWindow: BrowserWindow | null
+): void {
+  if (fallbackTimers.has(channelName)) return;
+  console.warn(
+    `[Realtime] ${channelName} unhealthy -> fallback polling every ${FALLBACK_POLL_MS}ms`
+  );
+  const timer = setInterval(async () => {
+    try {
+      const result = await pullIngredients();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("stock-updated", result);
+      }
+    } catch (err) {
+      console.error(`[Realtime] Fallback poll error (${channelName}):`, err);
+    }
+  }, FALLBACK_POLL_MS);
+  fallbackTimers.set(channelName, timer);
+}
+
+function stopFallbackPolling(channelName: string): void {
+  const timer = fallbackTimers.get(channelName);
+  if (timer) {
+    clearInterval(timer);
+    fallbackTimers.delete(channelName);
+    console.log(`[Realtime] ${channelName} recovered -> fallback polling stopped`);
+  }
+}
 
 /**
  * Start Realtime listener for inventory logs
@@ -76,6 +110,7 @@ export function startRealtimeListener(
           pullTimeout = setTimeout(async () => {
             console.log("🚀 [Realtime] Executing debounced pull...");
             try {
+              invalidatePullCache(); // real mutation → bypass 10-min TTL
               const result = await pullIngredients();
               console.log("[Realtime] Pulled:", result.synced, "items");
 
@@ -98,6 +133,7 @@ export function startRealtimeListener(
 
           pullTimeout = setTimeout(async () => {
             try {
+              invalidatePullCache(); // real mutation → bypass 10-min TTL
               const result = await pullIngredients();
               if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send("ingredients-updated", result);
@@ -112,8 +148,13 @@ export function startRealtimeListener(
     )
     .subscribe((status) => {
       console.log("[Realtime] Signal subscription:", status);
-      if (status === "SUBSCRIBED" && mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("realtime-connected", { connected: true });
+      if (status === "SUBSCRIBED") {
+        stopFallbackPolling("signals");
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("realtime-connected", { connected: true });
+        }
+      } else if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+        startFallbackPolling("signals", mainWindow);
       }
     });
 
@@ -158,6 +199,11 @@ export function startRealtimeListener(
     )
     .subscribe((status) => {
       console.log("[Realtime] Logs subscription status:", status);
+      if (status === "SUBSCRIBED") {
+        stopFallbackPolling("logs");
+      } else if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+        startFallbackPolling("logs", mainWindow);
+      }
     });
 
   // ============ BUSINESS SETTINGS: Listen to businesses table for Inventory Model changes ============
@@ -180,6 +226,11 @@ export function startRealtimeListener(
     )
     .subscribe((status) => {
       console.log("[Realtime] Business subscription status:", status);
+      if (status === "SUBSCRIBED") {
+        stopFallbackPolling("business");
+      } else if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+        startFallbackPolling("business", mainWindow);
+      }
     });
 
   console.log(`[Realtime] Listening for business: ${businessId}`);
@@ -195,6 +246,13 @@ export function stopRealtimeListener(): void {
     clearTimeout(pullTimeout);
     pullTimeout = null;
   }
+
+  // Clear all fallback polling timers
+  for (const [name, timer] of fallbackTimers.entries()) {
+    clearInterval(timer);
+    console.log(`[Realtime] Cleared fallback timer: ${name}`);
+  }
+  fallbackTimers.clear();
 
   if (signalChannel && supabaseClient) {
     supabaseClient.removeChannel(signalChannel);

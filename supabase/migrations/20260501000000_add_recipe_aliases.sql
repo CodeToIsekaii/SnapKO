@@ -1,0 +1,2 @@
+ALTER TABLE public.recipes
+  ADD COLUMN IF NOT EXISTS aliases TEXT[] NOT NULL DEFAULT '{}';

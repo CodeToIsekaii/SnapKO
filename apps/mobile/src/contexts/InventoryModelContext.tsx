@@ -1,6 +1,6 @@
 /**
  * InventoryModelContext - Global state for inventory model
- * Ensures all screens share the same model state (SIMPLE vs STANDARD)
+ * Ensures all screens share the same effective inventory model.
  */
 
 import React, {
@@ -14,7 +14,13 @@ import React, {
 import { getDB } from "../db";
 import { syncBusinessConfig } from "../lib/supabase";
 
-export type InventoryModel = "SIMPLE" | "STANDARD";
+export type InventoryModel = "SIMPLE" | "STANDARD" | "CHAIN";
+
+function normalizeInventoryModel(value?: string | null): InventoryModel {
+  if (value === "STANDARD" || value === "MODEL_B") return "STANDARD";
+  if (value === "CHAIN") return "CHAIN";
+  return "SIMPLE";
+}
 
 interface InventoryModelContextValue {
   model: InventoryModel;
@@ -22,6 +28,7 @@ interface InventoryModelContextValue {
   isLoading: boolean;
   isSimple: boolean;
   isStandard: boolean;
+  isChain: boolean;
   syncModel: () => Promise<void>;
 }
 
@@ -30,7 +37,7 @@ const InventoryModelContext = createContext<InventoryModelContextValue | null>(
 );
 
 export function InventoryModelProvider({ children }: { children: ReactNode }) {
-  const [model, setModel] = useState<InventoryModel>("STANDARD");
+  const [model, setModel] = useState<InventoryModel>("SIMPLE");
   const [businessId, setBusinessId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -44,7 +51,7 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
         console.warn(
           "[InventoryModelContext] Database not ready, using default"
         );
-        setModel("STANDARD");
+        setModel("SIMPLE");
         setIsLoading(false);
         return;
       }
@@ -55,8 +62,9 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
       }>("SELECT inventory_model, business_id FROM local_profiles LIMIT 1");
 
       if (profile) {
-        if (profile.inventory_model) {
-          setModel(profile.inventory_model as InventoryModel);
+        const localModel = normalizeInventoryModel(profile.inventory_model);
+        if (localModel === "SIMPLE") {
+          setModel("SIMPLE");
         }
         if (profile.business_id) {
           setBusinessId(profile.business_id);
@@ -80,13 +88,13 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
         console.warn(
           "[InventoryModelContext] DB not ready, using default model"
         );
-        setModel("STANDARD");
+        setModel("SIMPLE");
         setIsLoading(false);
         return;
       }
 
       console.error("[InventoryModelContext] Load error:", err);
-      setModel("STANDARD"); // Default on error
+      setModel("SIMPLE"); // Locked-safe default on error
     } finally {
       setIsLoading(false);
     }
@@ -101,11 +109,13 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
 
       if (result.inventoryModel) {
         // Set model directly from server result
-        setModel(result.inventoryModel as InventoryModel);
+        setModel(normalizeInventoryModel(result.inventoryModel));
         console.log(
           "✅ [Context] Model synced from SERVER:",
           result.inventoryModel
         );
+      } else {
+        setModel("SIMPLE");
       }
 
       // Set businessId directly from server result (for Realtime subscription!)
@@ -117,6 +127,7 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       console.error("[InventoryModelContext] Sync error:", err);
+      setModel("SIMPLE");
     } finally {
       setIsLoading(false);
     }
@@ -157,6 +168,7 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
     // Import supabase and setup channel
     let channel: any = null;
     let isMounted = true;
+    let realtimeFallbackLogged = false;
 
     (async () => {
       const { supabase } = await import("../lib/supabase");
@@ -183,8 +195,8 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
             );
 
             if (newModel) {
-              setModel(newModel as InventoryModel);
-              console.log("✅ [Context Realtime] Model updated to:", newModel);
+              await syncModel();
+              console.log("✅ [Context Realtime] Model change pulled from server:", newModel);
 
               // Show notification
               const { Alert, Platform, ToastAndroid } = await import(
@@ -192,17 +204,13 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
               );
               if (Platform.OS === "android") {
                 ToastAndroid.show(
-                  `Chế độ kho: ${
-                    newModel === "STANDARD" ? "Kho Kép" : "Kho Đơn"
-                  }`,
+                  "Đã đồng bộ mô hình kho",
                   ToastAndroid.LONG
                 );
               } else {
                 Alert.alert(
                   "Cập nhật hệ thống",
-                  `Chế độ: ${
-                    newModel === "STANDARD" ? "Kho Kép 📦" : "Kho Đơn 📋"
-                  }`
+                  "Đã đồng bộ mô hình kho"
                 );
               }
             }
@@ -212,9 +220,24 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
           console.log(`🔔 [Context Realtime] Status: ${status}`, err || "");
           if (status === "SUBSCRIBED") {
             console.log("✅ [Context Realtime] Successfully subscribed!");
+            realtimeFallbackLogged = false;
           } else if (status === "CHANNEL_ERROR") {
-            console.error(
-              "❌ [Context Realtime] Error - check Realtime enabled!"
+            if (!realtimeFallbackLogged) {
+              realtimeFallbackLogged = true;
+              console.log(
+                "[Context Realtime] Channel unavailable, using pull-sync fallback.",
+                err || "",
+              );
+              syncModel().catch((syncErr) => {
+                console.log(
+                  "[Context Realtime] Fallback sync skipped:",
+                  syncErr,
+                );
+              });
+            }
+          } else if (status === "TIMED_OUT" || status === "CLOSED") {
+            console.log(
+              `[Context Realtime] ${status}, app will keep using manual/pull sync fallback.`,
             );
           }
         });
@@ -237,7 +260,8 @@ export function InventoryModelProvider({ children }: { children: ReactNode }) {
     businessId,
     isLoading,
     isSimple: model === "SIMPLE",
-    isStandard: model === "STANDARD",
+    isStandard: model !== "SIMPLE",
+    isChain: model === "CHAIN",
     syncModel,
   };
 

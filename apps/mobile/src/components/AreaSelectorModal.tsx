@@ -15,6 +15,8 @@ interface AreaSelectorModalProps {
   onClose: () => void;
   onSelect: (area: StorageArea, mode?: CheckMode) => void;
   hasTodaySales?: boolean; // If true, auto-select FULL mode for Warehouse (skip mode selection)
+  barDisabled?: boolean;
+  warehouseSpotDisabled?: boolean;
 }
 
 export default function AreaSelectorModal({
@@ -22,12 +24,16 @@ export default function AreaSelectorModal({
   onClose,
   onSelect,
   hasTodaySales,
+  barDisabled = false,
+  warehouseSpotDisabled = false,
 }: AreaSelectorModalProps) {
   const [selectedArea, setSelectedArea] = React.useState<StorageArea | null>(
     null,
   );
 
   const handleAreaSelect = (area: StorageArea) => {
+    if (area === "BAR" && barDisabled) return;
+
     if (area === "BAR") {
       // Bar is direct - no mode selection needed
       onSelect("BAR");
@@ -46,6 +52,8 @@ export default function AreaSelectorModal({
   };
 
   const handleModeSelect = (mode: CheckMode) => {
+    if (mode === "SPOT" && warehouseSpotDisabled) return;
+
     onSelect("WAREHOUSE", mode);
     setSelectedArea(null);
     onClose();
@@ -72,16 +80,34 @@ export default function AreaSelectorModal({
             // Step 1: Area Selection
             <>
               <Pressable
-                style={[styles.optionButton, styles.optionPrimary]}
+                disabled={barDisabled}
+                style={[
+                  styles.optionButton,
+                  styles.optionPrimary,
+                  barDisabled && styles.optionDisabled,
+                ]}
                 onPress={() => handleAreaSelect("BAR")}
               >
                 <View style={styles.iconContainer}>
-                  <Ionicons name="wine" size={28} color="#6B8E23" />
+                  <Ionicons
+                    name="wine"
+                    size={28}
+                    color={barDisabled ? "#64748B" : "#6B8E23"}
+                  />
                 </View>
                 <View style={styles.optionContent}>
-                  <Text style={styles.optionTitle}>QUẦY BAR</Text>
+                  <Text
+                    style={[
+                      styles.optionTitle,
+                      barDisabled && styles.optionTextDisabled,
+                    ]}
+                  >
+                    QUẦY BAR
+                  </Text>
                   <Text style={styles.optionSubtitle}>
-                    Kiểm tồn cuối ca (Mặc định)
+                    {barDisabled
+                      ? "Mở sau khi kiểm xong Kho tổng"
+                      : "Kiểm tồn cuối ca (Mặc định)"}
                   </Text>
                 </View>
               </Pressable>
@@ -128,18 +154,34 @@ export default function AreaSelectorModal({
               </Pressable>
 
               <Pressable
-                style={[styles.optionButton, styles.optionCalm]}
+                disabled={warehouseSpotDisabled}
+                style={[
+                  styles.optionButton,
+                  styles.optionCalm,
+                  warehouseSpotDisabled && styles.optionDisabled,
+                ]}
                 onPress={() => handleModeSelect("SPOT")}
               >
                 <View style={styles.iconContainer}>
-                  <Ionicons name="search" size={28} color="#3B82F6" />
+                  <Ionicons
+                    name="search"
+                    size={28}
+                    color={warehouseSpotDisabled ? "#64748B" : "#3B82F6"}
+                  />
                 </View>
                 <View style={styles.optionContent}>
-                  <Text style={[styles.optionTitle, { color: "#3B82F6" }]}>
+                  <Text
+                    style={[
+                      styles.optionTitle,
+                      { color: warehouseSpotDisabled ? "#64748B" : "#3B82F6" },
+                    ]}
+                  >
                     Kiểm 1 Phần
                   </Text>
                   <Text style={styles.optionSubtitle}>
-                    Chỉ cập nhật món bạn đếm
+                    {warehouseSpotDisabled
+                      ? "Baseline cần kiểm toàn bộ Kho tổng"
+                      : "Chỉ cập nhật món bạn đếm"}
                   </Text>
                 </View>
               </Pressable>
@@ -208,6 +250,13 @@ const styles = StyleSheet.create({
   optionCalm: {
     borderColor: "#3B82F6",
     backgroundColor: "#3B82F610",
+  },
+  optionDisabled: {
+    opacity: 0.45,
+    borderColor: "transparent",
+  },
+  optionTextDisabled: {
+    color: "#64748B",
   },
   iconContainer: {
     width: 40,

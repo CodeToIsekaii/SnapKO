@@ -19,6 +19,17 @@ export interface ElectronAPI {
     session?: any;
     error?: string;
   }>;
+  register: (
+    email: string,
+    password: string,
+    fullName: string,
+    businessName?: string
+  ) => Promise<{
+    success: boolean;
+    session?: any;
+    needsVerification?: boolean;
+    error?: string;
+  }>;
   logout: () => Promise<{ success: boolean }>;
   setAuthToken: (token: string | null) => Promise<{ success: boolean }>;
   getSession: () => Promise<{ session: any | null }>;
@@ -34,6 +45,7 @@ export interface ElectronAPI {
   updateBusiness: (data: {
     inventory_model?: string;
     name?: string;
+    shareRecipesWithStaff?: boolean;
   }) => Promise<{ success: boolean; error?: string }>;
 
   createBusiness: (data: {
@@ -42,7 +54,7 @@ export interface ElectronAPI {
   }) => Promise<{ success: boolean; business?: any; error?: string }>;
 
   // Sync
-  syncFromServer: () => Promise<{
+  syncFromServer: (opts?: { force?: boolean }) => Promise<{
     success: boolean;
     synced: number;
     error?: string;
@@ -51,6 +63,8 @@ export interface ElectronAPI {
   // Database - Ingredients
   getIngredients: (options?: { includeArchived?: boolean }) => Promise<any[]>;
   upsertIngredient: (ingredient: any) => Promise<{ success: boolean }>;
+  saveIngredientWithComponents: (data: any) => Promise<{ success: boolean; data?: any; error?: string }>;
+  getIngredientComponents: (ingredientId: string) => Promise<{ success: boolean; data?: any; error?: string }>;
   getPendingLogs: () => Promise<any[]>;
   addPendingLog: (log: any) => Promise<{ success: boolean }>;
   markSynced: (ids: string[]) => Promise<{ success: boolean; count: number }>;
@@ -60,8 +74,8 @@ export interface ElectronAPI {
   fixMissingBusinessId: (
     businessId: string
   ) => Promise<{ success: boolean; error?: string }>;
-  deleteIngredient: (ingredientId: string) => Promise<{ success: boolean }>;
-  restoreIngredient: (ingredientId: string) => Promise<{ success: boolean }>;
+  deleteIngredient: (ingredientId: string) => Promise<{ success: boolean; error?: string }>;
+  restoreIngredient: (ingredientId: string) => Promise<{ success: boolean; error?: string }>;
 
   // Log Retention
   getRetentionDays: () => Promise<number>;
@@ -127,6 +141,31 @@ export interface ElectronAPI {
   onNewLog: (callback: (log: any) => void) => () => void;
   onIngredientUpdate: (callback: (ingredient: any) => void) => () => void;
 
+  // Dialog (focus-safe native confirm)
+  confirmDialog: (message: string, detail?: string) => Promise<boolean>;
+
+  // Shell
+  openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+
+  // Storage Areas
+  listStorageAreas: () => Promise<any[]>;
+  createStorageArea: (data: { name: string; type?: string }) => Promise<any>;
+  updateStorageArea: (id: string, data: { name?: string; isActive?: boolean }) => Promise<any>;
+  deleteStorageArea: (id: string) => Promise<{ success: boolean }>;
+
+  // Reports (backend API proxy)
+  reportsGet: (endpoint: string) => Promise<any>;
+
+  // AI parse (Invoice/Sales/Stock/Recipe)
+  aiParse: (body: {
+    type: "IMPORT" | "SALES" | "STOCK_CHECK" | "RECIPE";
+    image?: string;
+    images?: string[];
+    areaType?: "warehouse" | "bar" | "SERVICE" | "STORAGE";
+    inventoryModel?: "SIMPLE" | "STANDARD" | "CHAIN";
+    qualityMode?: "standard" | "high_accuracy";
+  }) => Promise<any>;
+
   // Signal Pattern Sync (generic event listeners)
   on: (channel: string, callback: (data?: any) => void) => void;
   off: (channel: string, callback: (data?: any) => void) => void;
@@ -139,6 +178,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("auth:login", email, password),
 
   googleLogin: () => ipcRenderer.invoke("auth:google-login"),
+
+  register: (
+    email: string,
+    password: string,
+    fullName: string,
+    businessName?: string
+  ) =>
+    ipcRenderer.invoke(
+      "auth:register",
+      email,
+      password,
+      fullName,
+      businessName
+    ),
 
   logout: () => ipcRenderer.invoke("auth:logout"),
 
@@ -153,14 +206,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   updateProfile: (data: { inventory_model?: string; full_name?: string }) =>
     ipcRenderer.invoke("auth:update-profile", data),
 
-  updateBusiness: (data: { inventory_model?: string; name?: string }) =>
+  updateBusiness: (data: { inventory_model?: string; name?: string; shareRecipesWithStaff?: boolean }) =>
     ipcRenderer.invoke("auth:update-business", data),
 
   createBusiness: (data: { name: string; userId: string }) =>
     ipcRenderer.invoke("auth:create-business", data),
 
   // ==================== SYNC ====================
-  syncFromServer: () => ipcRenderer.invoke("sync:pull"),
+  syncFromServer: (opts?: { force?: boolean }) =>
+    ipcRenderer.invoke("sync:pull", opts),
 
   // ==================== DATABASE ====================
   getIngredients: (options?: { includeArchived?: boolean }) =>
@@ -168,6 +222,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   upsertIngredient: (ingredient: any) =>
     ipcRenderer.invoke("db:upsertIngredient", ingredient),
+
+  saveIngredientWithComponents: (data: any) =>
+    ipcRenderer.invoke("ingredients:saveWithComponents", data),
+
+  getIngredientComponents: (ingredientId: string) =>
+    ipcRenderer.invoke("ingredients:getComponents", ingredientId),
 
   getPendingLogs: () => ipcRenderer.invoke("db:getPendingLogs"),
 
@@ -259,6 +319,29 @@ contextBridge.exposeInMainWorld("electronAPI", {
   off: (channel: string, callback: (data?: any) => void) => {
     ipcRenderer.removeAllListeners(channel);
   },
+
+  confirmDialog: (message: string, detail?: string) =>
+    ipcRenderer.invoke("dialog:confirm", message, detail),
+
+  openExternal: (url: string) => ipcRenderer.invoke("shell:open-external", url),
+
+  listStorageAreas: () => ipcRenderer.invoke("storage-areas:list"),
+  createStorageArea: (data: { name: string; type?: string }) =>
+    ipcRenderer.invoke("storage-areas:create", data),
+  updateStorageArea: (id: string, data: { name?: string; isActive?: boolean }) =>
+    ipcRenderer.invoke("storage-areas:update", id, data),
+  deleteStorageArea: (id: string) => ipcRenderer.invoke("storage-areas:delete", id),
+
+  reportsGet: (endpoint: string) => ipcRenderer.invoke("reports:get", endpoint),
+
+  aiParse: (body: {
+    type: "IMPORT" | "SALES" | "STOCK_CHECK" | "RECIPE";
+    image?: string;
+    images?: string[];
+    areaType?: "warehouse" | "bar" | "SERVICE" | "STORAGE";
+    inventoryModel?: "SIMPLE" | "STANDARD" | "CHAIN";
+    qualityMode?: "standard" | "high_accuracy";
+  }) => ipcRenderer.invoke("ai:parse", body),
 } as ElectronAPI);
 
 // App version info

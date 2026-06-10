@@ -1,12 +1,22 @@
 # deps
 node_modules/
 
+# logs and local diagnostics
+*.log
+*.err.log
+*.stdout.log
+*.stderr.log
+mobile-screen.png
+
 # env (never commit)
 .env
 .env.*
 .env.local
 .env.*.local
 !.env.example
+
+# caches
+.turbo/
 
 # expo
 apps/mobile/.expo/
@@ -19,6 +29,7 @@ apps/web-landing/out/
 # electron-vite
 apps/desktop/dist/
 apps/desktop/dist-exes/
+apps/desktop/electron.vite.config.*.mjs
 
 # supabase
 supabase/.branches/

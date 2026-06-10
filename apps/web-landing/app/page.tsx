@@ -766,7 +766,7 @@ export default function LandingPage() {
               "Lưu trữ nội bộ (Local-first)",
               "Không đồng bộ Cloud",
               "1 Người dùng (Owner)",
-              "AI: 10 lần scan/tháng",
+              "AI: 20 lần scan/tháng",
               "Kho Model A (Cơ bản)",
             ]}
             cta="Bắt đầu ngay"
@@ -775,11 +775,11 @@ export default function LandingPage() {
           <PricingCard
             name="Gói B: PRO"
             subtitle="Dành cho quán vận hành chuyên nghiệp"
-            price="100.000đ"
+            price="199.000đ"
             priceUnit="/tháng"
             features={[
               "Cloud Sync (Real-time) đa thiết bị",
-              "Unlimited AI (Scan thoải mái)",
+              "AI: 100 lần scan/tháng",
               "Chống gian lận (Cảnh báo Dư/Thiếu)",
               "Đa người dùng (Phân quyền Staff)",
               "Báo cáo nâng cao (Excel, Biểu đồ)",
@@ -793,10 +793,11 @@ export default function LandingPage() {
           <PricingCard
             name="Gói C: PREMIUM"
             subtitle="Dành cho chuỗi F&B và doanh nghiệp"
-            price="150.000đ"
+            price="499.000đ"
             priceUnit="/tháng"
             features={[
               "Tất cả tính năng PRO",
+              "AI: 500 lần scan/tháng",
               "Kho Model C (Chuỗi nhiều chi nhánh)",
               "Hỗ trợ ưu tiên 24/7",
               "Dashboard Analytics nâng cao",

@@ -34,6 +34,8 @@ interface LocalIngredient {
   name: string;
   base_unit: string;
   density: number | null;
+  unit_weight?: number | null;
+  unit_weight_unit?: string | null;
   bar_qty: number;
   warehouse_qty: number;
 }
@@ -169,7 +171,7 @@ export async function calculateTheoreticalConsumption(
       for (const ri of recipeIngredients) {
         // Get ingredient for unit conversion
         const ing = await db.getFirstAsync<LocalIngredient>(
-          `SELECT id, name, base_unit, density FROM local_ingredients WHERE id = ?`,
+          `SELECT id, name, base_unit, density, unit_weight, unit_weight_unit FROM local_ingredients WHERE id = ?`,
           [ri.ingredient_id],
         );
 
@@ -186,6 +188,8 @@ export async function calculateTheoreticalConsumption(
             ri.unit,
             ing.base_unit,
             ing.density || undefined,
+            ing.unit_weight,
+            ing.unit_weight_unit,
           );
           if (typeof converted === "number") {
             normalizedQty = converted;

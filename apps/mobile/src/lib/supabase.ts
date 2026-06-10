@@ -16,6 +16,23 @@
 import { createClient } from "@supabase/supabase-js";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Env } from "../env";
+import { api } from "../services/api";
+import { updateProRebaselineFromSubscription } from "../utils/proRebaseline";
+
+function isNetworkRequestFailure(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("Network request failed");
+}
+
+function isUnauthorizedError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const message = err.message || "";
+  return (
+    message.includes('"statusCode":401') ||
+    message.includes('"status":401') ||
+    message.includes("Unauthorized") ||
+    message.includes("HTTP 401")
+  );
+}
 
 /**
  * Supabase Client Singleton Instance
@@ -42,19 +59,24 @@ export async function getCurrentUserId(): Promise<string | null> {
 }
 
 /**
- * Helper to get current user's business_id from profile
+ * Helper to get current user's business_id from profile (via BE-SnapKO)
  */
 export async function getCurrentBusinessId(): Promise<string | null> {
-  const userId = await getCurrentUserId();
-  if (!userId) return null;
-
-  const { data } = await supabase
-    .from("profiles")
-    .select("business_id")
-    .eq("id", userId)
-    .single();
-
-  return data?.business_id ?? null;
+  try {
+    const profile = await api.get<{ businessId?: string }>("/profiles/me");
+    return profile?.businessId ?? null;
+  } catch (err) {
+    if (isNetworkRequestFailure(err)) {
+      console.log("[getCurrentBusinessId] Backend unavailable, using local state.");
+    } else if (isUnauthorizedError(err)) {
+      console.log(
+        "[getCurrentBusinessId] Unauthorized (missing/expired backend token), using local state.",
+      );
+    } else {
+      console.error("[getCurrentBusinessId] error:", err);
+    }
+    return null;
+  }
 }
 
 /**
@@ -74,100 +96,103 @@ export async function isAuthenticated(): Promise<boolean> {
  */
 export async function syncBusinessConfig(): Promise<{
   inventoryModel: string | null;
+  effectiveTier: string | null;
+  subscriptionStatus: string | null;
+  entitlements: {
+    canUseDualWarehouse: boolean;
+    canUseCustomStorageAreas: boolean;
+    canInviteStaff: boolean;
+    canUseAdvancedReports: boolean;
+  } | null;
   businessName: string | null;
   businessId: string | null;
   success: boolean;
 }> {
   try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const profile = await api.get<{
+      id: string;
+      businessId?: string;
+      role?: string;
+      inventoryModel?: string;
+      business?: {
+        name?: string;
+        inventoryModel?: string;
+        effectiveInventoryModel?: string;
+        effectiveTier?: string;
+        subscriptionStatus?: string;
+        subscriptionExpiresAt?: string | null;
+        entitlements?: {
+          canUseDualWarehouse: boolean;
+          canUseCustomStorageAreas: boolean;
+          canInviteStaff: boolean;
+          canUseAdvancedReports: boolean;
+        };
+      };
+    }>("/profiles/me");
 
-    if (!session) {
-      console.log("[syncBusinessConfig] No session");
+    if (!profile) {
       return {
         inventoryModel: null,
+        effectiveTier: null,
+        subscriptionStatus: null,
+        entitlements: null,
         businessName: null,
         businessId: null,
         success: false,
       };
     }
 
-    // Fetch profile with inventory_model, role and business info
-    const { data: profile, error } = await supabase
-      .from("profiles")
-      .select(
-        `
-        inventory_model,
-        business_id,
-        role,
-        businesses (
-          name,
-          inventory_model
-        )
-      `
-      )
-      .eq("id", session.user.id)
-      .single();
-
-    if (error) {
-      console.error("[syncBusinessConfig] Query error:", error);
-      return {
-        inventoryModel: null,
-        businessName: null,
-        businessId: null,
-        success: false,
-      };
-    }
-
-    console.log(
-      "[syncBusinessConfig] Raw Profile:",
-      JSON.stringify(profile, null, 2)
-    );
-
-    // Prioritize GLOBAL business model over LEGACY profile model
-    const businessModel = (profile?.businesses as any)?.inventory_model;
-    const inventoryModel =
-      businessModel || profile?.inventory_model || "STANDARD";
-    const businessName = (profile?.businesses as any)?.name || null;
+    // Trust only the backend-computed effective model. Raw business/profile model
+    // can stay STANDARD after downgrade/expiry and must not unlock UI.
+    const effectiveBusinessModel = profile.business?.effectiveInventoryModel;
+    const inventoryModel = effectiveBusinessModel || "SIMPLE";
+    const businessName = profile.business?.name || null;
+    const effectiveTier = profile.business?.effectiveTier || null;
+    const subscriptionStatus = profile.business?.subscriptionStatus || null;
+    const subscriptionExpiresAt =
+      profile.business?.subscriptionExpiresAt || null;
+    const entitlements = profile.business?.entitlements || null;
 
     console.log("[syncBusinessConfig] Fetched from server:", {
       businessName,
       inventoryModel,
-      source: businessModel ? "GLOBAL BUSINESS" : "LEGACY PROFILE",
+      effectiveTier,
+      subscriptionStatus,
+      source: effectiveBusinessModel ? "EFFECTIVE BUSINESS" : "LOCKED SAFE DEFAULT",
     });
 
-    // Update local SQLite if we have a model (use INSERT OR REPLACE for empty DB)
     if (inventoryModel) {
       try {
         const { getDB } = await import("../db");
         const db = await getDB();
 
-        // Check if db is properly initialized
         if (!db) {
           console.warn(
             "[syncBusinessConfig] Database not ready yet, skipping local update"
           );
           return {
             inventoryModel,
+            effectiveTier,
+            subscriptionStatus,
+            entitlements,
             businessName,
-            businessId: profile?.business_id || null,
+            businessId: profile.businessId || null,
             success: true,
           };
         }
 
-        const userRole = profile?.role || "STAFF"; // Default to STAFF if not set
+        const userRole = profile.role || "STAFF";
         await db.runAsync(
-          `INSERT OR REPLACE INTO local_profiles 
-           (id, business_id, role, status, inventory_model, created_at) 
+          `INSERT OR REPLACE INTO local_profiles
+           (id, business_id, role, status, inventory_model, created_at)
            VALUES (?, ?, ?, 'active', ?, datetime('now'))`,
-          [
-            session.user.id,
-            profile?.business_id || "",
-            userRole,
-            inventoryModel,
-          ]
+          [profile.id, profile.businessId || "", userRole, inventoryModel]
         );
+        await updateProRebaselineFromSubscription(db, {
+          effectiveTier,
+          subscriptionStatus,
+          subscriptionExpiresAt,
+        });
         console.log(
           "✅ Local DB updated with role:",
           userRole,
@@ -175,16 +200,17 @@ export async function syncBusinessConfig(): Promise<{
           inventoryModel
         );
       } catch (dbErr: any) {
-        // Handle database not ready or NullPointerException
         console.warn(
           "[syncBusinessConfig] DB update skipped (not ready):",
           dbErr?.message || dbErr
         );
-        // Still return success since we got data from server
         return {
           inventoryModel,
+          effectiveTier,
+          subscriptionStatus,
+          entitlements,
           businessName,
-          businessId: profile?.business_id || null,
+          businessId: profile.businessId || null,
           success: true,
         };
       }
@@ -192,14 +218,32 @@ export async function syncBusinessConfig(): Promise<{
 
     return {
       inventoryModel,
+      effectiveTier,
+      subscriptionStatus,
+      entitlements,
       businessName,
-      businessId: profile?.business_id || null,
+      businessId: profile.businessId || null,
       success: true,
     };
   } catch (err) {
-    console.error("[syncBusinessConfig] Error:", err);
+    if (isNetworkRequestFailure(err)) {
+      console.log(
+        "[syncBusinessConfig] Backend unavailable, keeping local business config.",
+      );
+    } else if (isUnauthorizedError(err)) {
+      // Expected during app bootstrap before backend token exchange completes.
+      // Do not use console.error here to avoid redbox for normal auth timing.
+      console.log(
+        "[syncBusinessConfig] Unauthorized (token not ready), keeping local business config.",
+      );
+    } else {
+      console.error("[syncBusinessConfig] Error:", err);
+    }
     return {
       inventoryModel: null,
+      effectiveTier: null,
+      subscriptionStatus: null,
+      entitlements: null,
       businessName: null,
       businessId: null,
       success: false,

@@ -7,7 +7,7 @@ import { useState, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { supabase } from "../lib/supabase";
+import { api } from "../services/api";
 import { Env } from "../env";
 
 // Configure notification handler
@@ -99,20 +99,10 @@ export function usePushNotifications() {
 
       const pushToken = tokenData.data;
 
-      // Save push token to profile in Supabase using our client
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (session?.user?.id) {
-        const { error } = await supabase
-          .from("profiles")
-          .update({ expo_push_token: pushToken })
-          .eq("id", session.user.id);
-
-        if (error) {
-          console.warn("Failed to save push token:", error.message);
-        }
-      }
+      // Save push token to backend profile
+      await api
+        .patch("/profiles/me", { expoPushToken: pushToken })
+        .catch((err: any) => console.warn("Failed to save push token:", err?.message));
 
       // Android channel setup
       if (Platform.OS === "android") {

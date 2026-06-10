@@ -4,7 +4,7 @@
  *
  * Key features:
  * - Only sends one notification per day (AsyncStorage flag)
- * - Triggers for PRO_WARNING state (≤3 days until expiry)
+ * - Triggers for PRO_WARNING state (≤5 days until expiry)
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -27,7 +27,7 @@ export async function checkAndNotifySubscription(
   subscription: SubscriptionStatus
 ): Promise<boolean> {
   try {
-    // Only notify for PRO_WARNING state (≤3 days until expiry)
+    // Only notify for PRO_WARNING state (≤5 days until expiry)
     // Don't notify for EXPIRED (they see banner in-app)
     // or TRIAL (not paying customers yet)
     if (subscription.state !== "PRO_WARNING") {

@@ -38,7 +38,7 @@ async function compressImage(uri: string): Promise<string> {
   try {
     const result = await manipulateAsync(
       uri,
-      [{ resize: { width: 1024 } }], // Max width 1024px
+      [{ resize: { width: 1024, height: 1024 } }], // Aligned with aiService.ts (1024px max)
       { compress: 0.7, format: SaveFormat.JPEG }
     );
     return result.uri;

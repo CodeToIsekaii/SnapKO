@@ -12,6 +12,7 @@ import { DashboardTab } from "./tabs/DashboardTab";
 import { EmployeesTab } from "./tabs/EmployeesTab";
 import IngredientsPage from "./IngredientsPage";
 import RecipesPage from "./Recipes";
+import ReportsPage from "./ReportsPage";
 import SettingsPage from "./SettingsPage";
 import ProfileEditPage from "./ProfileEditPage";
 import { dashboardStyles, COLORS } from "../styles/theme";
@@ -23,6 +24,7 @@ import {
   Leaf,
   ChefHat,
   Settings,
+  TrendingUp,
 } from "lucide-react";
 
 type TabId =
@@ -31,6 +33,7 @@ type TabId =
   | "inventory"
   | "ingredients"
   | "recipes"
+  | "reports"
   | "settings";
 
 interface DashboardProps {
@@ -38,7 +41,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ user }: DashboardProps) {
-  const { logout, profile, updateProfile, refreshProfile } = useAuth();
+  const { logout, profile, refreshProfile } = useAuth();
   const inventory = useInventory();
   const staff = useStaff();
 
@@ -48,9 +51,42 @@ export function Dashboard({ user }: DashboardProps) {
     subscriptionExpiresAt: profile?.subscription_expires_at,
     businessCreatedAt: profile?.business_created_at,
   });
+  const effectiveTier = profile?.effective_tier ?? profile?.tier ?? "FREE";
+  const entitlements = profile?.entitlements;
+  const canUseDualWarehouse =
+    entitlements?.canUseDualWarehouse ??
+    (effectiveTier === "PRO" || effectiveTier === "CHAIN");
+  const canUseCustomStorageAreas =
+    entitlements?.canUseCustomStorageAreas ?? effectiveTier === "CHAIN";
+  const canInviteStaff = entitlements?.canInviteStaff ?? true;
+  const canUseAdvancedReports =
+    entitlements?.canUseAdvancedReports ?? canUseDualWarehouse;
 
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [editingProfile, setEditingProfile] = useState(false);
+  const [pendingTransferCount, setPendingTransferCount] = useState(0);
+
+  useEffect(() => {
+    if (!canUseDualWarehouse) {
+      setPendingTransferCount(0);
+      return;
+    }
+
+    const fetchPending = async () => {
+      try {
+        const data = await (window as any).electronAPI?.reportsGet(
+          "/inventory/transfers?status=PENDING"
+        );
+        const list = Array.isArray(data) ? data : (data?.data ?? []);
+        setPendingTransferCount(list.length);
+      } catch {
+        // ignore
+      }
+    };
+    fetchPending();
+    const interval = setInterval(fetchPending, 10 * 60 * 1000); // 10 min
+    return () => clearInterval(interval);
+  }, [canUseDualWarehouse]);
 
   // Load data on mount + Auto-sync from server (Local-First pattern)
   useEffect(() => {
@@ -83,66 +119,104 @@ export function Dashboard({ user }: DashboardProps) {
     }
   }, [activeTab, refreshProfile]);
 
+  // Re-load dashboard data when returning from Settings so new retention-days
+  // config applies immediately to activity logs.
+  useEffect(() => {
+    if (activeTab === "dashboard") {
+      inventory.loadData();
+    }
+  }, [activeTab, inventory.loadData]);
+
   // Tab definitions - Updated with Settings
-  const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
+  const tabs: { id: TabId; label: string; icon: React.ReactNode; locked?: boolean }[] = [
     { id: "dashboard", label: "Dashboard", icon: <BarChart3 size={16} /> },
-    { id: "employees", label: "Nhân viên", icon: <Users size={16} /> },
-    { id: "inventory", label: "Tồn kho", icon: <Package size={16} /> },
+    { id: "employees", label: "Nhân viên", icon: <Users size={16} />, locked: !canInviteStaff },
+    {
+      id: "inventory",
+      label: "Tồn kho",
+      icon: (
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <Package size={16} />
+          {pendingTransferCount > 0 && (
+            <span style={{ background: "#E63946", color: "#fff", borderRadius: 10, fontSize: 11, fontWeight: 700, padding: "1px 6px", lineHeight: "16px" }}>
+              {pendingTransferCount}
+            </span>
+          )}
+        </span>
+      ),
+    },
     { id: "ingredients", label: "Nguyên liệu", icon: <Leaf size={16} /> },
     { id: "recipes", label: "Công thức", icon: <ChefHat size={16} /> },
+    { id: "reports", label: "Báo cáo", icon: <TrendingUp size={16} />, locked: !canUseAdvancedReports },
     { id: "settings", label: "Cài đặt", icon: <Settings size={16} /> },
   ];
 
+  const openPricing = async () => {
+    try {
+      const result = await (window as any).electronAPI?.openExternal?.(
+        "https://app.snapko.vn/pricing"
+      );
+      if (!result?.success) {
+        throw new Error(result?.error || "Không thể mở trình duyệt");
+      }
+    } catch (err: any) {
+      alert(
+        "Không thể mở trang nâng cấp. Vui lòng truy cập https://app.snapko.vn/pricing"
+      );
+      console.error("[Dashboard] openPricing failed:", err);
+    }
+  };
+
   // Handle model change with error handling
-  const handleChangeModel = async (model: "SIMPLE" | "STANDARD") => {
+  const handleChangeModel = async (model: "SIMPLE" | "STANDARD" | "CHAIN") => {
     // Enforce subscription limit for Standard Model (Kho Kép)
-    if (model === "STANDARD" && !subscription.canUseDualWarehouse) {
+    if (model === "STANDARD" && !canUseDualWarehouse) {
       alert(
         "⚠️ Gói của bạn đã hết hạn. Vui lòng nâng cấp để sử dụng tính năng Kho Kép (Dual Warehouse)."
       );
-      // Open pricing page
-      (window as any).electronAPI?.openExternal?.(
-        "https://app.snapko.vn/pricing"
-      );
+      openPricing();
       return;
     }
 
-    if (updateProfile) {
-      console.log("[Dashboard] Changing model to:", model);
+    if (model === "CHAIN" && !canUseCustomStorageAreas) {
+      alert("⚠️ Mô hình nhiều khu vực cần gói CHAIN còn hiệu lực.");
+      openPricing();
+      return;
+    }
 
-      try {
-        // CHECK IF API IS AVAILABLE (Force Restart if missing)
-        if (!(window as any).electronAPI?.updateBusiness) {
-          alert(
-            "⚠️ Lỗi phiên bản: API chưa được cập nhật.\n\nVui lòng TẮT và MỞ LẠI ứng dụng Desktop (Restart) để nhận code mới!"
-          );
-          return;
-        }
+    console.log("[Dashboard] Changing model to:", model);
 
-        // 1. Update GLOBAL Business Config (Source of Truth)
-        await (window as any).electronAPI?.updateBusiness?.({
-          inventory_model: model,
-        });
-
-        // 2. Update Legacy Profile + Local State (for UI consistency)
-        const success = await updateProfile({ inventory_model: model });
-
-        if (success) {
-          console.log("[Dashboard] Model updated successfully!");
-          // Force refresh profile from server to confirm sync
-          await refreshProfile?.();
-          alert(
-            `✅ Đã chuyển sang chế độ ${
-              model === "SIMPLE" ? "Kho Đơn" : "Kho Kép"
-            }!`
-          );
-        } else {
-          throw new Error("Local profile update failed");
-        }
-      } catch (err) {
-        console.error("[Dashboard] Model update failed:", err);
-        alert("❌ Lỗi: Không thể cập nhật mô hình kho. Vui lòng thử lại.");
+    try {
+      // CHECK IF API IS AVAILABLE (Force Restart if missing)
+      if (!(window as any).electronAPI?.updateBusiness) {
+        alert(
+          "⚠️ Lỗi phiên bản: API chưa được cập nhật.\n\nVui lòng TẮT và MỞ LẠI ứng dụng Desktop (Restart) để nhận code mới!"
+        );
+        return;
       }
+
+      // 1. Update GLOBAL Business Config (Source of Truth)
+      const businessResult = await (window as any).electronAPI?.updateBusiness?.({
+        inventory_model: model,
+      });
+      if (!businessResult?.success) {
+        throw new Error(businessResult?.error || "Business update failed");
+      }
+
+      console.log("[Dashboard] Model updated successfully!");
+      await refreshProfile?.();
+      alert(
+        `✅ Đã chuyển sang chế độ ${
+          model === "SIMPLE"
+            ? "Kho Đơn"
+            : model === "CHAIN"
+              ? "Nhiều khu vực"
+              : "Kho Kép"
+        }!`
+      );
+    } catch (err) {
+      console.error("[Dashboard] Model update failed:", err);
+      alert("❌ Lỗi: Không thể cập nhật mô hình kho. Vui lòng thử lại.");
     }
   };
 
@@ -170,7 +244,7 @@ export function Dashboard({ user }: DashboardProps) {
       <Header
         user={user}
         syncStatus={inventory.syncStatus}
-        onSync={inventory.syncFromServer}
+        onSync={() => inventory.syncFromServer({ force: true })}
         onLogout={logout}
         businessId={profile?.business_id || undefined}
       />
@@ -180,13 +254,21 @@ export function Dashboard({ user }: DashboardProps) {
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              if (tab.locked) {
+                alert("Tính năng này cần gói PRO/CHAIN còn hiệu lực.");
+                openPricing();
+                return;
+              }
+              setActiveTab(tab.id);
+            }}
             style={{
               ...dashboardStyles.tabButton,
               ...(activeTab === tab.id ? dashboardStyles.tabButtonActive : {}),
+              ...(tab.locked ? { opacity: 0.45, cursor: "not-allowed" } : {}),
             }}
           >
-            {tab.icon} {tab.label}
+            {tab.icon} {tab.label}{tab.locked ? " 🔒" : ""}
           </button>
         ))}
       </div>
@@ -203,7 +285,7 @@ export function Dashboard({ user }: DashboardProps) {
           />
         )}
 
-        {activeTab === "employees" && (
+        {activeTab === "employees" && canInviteStaff && (
           <EmployeesTab
             pendingStaff={staff.pendingStaff}
             activeStaff={staff.activeStaff}
@@ -230,6 +312,8 @@ export function Dashboard({ user }: DashboardProps) {
 
         {activeTab === "recipes" && <RecipesPage />}
 
+        {activeTab === "reports" && canUseAdvancedReports && <ReportsPage />}
+
         {activeTab === "settings" && (
           <SettingsPage
             onLogout={logout}
@@ -238,6 +322,10 @@ export function Dashboard({ user }: DashboardProps) {
             userRole={profile?.role}
             businessName={profile?.business_name || "Chưa thiết lập"}
             inventoryModel={profile?.inventory_model}
+            storedInventoryModel={profile?.stored_inventory_model}
+            tier={profile?.tier}
+            effectiveTier={profile?.effective_tier}
+            entitlements={profile?.entitlements}
             onChangeModel={handleChangeModel}
             onEditProfile={() => setEditingProfile(true)}
             subscription={subscription}

@@ -8,7 +8,7 @@ import React, { useState } from "react";
 import { COLORS } from "../styles/theme";
 
 interface ModelSelectionPageProps {
-  onSave: (model: "SIMPLE" | "STANDARD") => void;
+  onSave: (model: "SIMPLE" | "STANDARD" | "CHAIN") => void;
   businessName?: string;
 }
 
@@ -17,7 +17,7 @@ export default function ModelSelectionPage({
   businessName = "Quán của bạn",
 }: ModelSelectionPageProps) {
   const [selectedModel, setSelectedModel] = useState<
-    "SIMPLE" | "STANDARD" | null
+    "SIMPLE" | "STANDARD" | "CHAIN" | null
   >(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -154,6 +154,55 @@ export default function ModelSelectionPage({
           <div style={styles.recommendBadge}>
             ⭐ Đề xuất cho F&B chuyên nghiệp
           </div>
+        </div>
+
+        {/* Model C Card - CHAIN */}
+        <div
+          style={{
+            ...styles.card,
+            ...(selectedModel === "CHAIN" ? styles.cardSelected : {}),
+            borderColor:
+              selectedModel === "CHAIN" ? COLORS.primary : COLORS.border,
+          }}
+          onClick={() => setSelectedModel("CHAIN")}
+        >
+          <div style={styles.cardIcon}>🏬</div>
+          <h2 style={styles.cardTitle}>NHIỀU KHU VỰC</h2>
+          <h3 style={styles.cardSubtitle}>Model C</h3>
+
+          <div style={styles.targetAudience}>
+            <span>🎯 Dành cho:</span> Chuỗi, nhiều bar/kho con
+          </div>
+
+          <p style={styles.cardDescription}>
+            "Tôi cần nhiều khu vực kho tùy chỉnh và quản lý theo từng điểm."
+          </p>
+
+          <ul style={styles.featureList}>
+            <li>✓ Nhiều khu vực kho tùy chỉnh</li>
+            <li>✓ Quản lý ẩn/hiện khu vực</li>
+            <li>✓ Phù hợp vận hành nhiều điểm</li>
+          </ul>
+
+          <div style={styles.consequenceBox}>
+            <span style={{ color: COLORS.primary }}>📱 Hệ quả:</span>
+            <p>App Nhân viên dùng danh sách khu vực theo cấu hình</p>
+          </div>
+
+          <button
+            style={{
+              ...styles.selectButton,
+              ...(selectedModel === "CHAIN"
+                ? styles.selectButtonActive
+                : styles.selectButtonPrimary),
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelectedModel("CHAIN");
+            }}
+          >
+            {selectedModel === "CHAIN" ? "✓ Đã chọn" : "Chọn Mô Hình Này"}
+          </button>
         </div>
       </div>
 

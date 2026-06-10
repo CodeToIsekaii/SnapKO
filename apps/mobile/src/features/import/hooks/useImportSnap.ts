@@ -12,6 +12,7 @@
 import { useState, useCallback } from "react";
 import {
   parseInvoiceWithAI,
+  QuotaExceededError,
   type ParsedInvoiceItem,
   type ParsedInvoiceResponse,
 } from "../../../services/aiService";
@@ -23,6 +24,7 @@ interface ImportState {
   isParsed: boolean;
   isSaving: boolean;
   error: string | null;
+  quotaExceeded: { canWatchAd: boolean; adRewardScans: number; maxAdRewardsPerDay: number } | null;
   // AI results
   invoiceNumber?: string;
   supplierName?: string;
@@ -41,6 +43,7 @@ const initialState: ImportState = {
   isParsed: false,
   isSaving: false,
   error: null,
+  quotaExceeded: null,
   items: [],
   confidence: 0,
 };
@@ -54,6 +57,7 @@ export interface UseImportSnapReturn {
   removeItem: (index: number) => void;
   addItem: (item: ParsedInvoiceItem) => void;
   setTargetArea: (areaId: string) => void;
+  clearQuotaExceeded: () => void;
   confirmAndSave: (businessId: string) => Promise<string | null>;
   reset: () => void;
 }
@@ -98,15 +102,31 @@ export function useImportSnap(): UseImportSnapReturn {
           confidence: result.confidence,
         }));
       } catch (error) {
-        setState((prev) => ({
-          ...prev,
-          isProcessing: false,
-          error: error instanceof Error ? error.message : "Lỗi không xác định",
-        }));
+        if (error instanceof QuotaExceededError) {
+          setState((prev) => ({
+            ...prev,
+            isProcessing: false,
+            quotaExceeded: {
+              canWatchAd: error.canWatchAd,
+              adRewardScans: error.adRewardScans,
+              maxAdRewardsPerDay: error.maxAdRewardsPerDay,
+            },
+          }));
+        } else {
+          setState((prev) => ({
+            ...prev,
+            isProcessing: false,
+            error: error instanceof Error ? error.message : "Lỗi không xác định",
+          }));
+        }
       }
     },
     []
   );
+
+  const clearQuotaExceeded = useCallback(() => {
+    setState((prev) => ({ ...prev, quotaExceeded: null }));
+  }, []);
 
   const updateItem = useCallback(
     (index: number, updates: Partial<ParsedInvoiceItem>) => {
@@ -189,5 +209,6 @@ export function useImportSnap(): UseImportSnapReturn {
     setTargetArea,
     confirmAndSave,
     reset,
+    clearQuotaExceeded,
   };
 }

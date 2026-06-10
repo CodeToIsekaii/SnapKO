@@ -15,6 +15,9 @@ import { AppState, AppStateStatus } from "react-native";
 import { Env } from "../env";
 
 import { supabase } from "../lib/supabase";
+import { api } from "../services/api";
+import { fetchSyncPull, invalidatePullCache } from "./pullSync";
+import { syncLegacyQtyLocal } from "../db/stockLevelHelper";
 
 const SYNC_TASK_NAME = "SNAPKO_BACKGROUND_SYNC";
 
@@ -66,6 +69,8 @@ export const processSyncQueue = async () => {
 
     if (pendingItems.length === 0) return;
 
+    let anySuccess = false;
+
     for (const item of pendingItems) {
       try {
         const payload = JSON.parse(item.payload);
@@ -90,24 +95,59 @@ export const processSyncQueue = async () => {
             }
           }
 
-          const { error: err } = await supabase
-            .from(item.table_name)
-            .upsert(payload);
-          error = err;
-        } else if (item.action === "DELETE") {
-          const { error: err } = await supabase
-            .from(item.table_name)
-            .delete()
-            .eq("id", payload.id);
-          error = err;
-        }
+          // Ingredients API expects camelCase while local queue may store snake_case.
+          if (
+            item.table_name === "ingredients" &&
+            payload &&
+            typeof payload === "object"
+          ) {
+            if (
+              Object.prototype.hasOwnProperty.call(payload, "shelf_life_days") &&
+              !Object.prototype.hasOwnProperty.call(payload, "shelfLifeDays")
+            ) {
+              payload.shelfLifeDays = payload.shelf_life_days;
+            }
+            if (
+              Object.prototype.hasOwnProperty.call(payload, "stock_check_unit") &&
+              !Object.prototype.hasOwnProperty.call(payload, "stockCheckUnit")
+            ) {
+              payload.stockCheckUnit = payload.stock_check_unit;
+            }
+          }
 
-        // Graceful handling for Permission Denied (Staff trying to create items)
-        if (error && error.code === "42501") {
-          console.warn(
-            `[SyncEngine] ⚠️ Permission denied for item ${item.id} (Role restricted). Skipping.`,
-          );
-          error = null; // Clear error to allow removal from queue
+          const basePath =
+            item.table_name === "recipes" ? "/recipes" : "/ingredients";
+          try {
+            if (payload.id) {
+              // Recipes may intentionally PATCH a tiny payload like { id, aliases }.
+              // Backend must preserve price/ingredients when those fields are omitted.
+              await api.patch(`${basePath}/${payload.id}`, payload);
+            } else {
+              await api.post(basePath, payload);
+            }
+          } catch (err: any) {
+            if (/403|permission/i.test(String(err?.message))) {
+              console.warn(
+                `[SyncEngine] ⚠️ Permission denied for item ${item.id}. Skipping.`,
+              );
+            } else {
+              error = err;
+            }
+          }
+        } else if (item.action === "DELETE") {
+          const basePath =
+            item.table_name === "recipes" ? "/recipes" : "/ingredients";
+          try {
+            await api.delete(`${basePath}/${payload.id}`);
+          } catch (err: any) {
+            if (/403|permission/i.test(String(err?.message))) {
+              console.warn(
+                `[SyncEngine] ⚠️ Permission denied for item ${item.id}. Skipping.`,
+              );
+            } else {
+              error = err;
+            }
+          }
         }
 
         if (error) throw error;
@@ -116,11 +156,15 @@ export const processSyncQueue = async () => {
         await db.runAsync(`DELETE FROM local_sync_queue WHERE id = ?`, [
           item.id,
         ]);
+        anySuccess = true;
       } catch (err) {
         console.error(`Sync failed item ${item.id}:`, err);
         // Keep PENDING to retry later
       }
     }
+
+    // Server state changed -> next pull must be fresh (skip 5s cache)
+    if (anySuccess) invalidatePullCache();
   } catch (err) {
     console.error("processSyncQueue Error:", err);
   }
@@ -141,65 +185,134 @@ export const fetchMasterDataUpdates = async () => {
 
     console.log(`[Sync] Fetching updates since ${lastSyncTime}...`);
 
-    // 1. Pull Recipes
-    const { data: recipes, error: rError } = await supabase
-      .from("recipes")
-      .select(
-        "id, business_id, name, price, category, is_active, created_at, updated_at",
-      )
-      .gt("updated_at", lastSyncTime);
+    // Shared fetcher: in-flight dedup + 5s TTL cache across all /sync/pull consumers
+    const pull = await fetchSyncPull(
+      lastSyncTime !== "1970-01-01T00:00:00Z" ? lastSyncTime : undefined,
+    );
 
-    if (recipes && recipes.length > 0) {
-      console.log(`[Sync] Pulled ${recipes.length} updated recipes`);
-      for (const r of recipes) {
+    if (pull?.recipes?.length) {
+      console.log(`[Sync] Pulled ${pull.recipes.length} updated recipes`);
+      for (const r of pull.recipes) {
+        const aliases = r.aliases ? JSON.stringify(r.aliases) : "[]";
         await db.runAsync(
-          `INSERT OR REPLACE INTO local_recipes (id, business_id, name, price, category, is_active, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT OR REPLACE INTO local_recipes (id, business_id, name, aliases, price, category, is_active, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             r.id,
-            r.business_id,
+            r.businessId ?? r.business_id,
             r.name,
+            aliases,
             r.price,
             r.category,
-            r.is_active ? 1 : 0,
-            r.created_at,
-            r.updated_at,
+            (r.isActive ?? r.is_active) ? 1 : 0,
+            r.createdAt ?? r.created_at,
+            r.updatedAt ?? r.updated_at,
           ],
         );
       }
     }
 
-    // 2. Pull Ingredients
-    const { data: ingredients, error: iError } = await supabase
-      .from("ingredients")
-      .select("*")
-      .gt("updated_at", lastSyncTime);
-
-    // NOTE: We only sync basic columns here.
-    // Ideally we should sync all columns, but let's stick to core ones for safety.
-    if (ingredients && ingredients.length > 0) {
-      console.log(`[Sync] Pulled ${ingredients.length} updated ingredients`);
-      for (const i of ingredients) {
-        // Check if column exists or use default
+    if (pull?.ingredients?.length) {
+      console.log(
+        `[Sync] Pulled ${pull.ingredients.length} updated ingredients`,
+      );
+      for (const i of pull.ingredients) {
         await db.runAsync(
-          `INSERT OR REPLACE INTO local_ingredients (id, business_id, name, base_unit, min_threshold, average_unit_cost, unit_cost, density, tare_weight, archived, warehouse_qty, bar_qty, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO local_ingredients
+            (id, business_id, name, base_unit, stock_check_unit, min_threshold, average_unit_cost,
+             unit_cost, density, tare_weight, archived, shelf_life_days, warehouse_qty, bar_qty,
+             unit_weight, unit_weight_unit, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             business_id = excluded.business_id,
+             name = excluded.name,
+             base_unit = excluded.base_unit,
+             stock_check_unit = excluded.stock_check_unit,
+             min_threshold = COALESCE(excluded.min_threshold, min_threshold),
+             average_unit_cost = excluded.average_unit_cost,
+             unit_cost = excluded.unit_cost,
+             density = COALESCE(excluded.density, density),
+             tare_weight = COALESCE(excluded.tare_weight, tare_weight),
+             archived = excluded.archived,
+             shelf_life_days = excluded.shelf_life_days,
+             warehouse_qty = excluded.warehouse_qty,
+             bar_qty = excluded.bar_qty,
+             unit_weight = COALESCE(excluded.unit_weight, unit_weight),
+             unit_weight_unit = COALESCE(excluded.unit_weight_unit, unit_weight_unit),
+             created_at = excluded.created_at`,
           [
             i.id,
-            i.business_id,
+            i.businessId ?? i.business_id,
             i.name,
-            i.base_unit,
-            i.min_threshold ?? 0,
-            i.average_unit_cost ?? 0,
-            i.unit_cost ?? 0,
+            i.baseUnit ?? i.base_unit,
+            i.stockCheckUnit ?? i.stock_check_unit ?? null,
+            i.minThreshold ?? i.min_threshold ?? 0,
+            i.averageUnitCost ?? i.average_unit_cost ?? 0,
+            i.unitCost ?? i.unit_cost ?? 0,
             i.density ?? 1,
-            i.tare_weight ?? 0,
-            i.archived ? 1 : 0,
-            i.warehouse_qty ?? 0,
-            i.bar_qty ?? 0,
-            i.created_at,
+            i.tareWeight ?? i.tare_weight ?? 0,
+            (i.archived ?? false) ? 1 : 0,
+            i.shelfLifeDays ?? i.shelf_life_days ?? null,
+            i.warehouseQty ?? i.warehouse_qty ?? 0,
+            i.barQty ?? i.bar_qty ?? 0,
+            i.unitWeight ?? i.unit_weight ?? null,
+            i.unitWeightUnit ?? i.unit_weight_unit ?? null,
+            i.createdAt ?? i.created_at,
           ],
         );
+      }
+    }
+
+    // Upsert storage areas and stock levels from server, then sync legacy cache
+    if (pull?.storageAreas?.length) {
+      const idsByBusiness = new Map<string, string[]>();
+      for (const sa of pull.storageAreas) {
+        const businessId = sa.businessId ?? sa.business_id;
+        if (!businessId || !sa.id) continue;
+        await db.runAsync(
+          `INSERT OR REPLACE INTO local_storage_areas (id, business_id, name, type, is_default, is_active, synced)
+           VALUES (?, ?, ?, ?, ?, ?, 1)`,
+          [
+            sa.id,
+            businessId,
+            sa.name,
+            sa.type ?? "STORAGE",
+            (sa.isDefault ?? sa.is_default) ? 1 : 0,
+            (sa.isActive ?? sa.is_active ?? true) ? 1 : 0,
+          ],
+        );
+
+        const existing = idsByBusiness.get(businessId) ?? [];
+        existing.push(sa.id);
+        idsByBusiness.set(businessId, existing);
+      }
+
+      for (const [businessId, ids] of idsByBusiness.entries()) {
+        const placeholders = ids.map(() => "?").join(",");
+        await db.runAsync(
+          `UPDATE local_storage_areas
+           SET is_active = 0, synced = 1
+           WHERE business_id = ? AND id NOT IN (${placeholders})`,
+          [businessId, ...ids],
+        );
+      }
+    }
+
+    if (pull?.stockLevels?.length) {
+      const affectedIngredients = new Set<string>();
+      for (const sl of pull.stockLevels) {
+        const ingredientId = sl.ingredientId ?? sl.ingredient_id;
+        const areaId = sl.areaId ?? sl.storageAreaId ?? sl.area_id;
+        if (!ingredientId || !areaId) continue;
+        await db.runAsync(
+          `INSERT OR REPLACE INTO local_stock_levels (id, ingredient_id, area_id, quantity, last_counted_at, synced)
+           VALUES (?, ?, ?, ?, ?, 1)`,
+          [sl.id, ingredientId, areaId, sl.quantity ?? 0, sl.lastCountedAt ?? sl.last_counted_at ?? null],
+        );
+        affectedIngredients.add(ingredientId);
+      }
+      for (const ingredientId of affectedIngredients) {
+        await syncLegacyQtyLocal(db, ingredientId);
       }
     }
 
@@ -221,7 +334,15 @@ export interface PendingSyncLog {
   id: string;
   ingredient_id: string | null;
   location: "WAREHOUSE" | "BAR";
-  type: "IMPORT" | "TRANSFER" | "AUDIT" | "WASTE" | "LENT";
+  type:
+    | "IMPORT"
+    | "TRANSFER"
+    | "AUDIT"
+    | "WASTE"
+    | "LENT"
+    | "SALES"
+    | "STOCK"
+    | "STOCK_CHECK";
   ai_parsed_quantity: number | null;
   ai_confidence_score: number | null;
   final_confirmed_quantity: number | null;
@@ -312,8 +433,10 @@ export async function initSyncSchema(db: SQLite.SQLiteDatabase): Promise<void> {
       name TEXT NOT NULL,
       aliases TEXT NOT NULL DEFAULT '[]',
       base_unit TEXT,
+      stock_check_unit TEXT,
       unit_cost REAL NOT NULL DEFAULT 0,
       archived INTEGER NOT NULL DEFAULT 0,
+      shelf_life_days INTEGER,
       created_at TEXT NOT NULL,
       synced INTEGER NOT NULL DEFAULT 0
     );
@@ -321,6 +444,11 @@ export async function initSyncSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_pending_synced ON pending_sync_logs(synced);
     CREATE INDEX IF NOT EXISTS idx_local_ingredients_archived ON local_ingredients(archived);
   `);
+  try {
+    await db.runAsync("ALTER TABLE local_ingredients ADD COLUMN stock_check_unit TEXT");
+  } catch {
+    // Column already exists.
+  }
 }
 
 // Add a log to the pending queue
@@ -436,6 +564,125 @@ export async function uploadImageToStorage(
 
 // Track local images pending cleanup (only after full sync success)
 const pendingCleanupPaths: Map<string, string> = new Map(); // logId -> localPath
+const SALES_DUPLICATE_WINDOW_MS = 15000;
+
+interface PendingSyncLogRow extends PendingSyncLog {
+  local_image_path: string | null;
+}
+
+interface SyncPushResultItem {
+  id: string;
+  success: boolean;
+  error?: string;
+}
+
+interface SyncPushResult {
+  synced: number;
+  total: number;
+  results: SyncPushResultItem[];
+}
+
+function normalizeSalesFingerprintValue(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase();
+}
+
+function normalizeSalesFingerprintNumber(value: unknown): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num * 1000) / 1000;
+}
+
+function getSalesFingerprintItems(aiParsedJson: string | null): Array<{
+  key: string;
+  quantity: number;
+  unit: string;
+  unitCost: number;
+}> | null {
+  if (!aiParsedJson) return null;
+
+  try {
+    const parsed = JSON.parse(aiParsedJson);
+    const items = Array.isArray(parsed?.items) ? parsed.items : [];
+    return items.map((item: any) => ({
+      key: normalizeSalesFingerprintValue(
+        item?.recipe_id ?? item?.ingredient_id ?? item?.ingredient_name,
+      ),
+      quantity: normalizeSalesFingerprintNumber(item?.quantity),
+      unit: normalizeSalesFingerprintValue(item?.unit),
+      unitCost: normalizeSalesFingerprintNumber(item?.unit_cost),
+    }));
+  } catch {
+    return null;
+  }
+}
+
+export function buildSalesPendingFingerprint(log: {
+  type: string;
+  location: string;
+  ai_parsed_json: string | null;
+}): string | null {
+  if (log.type !== "SALES") return null;
+
+  const items = getSalesFingerprintItems(log.ai_parsed_json);
+  if (!items?.length) return null;
+
+  try {
+    const parsed = log.ai_parsed_json ? JSON.parse(log.ai_parsed_json) : null;
+    return JSON.stringify({
+      type: log.type,
+      location: log.location,
+      totalRevenue: normalizeSalesFingerprintNumber(parsed?.total_revenue),
+      totalItems: normalizeSalesFingerprintNumber(parsed?.total_items),
+      items: items.sort((a, b) => {
+        const byKey = a.key.localeCompare(b.key);
+        if (byKey !== 0) return byKey;
+        if (a.quantity !== b.quantity) return a.quantity - b.quantity;
+        if (a.unit !== b.unit) return a.unit.localeCompare(b.unit);
+        return a.unitCost - b.unitCost;
+      }),
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function findDuplicatePendingSalesLogs(
+  rows: PendingSyncLogRow[],
+): Array<{ duplicateId: string; canonicalId: string }> {
+  const sortedRows = [...rows].sort((a, b) =>
+    a.created_at.localeCompare(b.created_at),
+  );
+  const canonicalByFingerprint = new Map<
+    string,
+    { id: string; createdAtMs: number }
+  >();
+  const duplicates: Array<{ duplicateId: string; canonicalId: string }> = [];
+
+  for (const row of sortedRows) {
+    const fingerprint = buildSalesPendingFingerprint(row);
+    if (!fingerprint) continue;
+
+    const createdAtMs = Date.parse(row.created_at);
+    if (!Number.isFinite(createdAtMs)) continue;
+
+    const canonical = canonicalByFingerprint.get(fingerprint);
+    if (
+      canonical &&
+      createdAtMs - canonical.createdAtMs <= SALES_DUPLICATE_WINDOW_MS
+    ) {
+      duplicates.push({ duplicateId: row.id, canonicalId: canonical.id });
+      continue;
+    }
+
+    canonicalByFingerprint.set(fingerprint, {
+      id: row.id,
+      createdAtMs,
+    });
+  }
+
+  return duplicates;
+}
 
 // Mark image for cleanup (call before sync)
 export function markImageForCleanup(logId: string, localPath: string): void {
@@ -485,9 +732,7 @@ export async function syncPendingLogs(
     );
 
     // Get unsynced logs
-    const rows = await db.getAllAsync<
-      PendingSyncLog & { local_image_path: string | null }
-    >(
+    const rows = await db.getAllAsync<PendingSyncLogRow>(
       "SELECT * FROM pending_sync_logs WHERE synced = 0 ORDER BY created_at ASC LIMIT 50",
     );
 
@@ -499,10 +744,26 @@ export async function syncPendingLogs(
       return { synced: 0, failed: 0 };
     }
 
+    const duplicateSalesLogs = findDuplicatePendingSalesLogs(rows);
+    const duplicateSalesIds = new Set(
+      duplicateSalesLogs.map((duplicate) => duplicate.duplicateId),
+    );
+    let locallySkippedDuplicates = 0;
+
+    for (const duplicate of duplicateSalesLogs) {
+      await db.runAsync(
+        "UPDATE pending_sync_logs SET synced = 1, sync_error = ? WHERE id = ?",
+        [`SKIPPED_DUPLICATE_PENDING:${duplicate.canonicalId}`, duplicate.duplicateId],
+      );
+      locallySkippedDuplicates++;
+    }
+
+    const rowsToSync = rows.filter((row) => !duplicateSalesIds.has(row.id));
+
     // Process each log: upload image first, then prepare for sync
     const logsForSync: any[] = [];
 
-    for (const row of rows) {
+    for (const row of rowsToSync) {
       let imageUrl: string | null = null;
 
       // Step 1: Upload local image if exists
@@ -556,40 +817,23 @@ export async function syncPendingLogs(
     }
 
     if (logsForSync.length === 0) {
+      syncStatus.lastSyncAt =
+        locallySkippedDuplicates > 0 ? new Date().toISOString() : syncStatus.lastSyncAt;
+      await updatePendingCount(db);
       syncStatus.isSyncing = false;
       notifyStatusChange();
-      return { synced: 0, failed: rows.length };
+      return { synced: locallySkippedDuplicates, failed: rowsToSync.length };
     }
 
-    // Step 3: Get user access token for authenticated sync
-    const { data: sessionData } = await supabase.auth.getSession();
-    const accessToken = sessionData?.session?.access_token;
-
-    if (!accessToken) {
-      console.warn("[SyncEngine] No access token, cannot sync");
-      syncStatus.isSyncing = false;
-      notifyStatusChange();
-      return { synced: 0, failed: rows.length };
-    }
-
-    // Step 4: Call sync-up API with user's access token
-    const response = await fetch(`${Env.BACKEND_URL}/sync/up`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ logs: logsForSync }),
+    const result = await api.post<SyncPushResult>("/sync/push", {
+      logs: logsForSync,
     });
-
-    console.log("[SyncEngine] sync-up response status:", response.status);
-    const result = await response.json();
     console.log(
-      "[SyncEngine] sync-up result:",
+      "[SyncEngine] /sync/push result:",
       JSON.stringify(result).slice(0, 500),
     );
 
-    let syncedCount = 0;
+    let syncedCount = locallySkippedDuplicates;
     let failedCount = 0;
 
     if (result.results && Array.isArray(result.results)) {
@@ -608,7 +852,9 @@ export async function syncPendingLogs(
             r.error &&
             (r.error.includes("foreign key constraint") ||
               r.error.includes("violates foreign key") ||
-              r.error.includes("is not present in table"));
+              r.error.includes("is not present in table") ||
+              r.error.includes("Invalid log payload") ||
+              r.error.includes("already exists for another business"));
 
           if (isPermanentFailure) {
             // Mark as synced with error note - stop retrying
@@ -630,6 +876,8 @@ export async function syncPendingLogs(
           failedCount++;
         }
       }
+    } else {
+      failedCount = logsForSync.length;
     }
 
     syncStatus.lastSyncAt = new Date().toISOString();
@@ -689,6 +937,8 @@ export function stopNetworkListener(): void {
 
 // Layer 3: AppState listener
 let appStateSubscription: { remove: () => void } | null = null;
+let lastAppStateSyncAt = 0;
+const APP_STATE_SYNC_DEBOUNCE_MS = 30000;
 
 export function startAppStateListener(db: SQLite.SQLiteDatabase): void {
   if (appStateSubscription) return;
@@ -701,6 +951,11 @@ export function startAppStateListener(db: SQLite.SQLiteDatabase): void {
         syncStatus.isOnline &&
         syncStatus.pendingCount > 0
       ) {
+        const now = Date.now();
+        if (now - lastAppStateSyncAt < APP_STATE_SYNC_DEBOUNCE_MS) {
+          return;
+        }
+        lastAppStateSyncAt = now;
         console.log("[SyncEngine] App foregrounded, syncing...");
         syncPendingLogs(db);
       }
@@ -824,6 +1079,8 @@ export async function syncPendingLends(): Promise<{ synced: number }> {
       `[SyncEngine] Pushing ${unsyncedLends.length} pending lends...`,
     );
 
+    // TODO: BE-SnapKO /sync/push does not yet accept pendingLends payload.
+    // Keeping Supabase direct-write as known gap until backend endpoint lands.
     let syncedCount = 0;
     for (const lend of unsyncedLends) {
       try {
@@ -869,30 +1126,46 @@ export async function syncPendingLends(): Promise<{ synced: number }> {
 }
 
 /**
- * Pull pending lends from Supabase to local SQLite
- * This enables cross-device visibility of lend reminders
+ * Pull pending lends from Supabase to local SQLite.
+ * Single-flight locked: concurrent callers share the same in-flight promise to
+ * avoid nested `withTransactionAsync` (SQLite allows only 1 transaction per
+ * connection — nesting throws "cannot start a transaction within a transaction").
  */
+let pullPendingLendsInFlight: Promise<{ pulled: number }> | null = null;
+
 export async function pullPendingLends(
+  businessId: string,
+): Promise<{ pulled: number }> {
+  if (pullPendingLendsInFlight) return pullPendingLendsInFlight;
+  pullPendingLendsInFlight = pullPendingLendsImpl(businessId).finally(() => {
+    pullPendingLendsInFlight = null;
+  });
+  return pullPendingLendsInFlight;
+}
+
+async function pullPendingLendsImpl(
   businessId: string,
 ): Promise<{ pulled: number }> {
   try {
     const { getDB } = await import("../db");
     const db = await getDB();
 
-    // Fetch unreturned lends from Supabase
-    const { data, error } = await supabase
-      .from("pending_lends")
-      .select("*")
-      .eq("business_id", businessId)
-      .eq("is_returned", false);
-
-    if (error) {
-      console.error("[SyncEngine] pullPendingLends query error:", error);
+    // Fetch unreturned lends from shared /sync/pull cache
+    let data: any[] | null = null;
+    try {
+      const pull = await fetchSyncPull();
+      data = pull?.activePendingLends ?? [];
+    } catch (err) {
+      console.error("[SyncEngine] pullPendingLends query error:", err);
       return { pulled: 0 };
     }
 
+    // NO withTransactionAsync here: pullSync.pullAllData() may hold a transaction on
+    // the same db handle → nesting throws "cannot start a transaction within a
+    // transaction". The outer single-flight lock (pullPendingLendsInFlight) prevents
+    // concurrent calls to THIS function, and sequential `await`s below are race-safe
+    // in JS. Atomicity trade-off is acceptable because INSERT OR REPLACE is idempotent.
     if (!data || data.length === 0) {
-      // Also clear local lends that might be stale (returned on another device)
       await db.runAsync(
         `DELETE FROM local_pending_lends WHERE business_id = ? AND is_returned = 0`,
         [businessId],
@@ -906,24 +1179,27 @@ export async function pullPendingLends(
     for (const lend of data) {
       try {
         await db.runAsync(
-          `INSERT OR REPLACE INTO local_pending_lends 
-           (id, business_id, ingredient_id, ingredient_name, quantity, unit, 
-            source_location, lent_at, returned_at, is_returned, return_location, 
+          `INSERT OR REPLACE INTO local_pending_lends
+           (id, business_id, ingredient_id, ingredient_name, quantity, unit,
+            source_location, lent_at, returned_at, is_returned, return_location,
             related_log_id, synced)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
           [
             lend.id,
-            lend.business_id,
-            lend.ingredient_id,
-            lend.ingredient_name,
-            lend.quantity,
-            lend.unit,
-            lend.source_location,
-            lend.lent_at,
-            lend.returned_at,
-            lend.is_returned ? 1 : 0,
-            lend.return_location,
-            lend.related_log_id,
+            lend.businessId ?? lend.business_id,
+            lend.ingredientId ?? lend.ingredient_id,
+            lend.ingredient?.name ??
+              lend.ingredientName ??
+              lend.ingredient_name ??
+              "",
+            Number(lend.quantity) || 0,
+            lend.unit ?? "",
+            lend.sourceLocation ?? lend.source_location ?? null,
+            lend.lentAt ?? lend.lent_at ?? null,
+            lend.returnedAt ?? lend.returned_at ?? null,
+            (lend.returnedAt ?? lend.returned_at) ? 1 : 0,
+            lend.returnLocation ?? lend.return_location ?? null,
+            lend.relatedLogId ?? lend.related_log_id ?? null,
           ],
         );
         pulledCount++;
@@ -932,12 +1208,14 @@ export async function pullPendingLends(
       }
     }
 
-    // Clean up local lends that are no longer in cloud (returned on another device)
-    const cloudIds = data.map((l: any) => `'${l.id}'`).join(",");
+    // Clean up local lends that are no longer in cloud (returned on another device).
+    // Parameterized placeholders avoid SQL injection + let SQLite handle type binding.
+    const cloudIds = data.map((l: any) => l.id);
+    const placeholders = cloudIds.map(() => "?").join(",");
     await db.runAsync(
-      `DELETE FROM local_pending_lends 
-       WHERE business_id = ? AND is_returned = 0 AND id NOT IN (${cloudIds})`,
-      [businessId],
+      `DELETE FROM local_pending_lends
+       WHERE business_id = ? AND is_returned = 0 AND id NOT IN (${placeholders})`,
+      [businessId, ...cloudIds],
     );
 
     console.log(`[SyncEngine] Pulled ${pulledCount} pending lends`);

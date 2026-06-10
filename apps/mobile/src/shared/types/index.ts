@@ -13,6 +13,7 @@ export interface Ingredient {
   id: string;
   name: string;
   base_unit: string;
+  stock_check_unit?: string | null;
   warehouse_qty: number;
   bar_qty: number;
   unit_cost: number;

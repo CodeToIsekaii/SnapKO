@@ -52,15 +52,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Business not found" });
     }
 
-    // Calculate extension days
+    // Match an active subscription plan by exact amount.
     const amount = body.transferAmount;
-    let extensionDays = 0;
-    if (amount >= 990000) extensionDays = 365; // Yearly
-    else if (amount >= 99000) extensionDays = 30; // Monthly
+    const { data: matchedPlan } = await supabase
+      .from("subscription_plans")
+      .select("id, code, price, duration_days, target_tier")
+      .eq("is_active", true)
+      .eq("price", amount)
+      .maybeSingle();
 
-    if (extensionDays === 0) {
-      return NextResponse.json({ success: false, error: "Amount too low" });
+    if (!matchedPlan) {
+      return NextResponse.json({ success: false, error: "No matching plan" });
     }
+
+    const extensionDays = matchedPlan.duration_days;
+    const targetTier = matchedPlan.target_tier ?? "PRO";
 
     // Calculate new expiration
     const baseDate = business.subscription_expires_at
@@ -75,7 +81,8 @@ export async function POST(req: NextRequest) {
       .from("businesses")
       .update({
         subscription_expires_at: newExpiration.toISOString(),
-        tier: "PERSONAL",
+        tier: targetTier,
+        plan_code: matchedPlan.code,
       })
       .eq("id", business.id);
 
@@ -86,6 +93,17 @@ export async function POST(req: NextRequest) {
       status: "SUCCESS",
       transaction_code: body.referenceCode || String(body.id),
       gateway: "SEPAY",
+    });
+
+    await supabase.from("subscription_history").insert({
+      business_id: business.id,
+      plan_id: matchedPlan.id,
+      plan_code: matchedPlan.code,
+      amount_paid: amount,
+      start_date: startDate.toISOString(),
+      end_date: newExpiration.toISOString(),
+      payment_gateway: "SEPAY",
+      transaction_code: body.referenceCode || String(body.id),
     });
 
     return NextResponse.json({

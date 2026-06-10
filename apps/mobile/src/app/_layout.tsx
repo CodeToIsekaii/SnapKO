@@ -18,6 +18,7 @@ import { initLocalDb } from "../db";
 import { processSyncQueue } from "../services/syncQueue";
 import { syncBusinessConfig } from "../lib/supabase";
 import { InventoryModelProvider } from "../contexts/InventoryModelContext";
+import { usePushNotifications } from "../hooks/usePushNotifications";
 
 // F&B "Organic Tech" Theme - Per .UXUIrules
 const SnapKoTheme = {
@@ -49,6 +50,11 @@ interface AuthState {
   businessId: string | null;
   role: string | null;
   operationalModel: string | null; // 'MODEL_A' | 'MODEL_B' | null
+}
+
+function PushBootstrap() {
+  usePushNotifications();
+  return null;
 }
 
 export default function RootLayout() {
@@ -86,6 +92,7 @@ export default function RootLayout() {
             status: string;
             inventory_model: string | null;
           }>("SELECT * FROM local_profiles LIMIT 1");
+          let hasAuthoritativeConfig = false;
 
           // If we have a profile, sync config from server to get latest inventory_model
           if (profile && profile.business_id) {
@@ -93,6 +100,7 @@ export default function RootLayout() {
             const serverConfig = await syncBusinessConfig();
 
             if (serverConfig.success && serverConfig.inventoryModel) {
+              hasAuthoritativeConfig = true;
               // Re-fetch local profile after sync updated it
               profile = await db.getFirstAsync<{
                 id: string;
@@ -109,15 +117,19 @@ export default function RootLayout() {
           }
 
           if (profile) {
+            const operationalModel =
+              profile.inventory_model === "SIMPLE" || hasAuthoritativeConfig
+                ? profile.inventory_model
+                : "SIMPLE";
             setAuthState({
               isLoggedIn: true,
               hasBusinessId: !!profile.business_id,
-              hasOperationalModel: !!profile.inventory_model,
+              hasOperationalModel: !!operationalModel,
               isLoading: false,
               userId: profile.id,
               businessId: profile.business_id,
               role: profile.role,
-              operationalModel: profile.inventory_model,
+              operationalModel,
             });
           } else {
             setAuthState((prev) => ({ ...prev, isLoading: false }));
@@ -134,30 +146,34 @@ export default function RootLayout() {
     init();
   }, []);
 
-  // Network restore auto-sync
+  // Network restore auto-sync (event-driven, not polling)
   useEffect(() => {
     let wasOffline = false;
 
-    const checkNetwork = async () => {
-      const state = await Network.getNetworkStateAsync();
-      if (state.isConnected && state.isInternetReachable && wasOffline) {
+    // Seed initial state so we don't fire sync on first listener call when already online
+    Network.getNetworkStateAsync()
+      .then((s) => {
+        wasOffline = !s.isConnected;
+      })
+      .catch(() => {});
+
+    const sub = Network.addNetworkStateListener((state) => {
+      if (state.isConnected && wasOffline) {
         console.log("🌐 Network restored -> Auto-syncing...");
         processSyncQueue();
       }
       wasOffline = !state.isConnected;
-    };
+    });
 
-    // Check network every 10 seconds
-    const networkInterval = setInterval(checkNetwork, 10000);
-    return () => clearInterval(networkInterval);
+    return () => sub.remove();
   }, []);
 
-  // Periodic sync every 60 seconds
+  // Periodic sync every 120 seconds
   useEffect(() => {
     const syncInterval = setInterval(() => {
       console.log("⏰ Periodic sync check...");
       processSyncQueue();
-    }, 60000);
+    }, 120000);
 
     // Initial sync on app start
     processSyncQueue().then(() => {
@@ -225,6 +241,7 @@ export default function RootLayout() {
 
   return (
     <InventoryModelProvider>
+      {authState.isLoggedIn && authState.hasBusinessId ? <PushBootstrap /> : null}
       <ThemeProvider value={SnapKoTheme}>
         <StatusBar style="light" />
         <Stack

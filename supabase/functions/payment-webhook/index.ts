@@ -73,16 +73,8 @@ function extractShortCode(content: string): string | null {
 
 // Extract user ID prefix from content like "SNAPKO PRO abc12345"
 function extractUserIdPrefix(content: string): string | null {
-  const match = content.match(/SNAPKO\s+PRO\s+([a-f0-9]{8})/i);
+  const match = content.match(/SNAPKO\s+(?:PRO|CHAIN)\s+([a-f0-9]{8})/i);
   return match ? match[1].toLowerCase() : null;
-}
-
-// Calculate subscription extension based on amount
-function getSubscriptionDays(amount: number): number {
-  if (amount >= 990000) return 365; // Yearly
-  if (amount >= 270000) return 90; // Quarterly (270k)
-  if (amount >= 100000) return 30; // Monthly (100k)
-  return 0;
 }
 
 /**
@@ -294,36 +286,17 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Lookup Plan from DB based on Amount
+    // Lookup an active plan by exact amount. Do not infer legacy prices.
     const { data: matchedPlan } = await supabaseAdmin
       .from("subscription_plans")
       .select("*")
       .eq("price", amount)
-      .eq("is_active", true) // Prioritize active plans
+      .eq("is_active", true)
       .limit(1)
       .single();
 
     if (!matchedPlan) {
       console.warn(`No matching plan found for amount: ${amount}`);
-      // Fallback or error? For now, we log failure if strict, or maybe fallback to default PRO logic if legacy.
-      // Let's keep it strict for new plans to avoid mismatched tiers.
-      // Actually, let's allow legacy fallback for safety if plan not found (e.g. custom transfer)
-      if (!businessId && !userId) {
-        // ... existing failure logic
-      }
-    }
-
-    // Determine extension days
-    let extensionDays = 0;
-
-    if (matchedPlan) {
-      extensionDays = matchedPlan.duration_days;
-    } else {
-      // Legacy fallback
-      extensionDays = getSubscriptionDays(amount);
-    }
-
-    if (extensionDays === 0) {
       await supabaseAdmin.from("payment_transactions").insert({
         business_id: businessId,
         amount,
@@ -343,6 +316,8 @@ Deno.serve(async (req: Request) => {
         }
       );
     }
+
+    const extensionDays = matchedPlan.duration_days;
 
     // Calculate new expiration
     const baseDate = currentExpiration
@@ -391,16 +366,10 @@ Deno.serve(async (req: Request) => {
 
     // Log to subscription_history for tracking
     if (businessId) {
-      const planCode = matchedPlan
-        ? matchedPlan.code
-        : extensionDays === 365
-        ? "YEARLY_PRO"
-        : "MONTHLY_PRO";
-
       await supabaseAdmin.from("subscription_history").insert({
         business_id: businessId,
-        plan_code: planCode,
-        plan_id: matchedPlan ? matchedPlan.id : null,
+        plan_code: matchedPlan.code,
+        plan_id: matchedPlan.id,
         amount_paid: amount,
         start_date: startDate.toISOString(),
         end_date: newExpiration.toISOString(),

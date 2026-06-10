@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import * as SQLite from "expo-sqlite";
 import { getDB } from "../db";
+import { resolveLocalStorageAreaId, upsertStockLevel } from "../db/stockLevelHelper";
 import {
   createIngredientSchema,
   INGREDIENT_UNITS,
@@ -147,6 +148,12 @@ export default function CreateIngredientModal({
           result.data.unitCost,
         ],
       );
+
+      // Seed a stock_levels row (qty=0) for the default STORAGE area
+      const defaultAreaId = await resolveLocalStorageAreaId(db);
+      if (defaultAreaId) {
+        await upsertStockLevel(db, id, defaultAreaId, 0);
+      }
 
       onCreated(id);
       onClose();

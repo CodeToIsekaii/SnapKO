@@ -17,11 +17,10 @@ export default function DashboardPage() {
   );
 
   return (
-    <DashboardScreenComponent
-      onOpenSettings={() => router.push("/settings")}
-      // Helper for pending list - currently mapped to settings or we can make a modal
-      onOpenPendingList={() => router.push("/settings")}
-      onOpenInventory={(mode, area, captureMode) => {
+      <DashboardScreenComponent
+        onOpenSettings={() => router.push("/settings")}
+        onOpenPendingList={() => router.push("/pending-transfers")}
+        onOpenInventory={(mode, area, captureMode) => {
         // Map simplified mode to camera route
         // mode: 'stock' | 'import' | 'sales'
         console.log("Navigating to camera:", mode, area);

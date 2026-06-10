@@ -1,9 +1,11 @@
 /**
- * AuthContext - Manages authentication state
+ * AuthContext - Manages authentication state (Hybrid: Supabase credentials + Backend tokens)
  *
- * Pattern: AuthStack/AppStack switching based on session state
- * - No manual navigation.navigate() for auth transitions
- * - State-driven navigation via Context
+ * Flow:
+ *  1. Supabase Auth validates email/password (or OAuth)
+ *  2. Mobile exchanges Supabase session for BE-SnapKO tokens via POST /auth/login-mobile
+ *  3. All profile/business/data calls go to BE-SnapKO via apiFetch (auto-refresh on 401)
+ *  4. Supabase SDK is kept only for credential flows + realtime listener (phase-later)
  */
 
 import React, {
@@ -16,26 +18,43 @@ import React, {
 } from "react";
 import * as SecureStore from "expo-secure-store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createClient, type Session, type User } from "@supabase/supabase-js";
+import { createClient, type User } from "@supabase/supabase-js";
 import type { ProfileRoleEnum, ProfileStatusEnum } from "@snapko/ts-types";
 import { Env } from "../env";
+import {
+  api,
+  clearBackendTokens,
+  loginMobile,
+  logoutBackend,
+  setSupabaseAccessTokenProvider,
+  setUnauthorizedHandler,
+} from "../services/api";
 
 // ================== TYPES ==================
 
 export interface UserProfile {
   id: string;
-  businessId: string | null; // Can be null for first-time owners
+  businessId: string | null;
   role: ProfileRoleEnum;
   status: ProfileStatusEnum;
   fullName: string | null;
   phoneNumber: string | null;
-  // Subscription data
   tier?: string | null;
+  effectiveTier?: string | null;
+  inventoryModel?: string | null;
+  effectiveInventoryModel?: "SIMPLE" | "STANDARD" | "CHAIN" | null;
+  subscriptionStatus?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED" | null;
   subscriptionExpiresAt?: string | null;
   businessCreatedAt?: string | null;
+  entitlements?: {
+    canUseDualWarehouse: boolean;
+    canUseCustomStorageAreas: boolean;
+    canInviteStaff: boolean;
+    canUseAdvancedReports: boolean;
+  } | null;
 }
 
-type AuthState =
+export type AuthState =
   | { status: "unauthenticated" }
   | { status: "loading" }
   | { status: "authenticated"; user: User; profile: UserProfile }
@@ -55,7 +74,7 @@ type AuthContextValue = {
   clearStaffPending: () => Promise<void>;
 };
 
-const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
+export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
   auth: {
     storage: AsyncStorage,
     autoRefreshToken: true,
@@ -66,57 +85,96 @@ const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// Shape returned by GET /profiles/me (Prisma + TransformInterceptor wrap)
+interface BackendProfileResponse {
+  id: string;
+  businessId: string | null;
+  role: ProfileRoleEnum;
+  status: ProfileStatusEnum;
+  fullName: string | null;
+  phoneNumber: string | null;
+  business?: {
+    inventoryModel?: string | null;
+    effectiveInventoryModel?: "SIMPLE" | "STANDARD" | "CHAIN" | null;
+    tier?: string | null;
+    effectiveTier?: string | null;
+    subscriptionStatus?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED" | null;
+    subscriptionExpiresAt?: string | null;
+    createdAt?: string | null;
+    entitlements?: UserProfile["entitlements"];
+  } | null;
+}
+
+function mapProfile(raw: BackendProfileResponse): UserProfile {
+  return {
+    id: raw.id,
+    businessId: raw.businessId,
+    role: raw.role,
+    status: raw.status,
+    fullName: raw.fullName,
+    phoneNumber: raw.phoneNumber,
+    tier: raw.business?.tier ?? "FREE",
+    effectiveTier: raw.business?.effectiveTier ?? raw.business?.tier ?? "FREE",
+    inventoryModel: raw.business?.inventoryModel ?? null,
+    effectiveInventoryModel:
+      raw.business?.effectiveInventoryModel ?? "SIMPLE",
+    subscriptionStatus: raw.business?.subscriptionStatus ?? null,
+    subscriptionExpiresAt: raw.business?.subscriptionExpiresAt ?? null,
+    businessCreatedAt: raw.business?.createdAt ?? null,
+    entitlements: raw.business?.entitlements ?? null,
+  };
+}
+
+// Backend wraps responses via TransformInterceptor → payload may be at .data
+function unwrap<T>(res: unknown): T {
+  if (res && typeof res === "object" && "data" in res) {
+    return (res as { data: T }).data;
+  }
+  return res as T;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [authState, setAuthState] = useState<AuthState>({
-    status: "unauthenticated",
+    status: "loading",
   });
 
-  // Fetch profile from DB
-  const fetchProfile = useCallback(
-    async (userId: string): Promise<UserProfile | null> => {
-      // Fetch profile and join businesses to get subscription data
-      const { data, error } = await supabase
-        .from("profiles")
-        .select(
-          `
-          id, 
-          business_id, 
-          role, 
-          status, 
-          full_name, 
-          phone_number,
-          businesses (
-            tier,
-            subscription_expires_at,
-            created_at
-          )
-        `,
-        )
-        .eq("id", userId)
-        .maybeSingle();
+  // Fetch profile from backend (/profiles/me)
+  const fetchProfile = useCallback(async (): Promise<UserProfile | null> => {
+    try {
+      const res = await api.get<unknown>("/profiles/me");
+      const raw = unwrap<BackendProfileResponse>(res);
+      if (!raw?.id) return null;
+      return mapProfile(raw);
+    } catch (e) {
+      console.warn("[AuthContext] fetchProfile failed:", e);
+      return null;
+    }
+  }, []);
 
-      if (error || !data) return null;
-
-      const businessData = data.businesses as any;
-
-      return {
-        id: data.id,
-        businessId: data.business_id,
-        role: data.role as ProfileRoleEnum,
-        status: data.status as ProfileStatusEnum,
-        fullName: data.full_name,
-        phoneNumber: data.phone_number,
-        // Flatten subscription data from joined table
-        tier: businessData?.tier || "FREE",
-        subscriptionExpiresAt: businessData?.subscription_expires_at || null,
-        businessCreatedAt: businessData?.created_at || null,
-      };
+  // Exchange Supabase session for backend tokens
+  const exchangeForBackendTokens = useCallback(
+    async (
+      supabaseAccessToken: string,
+      initial?: { fullName?: string; phoneNumber?: string },
+    ): Promise<void> => {
+      await loginMobile(supabaseAccessToken, initial ?? {});
     },
     [],
   );
 
   // Initialize auth state on mount
   useEffect(() => {
+    // Register global 401 handler so apiFetch can trigger logout state
+    setUnauthorizedHandler(() => {
+      setAuthState({ status: "unauthenticated" });
+    });
+    setSupabaseAccessTokenProvider(async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      return session?.access_token ?? null;
+    });
+
     const initAuth = async () => {
       // Check for pending staff first (from SecureStore)
       const pendingId = await SecureStore.getItemAsync("pending_profile_id");
@@ -125,98 +183,82 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Check for session
+      // Check for Supabase session
       const {
         data: { session },
       } = await supabase.auth.getSession();
 
-      if (session?.user) {
-        const profile = await fetchProfile(session.user.id);
-        if (profile) {
-          // CHECK PROFILE STATUS BEFORE ALLOWING ACCESS
-          if (profile.status === "REJECTED" || profile.status === "INACTIVE") {
-            // User was rejected/deactivated - sign them out
-            console.log(
-              "[AuthContext] Profile is REJECTED/INACTIVE, signing out",
-            );
-            await supabase.auth.signOut();
-            setAuthState({ status: "unauthenticated" });
-            return;
-          }
-
-          if (profile.status === "PENDING") {
-            // Staff still pending - show pending screen
-            console.log(
-              "[AuthContext] Profile is PENDING, showing pending screen",
-            );
-            await SecureStore.setItemAsync("pending_profile_id", profile.id);
-            setAuthState({ status: "pending", profileId: profile.id });
-            return;
-          }
-
-          // Profile is ACTIVE - allow access
-          if (profile.role === "OWNER" && !profile.businessId) {
-            setAuthState({
-              status: "needs_setup",
-              user: session.user,
-              profile,
-            });
-          } else {
-            setAuthState({
-              status: "authenticated",
-              user: session.user,
-              profile,
-            });
-          }
-        } else {
-          setAuthState({ status: "unauthenticated" });
-        }
-      } else {
+      if (!session?.user) {
         setAuthState({ status: "unauthenticated" });
+        return;
+      }
+
+      // Ensure backend tokens — exchange if we don't already have them
+      try {
+        await exchangeForBackendTokens(session.access_token);
+      } catch (e) {
+        console.warn("[AuthContext] initial exchange failed:", e);
+        await supabase.auth.signOut();
+        setAuthState({ status: "unauthenticated" });
+        return;
+      }
+
+      const profile = await fetchProfile();
+      if (!profile) {
+        setAuthState({ status: "unauthenticated" });
+        return;
+      }
+
+      if (profile.status === "REJECTED" || profile.status === "INACTIVE") {
+        console.log("[AuthContext] Profile is REJECTED/INACTIVE, signing out");
+        await supabase.auth.signOut();
+        await clearBackendTokens();
+        setAuthState({ status: "unauthenticated" });
+        return;
+      }
+
+      if (profile.status === "PENDING") {
+        console.log("[AuthContext] Profile is PENDING, showing pending screen");
+        await SecureStore.setItemAsync("pending_profile_id", profile.id);
+        setAuthState({ status: "pending", profileId: profile.id });
+        return;
+      }
+
+      if (profile.role === "OWNER" && !profile.businessId) {
+        setAuthState({ status: "needs_setup", user: session.user, profile });
+      } else {
+        setAuthState({ status: "authenticated", user: session.user, profile });
       }
     };
 
     initAuth();
 
-    // Listen for auth changes
+    // Listen for auth changes (e.g. session refresh, sign out elsewhere)
     const { data: authListener } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (event) => {
         if (event === "SIGNED_OUT") {
+          await clearBackendTokens();
           setAuthState({ status: "unauthenticated" });
-        } else if (session?.user && event === "SIGNED_IN") {
-          const profile = await fetchProfile(session.user.id);
-          if (profile) {
-            // Check if OWNER needs to set up business
-            if (profile.role === "OWNER" && !profile.businessId) {
-              setAuthState({
-                status: "needs_setup",
-                user: session.user,
-                profile,
-              });
-            } else {
-              setAuthState({
-                status: "authenticated",
-                user: session.user,
-                profile,
-              });
-            }
-          }
         }
+        // SIGNED_IN is handled by signIn/signUp directly (need backend exchange)
       },
     );
 
     return () => {
+      setUnauthorizedHandler(null);
+      setSupabaseAccessTokenProvider(null);
       authListener.subscription.unsubscribe();
     };
-  }, [fetchProfile]);
+  }, [exchangeForBackendTokens, fetchProfile]);
 
   // 📡 GLOBAL REALTIME LISTENER: Detect if user gets deactivated while in app
+  // (Still on Supabase realtime — migration to Socket.IO is a later phase.)
   useEffect(() => {
     if (
       authState.status !== "authenticated" &&
       authState.status !== "needs_setup"
     ) {
-      return; // Only listen when user is actually in the app
+      return;
     }
 
     const userId = authState.user.id;
@@ -237,12 +279,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log("[AuthContext] Profile status changed:", newStatus);
 
           if (newStatus === "INACTIVE" || newStatus === "REJECTED") {
-            // User was deactivated/rejected while in app!
             console.log("[AuthContext] User deactivated, signing out...");
             await SecureStore.deleteItemAsync("pending_profile_id");
+            await logoutBackend().catch(() => {});
             await supabase.auth.signOut();
             setAuthState({ status: "unauthenticated" });
-            // Alert will be shown after redirect to login
           }
         },
       )
@@ -270,68 +311,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (error) throw new Error(error.message);
-      if (!data.user) throw new Error("Đăng nhập thất bại");
+      if (!data.user || !data.session) throw new Error("Đăng nhập thất bại");
 
-      const profile = await fetchProfile(data.user.id);
+      await exchangeForBackendTokens(data.session.access_token);
+
+      const profile = await fetchProfile();
       if (!profile) throw new Error("Không tìm thấy hồ sơ người dùng");
 
-      setAuthState({
-        status: "authenticated",
-        user: data.user,
-        profile,
-      });
+      if (profile.role === "OWNER" && !profile.businessId) {
+        setAuthState({ status: "needs_setup", user: data.user, profile });
+      } else {
+        setAuthState({ status: "authenticated", user: data.user, profile });
+      }
     },
-    [fetchProfile],
+    [exchangeForBackendTokens, fetchProfile],
   );
 
   // Sign up new Owner
   const signUp = useCallback(
-    async (email: string, password: string, businessName?: string) => {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-      });
+    async (email: string, password: string, fullName?: string) => {
+      const { data, error } = await supabase.auth.signUp({ email, password });
 
       if (error) throw new Error(error.message);
       if (!data.user) throw new Error("Đăng ký thất bại");
 
-      // Create business and profile via Edge Function (will be handled by trigger or edge fn)
-      // For now, call invite-create which bootstraps owner
-      const token = (await supabase.auth.getSession()).data.session
-        ?.access_token;
-      if (token) {
-        await fetch(`${Env.BACKEND_URL}/invite/create`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        });
+      // signUp doesn't always return a session (email confirmation flows).
+      // Try to fetch one; if missing, caller should show "verify email" UI.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData.session ?? data.session;
+      if (!session) {
+        throw new Error(
+          "Vui lòng xác nhận email trước khi đăng nhập. Kiểm tra hộp thư của bạn.",
+        );
       }
 
-      // Fetch created profile
-      const profile = await fetchProfile(data.user.id);
-      if (profile) {
-        setAuthState({
-          status: "authenticated",
-          user: data.user,
-          profile,
-        });
+      await exchangeForBackendTokens(session.access_token, { fullName });
+
+      const profile = await fetchProfile();
+      if (!profile) throw new Error("Không tạo được hồ sơ người dùng");
+
+      if (profile.role === "OWNER" && !profile.businessId) {
+        setAuthState({ status: "needs_setup", user: data.user, profile });
+      } else {
+        setAuthState({ status: "authenticated", user: data.user, profile });
       }
     },
-    [fetchProfile],
+    [exchangeForBackendTokens, fetchProfile],
   );
 
   // Sign out
   const signOut = useCallback(async () => {
-    // Reset local SQLite database - CLEAR DATA ONLY, DO NOT CLOSE CONNECTION
-    // Closing connection causing Native NullPointerException on re-open
     try {
       const { getDB } = await import("../db");
       const db = await getDB();
-
-      // Clear ALL user-specific tables to prevent data leakage
-      // This is critical when switching between businesses on the same device
       const tablesToClear = [
         "local_profiles",
         "local_stock_levels",
@@ -348,16 +380,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         "local_recipe_ingredients",
         "local_batch_recipes",
       ];
-
       for (const table of tablesToClear) {
         await db.runAsync(`DELETE FROM ${table}`);
       }
-
       console.log("[AuthContext] Cleared all local data for account switch");
     } catch (e) {
       console.warn("[AuthContext] Failed to clear database:", e);
     }
 
+    await logoutBackend().catch(() => {});
     await supabase.auth.signOut();
     await SecureStore.deleteItemAsync("pending_profile_id");
     setAuthState({ status: "unauthenticated" });
@@ -365,14 +396,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Refresh profile data (works for authenticated, needs_setup, AND pending states)
   const refreshProfile = useCallback(async () => {
-    // Handle authenticated / needs_setup states
     if (
       authState.status === "authenticated" ||
       authState.status === "needs_setup"
     ) {
-      const profile = await fetchProfile(authState.user.id);
+      const profile = await fetchProfile();
       if (profile) {
-        // Check if still needs setup
         if (profile.role === "OWNER" && !profile.businessId) {
           setAuthState((prev) =>
             prev.status === "authenticated" || prev.status === "needs_setup"
@@ -389,63 +418,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // Handle pending state - staff waiting for approval
-    // They have a session from auth-join-staff Edge Function
     if (authState.status === "pending") {
-      // Get current session - staff should have one from shadow account
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
       if (user) {
-        const profile = await fetchProfile(user.id);
+        const profile = await fetchProfile();
 
         if (profile && profile.status === "ACTIVE") {
-          // Staff has been approved! Transition to authenticated
           console.log(
             "[AuthContext] Staff approved! Transitioning to authenticated",
           );
           await SecureStore.deleteItemAsync("pending_profile_id");
-          setAuthState({
-            status: "authenticated",
-            user,
-            profile,
-          });
+          setAuthState({ status: "authenticated", user, profile });
         } else if (
           profile &&
           (profile.status === "REJECTED" || profile.status === "INACTIVE")
         ) {
-          // Staff was rejected
           console.log("[AuthContext] Staff rejected, clearing pending state");
           await SecureStore.deleteItemAsync("pending_profile_id");
+          await logoutBackend().catch(() => {});
           await supabase.auth.signOut();
           setAuthState({ status: "unauthenticated" });
         }
-        // If still PENDING, do nothing - stay in pending state
       }
     }
   }, [authState, fetchProfile]);
 
-  // Create business for first-time OWNER (calls RPC)
+  // Create business for first-time OWNER (via backend)
   const createBusiness = useCallback(
     async (name: string) => {
       if (authState.status !== "needs_setup") {
         throw new Error("Not in setup mode");
       }
 
-      // Call RPC function (atomic transaction)
-      const { data, error } = await supabase.rpc("create_business_for_owner", {
-        business_name: name,
-      });
+      await api.post<unknown>("/businesses", { name });
 
-      if (error) throw new Error(error.message);
-      if (!data?.success)
-        throw new Error(data?.error || "Không thể tạo cửa hàng");
+      // Re-exchange tokens so the new businessId is embedded in the JWT
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (sessionData.session) {
+        await exchangeForBackendTokens(sessionData.session.access_token);
+      }
 
-      // Refresh profile to update state to authenticated
       await refreshProfile();
     },
-    [authState.status, refreshProfile],
+    [authState.status, exchangeForBackendTokens, refreshProfile],
   );
 
   // Staff pending flow
@@ -459,10 +477,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthState({ status: "unauthenticated" });
   }, []);
 
-  // Password Management
+  // Password Management (still via Supabase — credentials live there)
   const updatePassword = useCallback(async (oldPw: string, newPw: string) => {
-    // 1. Verify old password by attempting re-auth
-    // Note: We use the current session's email
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -472,21 +488,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email: user.email,
       password: oldPw,
     });
-
     if (signInError) throw new Error("Mật khẩu hiện tại không đúng");
 
-    // 2. Update to new password
     const { error: updateError } = await supabase.auth.updateUser({
       password: newPw,
     });
-
     if (updateError) throw new Error(updateError.message);
   }, []);
 
   const resetPassword = useCallback(async (email: string) => {
-    // Note: This relies on Supabase sending a magic link
-    // Mobile deep linking must be configured for this to auto-redirect
-    // Otherwise user clicks link in email -> browser -> checks confirmed
     const { error } = await supabase.auth.resetPasswordForEmail(email);
     if (error) throw new Error(error.message);
   }, []);

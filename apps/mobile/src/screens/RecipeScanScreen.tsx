@@ -23,6 +23,7 @@ import * as Haptics from "expo-haptics";
 import { supabase } from "../lib/supabase";
 import { Env } from "../env";
 import { Ionicons } from "@expo/vector-icons";
+import { parseHandwritingMultiWithAI } from "../services/aiService";
 
 // UXUIrules Color Palette
 const COLORS = {
@@ -233,36 +234,28 @@ export default function RecipeScanScreen({
       setLoadingStep("Đang nén ảnh...");
       const base64 = await compressImage(imageUri);
 
-      // Step 2: Call AI
-      setLoadingStep("Đang phân tích công thức...");
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const res = await parseHandwritingMultiWithAI(
+        [base64],
+        "", // Recipe scan doesn't require businessId in this context
+        "SIMPLE",
+        "STORAGE"
+      );
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
-      const response = await fetch(`${Env.BACKEND_URL}/ai/parse-recipe`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          imageBase64: base64,
-          mimeType: "image/jpeg",
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`API Error: ${response.status}`);
+      if (!res.success) {
+        throw new Error(res.error || "AI parse failed");
       }
 
-      const data: ParsedRecipe = await response.json();
+      const data: ParsedRecipe = {
+        name: (res.items[0] as any)?.recipe_name || "",
+        category: (res.items[0] as any)?.category || "",
+        price: (res.items[0] as any)?.price || 0,
+        ingredients: res.items.map(item => ({
+          name: item.ingredient_name,
+          quantity: item.stock_qty,
+          unit: item.unit
+        })),
+        confidence: res.items.reduce((acc, curr) => acc + curr.confidence, 0) / res.items.length || 0
+      };
 
       // Step 3: Map ingredients
       setLoadingStep("Đang liên kết nguyên liệu...");

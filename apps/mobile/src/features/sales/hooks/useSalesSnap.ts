@@ -12,6 +12,7 @@
 import { useState, useCallback } from "react";
 import {
   parseSalesWithAI,
+  QuotaExceededError,
   type ParsedSalesItem,
   type DeductedItem,
   type ParsedSalesResponse,
@@ -24,6 +25,7 @@ interface SalesState {
   isParsed: boolean;
   isSaving: boolean;
   error: string | null;
+  quotaExceeded: { canWatchAd: boolean; adRewardScans: number; maxAdRewardsPerDay: number } | null;
   // AI results
   reportDate?: string;
   shift?: string;
@@ -31,6 +33,10 @@ interface SalesState {
   itemsSold: ParsedSalesItem[];
   itemsDeducted: DeductedItem[];
   confidence: number;
+  qtyMismatch?: { expected: number; got: number; diff: number } | null;
+  revenueMismatch?: { expected: number; got: number; diff: number } | null;
+  orderSuspicious?: boolean;
+  rawOcrText?: string | null;
   // Local
   localImagePath?: string;
 }
@@ -41,6 +47,7 @@ const initialState: SalesState = {
   isParsed: false,
   isSaving: false,
   error: null,
+  quotaExceeded: null,
   itemsSold: [],
   itemsDeducted: [],
   confidence: 0,
@@ -53,6 +60,7 @@ export interface UseSalesSnapReturn {
   processImage: (imageUri: string, businessId: string) => Promise<void>;
   updateSoldItem: (index: number, updates: Partial<ParsedSalesItem>) => void;
   removeSoldItem: (index: number) => void;
+  clearQuotaExceeded: () => void;
   confirmAndSave: (businessId: string) => Promise<string | null>;
   reset: () => void;
 }
@@ -91,20 +99,40 @@ export function useSalesSnap(): UseSalesSnapReturn {
           reportDate: result.report_date,
           shift: result.shift,
           totalRevenue: result.total_revenue,
-          itemsSold: result.items_sold,
+          itemsSold: [...result.items_sold].sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0)),
           itemsDeducted: result.items_deducted,
           confidence: result.confidence,
+          qtyMismatch: result.qty_mismatch,
+          revenueMismatch: result.revenue_mismatch,
+          orderSuspicious: result.order_suspicious,
+          rawOcrText: result.raw_ocr_text,
         }));
       } catch (error) {
-        setState((prev) => ({
-          ...prev,
-          isProcessing: false,
-          error: error instanceof Error ? error.message : "Lỗi không xác định",
-        }));
+        if (error instanceof QuotaExceededError) {
+          setState((prev) => ({
+            ...prev,
+            isProcessing: false,
+            quotaExceeded: {
+              canWatchAd: error.canWatchAd,
+              adRewardScans: error.adRewardScans,
+              maxAdRewardsPerDay: error.maxAdRewardsPerDay,
+            },
+          }));
+        } else {
+          setState((prev) => ({
+            ...prev,
+            isProcessing: false,
+            error: error instanceof Error ? error.message : "Lỗi không xác định",
+          }));
+        }
       }
     },
     []
   );
+
+  const clearQuotaExceeded = useCallback(() => {
+    setState((prev) => ({ ...prev, quotaExceeded: null }));
+  }, []);
 
   const updateSoldItem = useCallback(
     (index: number, updates: Partial<ParsedSalesItem>) => {
@@ -171,5 +199,6 @@ export function useSalesSnap(): UseSalesSnapReturn {
     removeSoldItem,
     confirmAndSave,
     reset,
+    clearQuotaExceeded,
   };
 }

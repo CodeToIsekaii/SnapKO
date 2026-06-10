@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
+import { loginMobile } from "@/lib/backendClient";
 import { FaGoogle } from "react-icons/fa";
 
 /**
@@ -90,14 +91,18 @@ export default function RegisterPage() {
       }
 
       if (authData.user) {
-        await supabase.from("profiles").upsert({
-          id: authData.user.id,
-          full_name: fullName.trim(),
-          business_name: businessName.trim(),
-          role: "OWNER",
-          status: "ACTIVE",
-        });
-
+        // If Supabase issued a session immediately (email confirmation off),
+        // exchange it for backend tokens so profile auto-provisions on BE.
+        if (authData.session?.access_token) {
+          try {
+            await loginMobile(authData.session.access_token, {
+              fullName: fullName.trim(),
+            });
+          } catch (exchangeErr) {
+            console.error("AUTH: login-mobile exchange failed:", exchangeErr);
+          }
+        }
+        // If email confirmation is required, profile will provision on next login.
         setSuccess(true);
       }
     } catch (err) {

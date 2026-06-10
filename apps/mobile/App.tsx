@@ -17,6 +17,7 @@ import * as SQLite from "expo-sqlite";
 
 import { AuthProvider, useAuth } from "./src/contexts";
 import { initSyncEngine, cleanupSyncEngine } from "./src/sync/syncEngine";
+import { usePushNotifications } from "./src/hooks/usePushNotifications";
 import {
   LoginScreen,
   InviteJoinScreen,
@@ -78,6 +79,17 @@ type Screen =
   | "QUICK_OUT"
   | "STAFF_MANAGEMENT";
 
+function PushRegistrationWorker() {
+  usePushNotifications();
+  return null;
+}
+
+function PushRegistrationGate() {
+  const { authState } = useAuth();
+  if (authState.status !== "authenticated") return null;
+  return <PushRegistrationWorker key={authState.profile.id} />;
+}
+
 // State for ConfirmLog screen
 interface ConfirmLogParams {
   items: ConfirmItem[];
@@ -114,19 +126,15 @@ function AppNavigator() {
     }
   );
 
-  // Initialize DB and sync engine
+  // Initialize DB first; sync starts only after backend auth is ready.
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const { getDB } = await import("./src/db");
-        const db = await getDB();
+        await getDB();
         if (mounted) {
           setDbReady(true);
-          // Initialize sync in background so it doesn't block UI
-          initSyncEngine(db).catch((err) =>
-            console.error("Background sync init failed:", err)
-          );
         }
       } catch (e) {
         console.error("DB init failed:", e);
@@ -134,9 +142,35 @@ function AppNavigator() {
     })();
     return () => {
       mounted = false;
-      cleanupSyncEngine();
     };
   }, []);
+
+  useEffect(() => {
+    if (!dbReady || authState.status !== "authenticated") return;
+
+    let mounted = true;
+    (async () => {
+      try {
+        const { getDB } = await import("./src/db");
+        const db = await getDB();
+        if (!mounted) return;
+        initSyncEngine(db).catch((err) =>
+          console.error("Background sync init failed:", err)
+        );
+      } catch (e) {
+        console.error("Sync init failed:", e);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      cleanupSyncEngine();
+    };
+  }, [
+    dbReady,
+    authState.status,
+    authState.status === "authenticated" ? authState.profile.id : null,
+  ]);
 
   // Navigate based on auth state changes
   useEffect(() => {
@@ -177,8 +211,8 @@ function AppNavigator() {
     if (currentScreen === "STAFF_JOIN") {
       return (
         <InviteJoinScreen
-          onSuccess={(profileId) => {
-            setStaffPending(profileId);
+          onSuccess={async (profileId) => {
+            await setStaffPending(profileId);
           }}
           onBack={() => setCurrentScreen("LOGIN")}
         />
@@ -428,6 +462,7 @@ export default function App() {
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <InventoryModelProvider>
+              <PushRegistrationGate />
               <AppNavigator />
               <StatusBar style="light" />
             </InventoryModelProvider>

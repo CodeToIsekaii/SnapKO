@@ -11,6 +11,10 @@ import {
   COGSReport,
   ActivityLog,
 } from "../types";
+import {
+  calculateInventoryItemValue,
+  getInventoryQuantitiesInBase,
+} from "../../shared/inventoryValue";
 
 interface InventoryState {
   ingredients: Ingredient[];
@@ -31,18 +35,19 @@ export function useInventory() {
       pending: 0,
       lastSync: null,
       syncing: false,
+      lastError: null,
     },
     loading: true,
   });
 
   // Calculate derived values
   const totalValue = state.ingredients.reduce(
-    (sum, item) => sum + (item.warehouse_qty + item.bar_qty) * item.unit_cost,
+    (sum, item) => sum + calculateInventoryItemValue(item),
     0
   );
 
   const lowStockItems = state.ingredients.filter(
-    (item) => item.warehouse_qty + item.bar_qty < 10
+    (item) => getInventoryQuantitiesInBase(item).totalQtyInBase < 10
   );
 
   // Load all data
@@ -95,15 +100,20 @@ export function useInventory() {
     };
   }, [loadData]);
 
-  // Sync from server
-  const syncFromServer = useCallback(async () => {
+  // Sync from server. Pass `force: true` to bypass the 10-min pull cache —
+  // dùng cho user-triggered actions (nút Đồng bộ). Auto-sync trên mount thì
+  // gọi không có force để tận dụng cache.
+  const syncFromServer = useCallback(async (opts?: { force?: boolean }) => {
     setState((s) => ({
       ...s,
-      syncStatus: { ...s.syncStatus, syncing: true },
+      syncStatus: { ...s.syncStatus, syncing: true, lastError: null },
     }));
 
     try {
-      await window.electronAPI.syncFromServer?.();
+      const result = await window.electronAPI.syncFromServer?.(opts);
+      if (!result?.success) {
+        throw new Error(result?.error || "Đồng bộ thất bại");
+      }
       await loadData();
 
       setState((s) => ({
@@ -112,13 +122,16 @@ export function useInventory() {
           ...s.syncStatus,
           syncing: false,
           lastSync: new Date().toISOString(),
+          lastError: null,
         },
       }));
     } catch (err) {
       console.error("[useInventory] Sync error:", err);
+      const errorMessage =
+        err instanceof Error ? err.message : "Đồng bộ thất bại";
       setState((s) => ({
         ...s,
-        syncStatus: { ...s.syncStatus, syncing: false },
+        syncStatus: { ...s.syncStatus, syncing: false, lastError: errorMessage },
       }));
     }
   }, [loadData]);

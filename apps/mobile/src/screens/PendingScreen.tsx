@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
+import { api } from "../services/api";
 
 interface PendingScreenProps {
   profileId: string;
@@ -113,11 +114,9 @@ export default function PendingScreen({
       }
 
       try {
-        const { data } = await supabase
-          .from("profiles")
-          .select("status")
-          .eq("id", profileId)
-          .single();
+        const data = await api
+          .get<{ status?: string }>("/profiles/me")
+          .catch(() => null);
 
         if (data?.status && data.status !== "PENDING") {
           hasHandledFinalStatus.current = true; // Mark as handled

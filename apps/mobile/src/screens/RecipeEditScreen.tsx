@@ -240,11 +240,16 @@ export default function RecipeEditScreen({
     try {
       const db = await getDB();
       const id = recipeId || Crypto.randomUUID();
+      const existingRecipe = await db.getFirstAsync<{ aliases: string }>(
+        "SELECT aliases FROM local_recipes WHERE id = ?",
+        [id],
+      );
+      const aliases = existingRecipe?.aliases ?? "[]";
 
       await db.runAsync(
-        `INSERT OR REPLACE INTO local_recipes (id, name, price, category, created_at)
-         VALUES (?, ?, ?, ?, datetime('now'))`,
-        [id, name.trim(), sellingPrice, category.trim()],
+        `INSERT OR REPLACE INTO local_recipes (id, name, aliases, price, category, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        [id, name.trim(), aliases, sellingPrice, category.trim()],
       );
 
       await db.runAsync(

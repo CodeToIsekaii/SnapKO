@@ -8,7 +8,7 @@
  * - Environment variables via env.main.ts with Zod validation
  */
 
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import { join } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import Store from "electron-store";
@@ -22,11 +22,19 @@ import {
   setDatabaseBusinessId,
 } from "./database";
 import { registerPrinterIPC } from "./printer";
-import { setAuthToken, pullAll, isSyncReady, getSyncClient } from "./sync";
+import { pullAll } from "./sync";
 import { startRealtimeListener, stopRealtimeListener } from "./realtime";
 import { registerExportIPC } from "./export";
-import { registerStaffIPC, setStaffSupabaseClient } from "./staff";
+import { registerStaffIPC } from "./staff";
 import { processQueue } from "./syncWorker";
+import {
+  loginMobileExchange,
+  logoutBackend,
+  apiFetch,
+  ApiFetchError,
+  getStoredRefreshToken,
+  clearTokens,
+} from "./apiClient";
 
 // Environment variables (validated via Zod in env.ts)
 const SUPABASE_URL = Env.VITE_SUPABASE_URL;
@@ -130,33 +138,30 @@ function registerAuthIPC() {
 
         currentSession = data.session;
 
-        // Set token for sync client
         if (data.session?.access_token) {
-          setAuthToken(data.session.access_token);
+          // Exchange Supabase token for backend JWTs
+          await loginMobileExchange(data.session.access_token);
 
-          // Set Supabase client for staff module (CRITICAL FIX)
-          const client = getSyncClient();
-          if (client) {
-            setStaffSupabaseClient(client);
-            setDatabaseSupabaseClient(client); // For staff profiles Cloud query
+          // Wire Supabase client for database.ts queries (historical logs, staff list)
+          setDatabaseSupabaseClient(authClient);
+
+          // Fetch profile from backend API
+          let businessId: string | null = null;
+          try {
+            const backendProfile = await apiFetch<{
+              id: string;
+              businessId: string | null;
+            }>("/profiles/me");
+            businessId = backendProfile?.businessId || null;
+          } catch (e) {
+            console.warn("[Auth] Backend profile fetch failed:", e);
           }
 
-          // Start Realtime listener after login
-          // Note: We need to get businessId from profile - for now use user.id as placeholder
-          // In production, fetch profile first to get business_id
-          /* FIXED: Fetch profile to get business_id and set in database */
-          // Fetch profile to get business_id
-          const { data: profile } = await authClient
-            .from("profiles")
-            .select("business_id")
-            .eq("id", data.user.id)
-            .single();
-
-          if (profile?.business_id) {
-            setDatabaseBusinessId(profile.business_id);
+          if (businessId) {
+            setDatabaseBusinessId(businessId);
           }
 
-          // Persist session to disk (Moved here to include business_id)
+          // Persist Supabase session to disk (still needed for realtime + restore)
           if (data.session && data.user) {
             saveSession({
               access_token: data.session.access_token,
@@ -164,15 +169,15 @@ function registerAuthIPC() {
               user: {
                 id: data.user.id,
                 email: data.user.email || "",
-                business_id: profile?.business_id,
+                business_id: businessId || undefined,
               },
             });
           }
 
-          // Start Realtime with Correct Business ID
+          // Start Realtime listener (Supabase realtime is kept intentionally)
           startRealtimeListener(
             data.session.access_token,
-            profile?.business_id || data.user?.id || "",
+            businessId || data.user?.id || "",
             mainWindow
           );
         }
@@ -200,19 +205,113 @@ function registerAuthIPC() {
     // Clear local SQLite data to prevent stale data for next user
     clearLocalData();
 
+    // Revoke backend refresh token, then sign out of Supabase
+    try {
+      await logoutBackend();
+    } catch (err) {
+      console.warn("[Auth] Backend logout failed:", err);
+    }
+
     if (authClient) {
       await authClient.auth.signOut();
     }
     currentSession = null;
     clearSession(); // Clear persisted session from disk
-    setAuthToken(null);
     console.log("[Auth] Logged out");
     return { success: true };
   });
 
-  // Set auth token (called from renderer on token refresh)
-  ipcMain.handle("auth:set-token", (_event, token: string | null) => {
-    setAuthToken(token);
+  // Register — Supabase signUp + backend token exchange
+  ipcMain.handle(
+    "auth:register",
+    async (
+      _event,
+      email: string,
+      password: string,
+      fullName: string,
+      _businessName?: string
+    ) => {
+      if (!authClient) {
+        return { success: false, error: "Supabase not configured" };
+      }
+
+      try {
+        const { data, error } = await authClient.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { full_name: fullName },
+          },
+        });
+
+        if (error) return { success: false, error: error.message };
+
+        // If email verification required, no session yet
+        if (!data.session?.access_token) {
+          return {
+            success: true,
+            needsVerification: true,
+            session: null,
+          };
+        }
+
+        currentSession = data.session;
+
+        // Exchange Supabase token for backend JWTs and auto-create profile
+        await loginMobileExchange(data.session.access_token, { fullName });
+
+        // Wire Supabase client for database.ts queries
+        setDatabaseSupabaseClient(authClient);
+
+        let businessId: string | null = null;
+        try {
+          const backendProfile = await apiFetch<{
+            id: string;
+            businessId: string | null;
+          }>("/profiles/me");
+          businessId = backendProfile?.businessId || null;
+        } catch (e) {
+          console.warn("[Auth] Backend profile fetch failed:", e);
+        }
+
+        if (businessId) setDatabaseBusinessId(businessId);
+
+        if (data.user) {
+          saveSession({
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token || "",
+            user: {
+              id: data.user.id,
+              email: data.user.email || "",
+              business_id: businessId || undefined,
+            },
+          });
+        }
+
+        startRealtimeListener(
+          data.session.access_token,
+          businessId || data.user?.id || "",
+          mainWindow
+        );
+
+        console.log("[Auth] Register successful:", email);
+        return {
+          success: true,
+          session: {
+            access_token: data.session.access_token,
+            user: data.user,
+          },
+        };
+      } catch (err: any) {
+        console.error("[Auth] Register error:", err);
+        return { success: false, error: err.message };
+      }
+    }
+  );
+
+  // Set auth token — kept as a no-op for renderer TOKEN_REFRESHED handler.
+  // Backend refresh is handled automatically by apiFetch on 401.
+  ipcMain.handle("auth:set-token", (_event, _token: string | null) => {
     return { success: true };
   });
 
@@ -300,7 +399,36 @@ function registerAuthIPC() {
               }
 
               currentSession = sessionData.session;
-              setAuthToken(accessToken);
+
+              // Exchange Supabase token for backend JWTs
+              try {
+                await loginMobileExchange(accessToken);
+              } catch (e) {
+                console.error("[Auth] login-mobile exchange failed:", e);
+                authWindow.close();
+                resolve({
+                  success: false,
+                  error: "Backend login exchange failed",
+                });
+                return;
+              }
+
+              // Wire Supabase client for database.ts historical queries
+              setDatabaseSupabaseClient(authClient);
+
+              // Fetch profile from backend
+              let businessId: string | null = null;
+              try {
+                const backendProfile = await apiFetch<{
+                  id: string;
+                  businessId: string | null;
+                }>("/profiles/me");
+                businessId = backendProfile?.businessId || null;
+              } catch (e) {
+                console.warn("[Auth] Backend profile fetch failed:", e);
+              }
+
+              if (businessId) setDatabaseBusinessId(businessId);
 
               // Persist session to disk for auto-login on restart
               if (sessionData.session && sessionData.session.user) {
@@ -310,36 +438,16 @@ function registerAuthIPC() {
                   user: {
                     id: sessionData.session.user.id,
                     email: sessionData.session.user.email || "",
+                    business_id: businessId || undefined,
                   },
                 });
-              }
-
-              // Set Supabase client for staff module
-              const client = getSyncClient();
-              if (client) {
-                setStaffSupabaseClient(client);
-                setDatabaseSupabaseClient(client); // For staff profiles Cloud query
-              }
-
-              /* FIXED: Fetch profile to get business_id */
-              if (sessionData.session?.user) {
-                authClient
-                  .from("profiles")
-                  .select("business_id")
-                  .eq("id", sessionData.session.user.id)
-                  .single()
-                  .then(({ data: profile }) => {
-                    if (profile?.business_id) {
-                      setDatabaseBusinessId(profile.business_id);
-                    }
-                  });
               }
 
               // Start Realtime listener
               if (sessionData.session?.user) {
                 startRealtimeListener(
                   accessToken,
-                  sessionData.session.user.id,
+                  businessId || sessionData.session.user.id,
                   mainWindow
                 );
               }
@@ -380,61 +488,46 @@ function registerAuthIPC() {
 
   // ==================== PROFILE/BUSINESS HANDLERS ====================
 
-  // Get user profile from Cloud
+  // Get user profile from backend (camelCase) and map to snake_case for renderer
   ipcMain.handle("auth:get-profile", async () => {
-    if (!authClient || !currentSession?.user) {
-      return { profile: null, error: "Not authenticated" };
-    }
-
     try {
-      // Fetch profile with inventory_model and join businesses for subscription data
-      const { data: profile, error } = await authClient
-        .from("profiles")
-        .select(
-          `
-          id,
-          business_id,
-          role,
-          status,
-          full_name,
-          phone_number,
-          inventory_model,
-          businesses (
-            name,
-            inventory_model,
-            tier,
-            subscription_expires_at,
-            created_at
-          )
-        `
-        )
-        .eq("id", currentSession.user.id)
-        .single();
+      const backendProfile = await apiFetch<any>("/profiles/me");
 
-      if (error) {
-        console.error("[Auth] Get profile error:", error);
-        return { profile: null, error: error.message };
+      if (!backendProfile) {
+        return { profile: null, error: "No profile returned" };
       }
 
-      // Flatten business info from joined table
       const flattenedProfile = {
-        ...profile,
-        business_name: (profile?.businesses as any)?.name || null,
-        // PREFER business model (global) over profile model (legacy)
+        id: backendProfile.id,
+        business_id: backendProfile.businessId ?? null,
+        role: backendProfile.role,
+        status: backendProfile.status,
+        full_name: backendProfile.fullName ?? null,
+        phone_number: backendProfile.phoneNumber ?? null,
         inventory_model:
-          (profile?.businesses as any)?.inventory_model ||
-          profile.inventory_model ||
-          "STANDARD",
-        // Subscription data
-        tier: (profile?.businesses as any)?.tier || "FREE",
+          backendProfile.business?.effectiveInventoryModel ||
+          backendProfile.business?.inventoryModel ||
+          backendProfile.inventoryModel ||
+          "SIMPLE",
+        stored_inventory_model:
+          backendProfile.business?.inventoryModel ||
+          backendProfile.inventoryModel ||
+          "SIMPLE",
+        business_name: backendProfile.business?.name ?? null,
+        tier: backendProfile.business?.tier || "FREE",
+        effective_tier:
+          backendProfile.business?.effectiveTier ||
+          backendProfile.business?.tier ||
+          "FREE",
+        subscription_status: backendProfile.business?.subscriptionStatus || null,
+        entitlements: backendProfile.business?.entitlements || null,
         subscription_expires_at:
-          (profile?.businesses as any)?.subscription_expires_at || null,
-        business_created_at: (profile?.businesses as any)?.created_at || null,
+          backendProfile.business?.subscriptionExpiresAt || null,
+        business_created_at: backendProfile.business?.createdAt || null,
       };
 
       console.log("[Auth] Profile fetched:", flattenedProfile);
 
-      /* FIXED: Ensure database business_id is set when profile is fetched */
       if (flattenedProfile.business_id) {
         setDatabaseBusinessId(flattenedProfile.business_id);
       }
@@ -446,39 +539,53 @@ function registerAuthIPC() {
     }
   });
 
-  // Create business on Cloud via RPC (atomic transaction - per Tech Lead recommendation)
-  // Uses SECURITY DEFINER function to atomically: 1) Create Business 2) Update Profile
+  // Create business via backend; re-exchange tokens so new JWT embeds businessId
   ipcMain.handle(
     "auth:create-business",
     async (_event, { name }: { name: string; userId: string }) => {
-      if (!authClient) {
-        return { success: false, error: "Supabase not configured" };
-      }
-
       try {
-        console.log("[Auth] Creating business via RPC:", name);
+        console.log("[Auth] Creating business:", name);
 
-        // Call the RPC function which handles both operations in a transaction
-        const { data, error } = await authClient.rpc(
-          "create_business_for_owner",
-          { business_name: name }
-        );
+        const result = await apiFetch<{
+          business?: { id: string };
+          id?: string;
+        }>("/businesses", {
+          method: "POST",
+          body: JSON.stringify({ name }),
+        });
 
-        if (error) {
-          console.error("[Auth] RPC error:", error);
-          return { success: false, error: error.message };
+        const businessId = result?.business?.id || result?.id;
+        if (!businessId) {
+          return { success: false, error: "No business id returned" };
         }
 
-        console.log("[Auth] RPC result:", data);
-
-        // RPC returns JSON with success/error
-        if (data && data.success) {
-          console.log("[Auth] Business created:", data.business_id);
-          return { success: true, businessId: data.business_id };
-        } else {
-          console.error("[Auth] RPC returned error:", data?.error);
-          return { success: false, error: data?.error || "Unknown error" };
+        // Re-exchange Supabase token so backend JWT now carries the new businessId
+        if (currentSession?.access_token) {
+          try {
+            await loginMobileExchange(currentSession.access_token);
+          } catch (e) {
+            console.warn("[Auth] Re-exchange after create-business failed:", e);
+          }
         }
+
+        setDatabaseBusinessId(businessId);
+        if (currentSession) currentSession.business_id = businessId;
+
+        // Refresh persisted session with new business_id
+        if (currentSession?.user) {
+          saveSession({
+            access_token: currentSession.access_token,
+            refresh_token: currentSession.refresh_token || "",
+            user: {
+              id: currentSession.user.id,
+              email: currentSession.user.email || "",
+              business_id: businessId,
+            },
+          });
+        }
+
+        console.log("[Auth] Business created:", businessId);
+        return { success: true, businessId };
       } catch (err: any) {
         console.error("[Auth] Create business error:", err);
         return { success: false, error: err.message };
@@ -486,8 +593,7 @@ function registerAuthIPC() {
     }
   );
 
-  // Update profile (for model selection, etc.)
-  // CRITICAL: Must use main process client which has auth session
+  // Update profile via backend (camelCase payload)
   ipcMain.handle(
     "auth:update-profile",
     async (
@@ -498,48 +604,28 @@ function registerAuthIPC() {
         phone_number?: string | null;
       }
     ) => {
-      if (!authClient || !currentSession?.user) {
-        return { success: false, error: "Not authenticated" };
-      }
-
       try {
         console.log("[Auth] Updating profile:", data);
 
-        // 1. Update profile (UI state / backward compatibility)
-        const { error } = await authClient
-          .from("profiles")
-          .update(data)
-          .eq("id", currentSession.user.id);
+        // Profile only — inventory model belongs to business; route separately
+        const profilePayload: Record<string, unknown> = {};
+        if (data.full_name !== undefined) profilePayload.fullName = data.full_name;
+        if (data.phone_number !== undefined)
+          profilePayload.phoneNumber = data.phone_number;
 
-        if (error) {
-          console.error("[Auth] Update profile error:", error);
-          return { success: false, error: error.message };
+        if (Object.keys(profilePayload).length > 0) {
+          await apiFetch("/profiles/me", {
+            method: "PATCH",
+            body: JSON.stringify(profilePayload),
+          });
         }
 
-        // 2. If inventory_model changed, sync to BUSINESS table (Global setting)
+        // inventory_model is a business-level setting (OWNER only)
         if (data.inventory_model) {
-          // Get current profile to check role & business_id
-          const { data: profile } = await authClient
-            .from("profiles")
-            .select("business_id, role")
-            .eq("id", currentSession.user.id)
-            .single();
-
-          if (profile?.role === "OWNER" && profile.business_id) {
-            console.log(
-              "[Auth] Syncing model to BUSINESS:",
-              data.inventory_model
-            );
-            const { error: busError } = await authClient
-              .from("businesses")
-              .update({ inventory_model: data.inventory_model })
-              .eq("id", profile.business_id);
-
-            if (busError) {
-              console.error("[Auth] Failed to sync to business:", busError);
-              // Don't fail the whole request, but log it
-            }
-          }
+          await apiFetch("/businesses/me", {
+            method: "PATCH",
+            body: JSON.stringify({ inventoryModel: data.inventory_model }),
+          });
         }
 
         console.log("[Auth] Profile updated successfully");
@@ -551,42 +637,28 @@ function registerAuthIPC() {
     }
   );
 
-  // Update business (Global Settings) - Explicit Handler
+  // Update business via backend
   ipcMain.handle(
     "auth:update-business",
-    async (_event, data: { inventory_model?: string; name?: string }) => {
-      if (!authClient || !currentSession?.user) {
-        return { success: false, error: "Not authenticated" };
-      }
-
+    async (_event, data: { inventory_model?: string; name?: string; shareRecipesWithStaff?: boolean }) => {
       try {
-        console.log("[Auth] Updating business explicitly:", data);
+        console.log("[Auth] Updating business:", data);
 
-        // 1. Get Business ID from Profile
-        const { data: profile, error: profileError } = await authClient
-          .from("profiles")
-          .select("business_id, role")
-          .eq("id", currentSession.user.id)
-          .single();
+        const payload: Record<string, unknown> = {};
+        if (data.name !== undefined) payload.name = data.name;
+        if (data.inventory_model !== undefined)
+          payload.inventoryModel = data.inventory_model;
+        if (data.shareRecipesWithStaff !== undefined)
+          payload.shareRecipesWithStaff = data.shareRecipesWithStaff;
 
-        if (profileError || !profile?.business_id) {
-          return { success: false, error: "Business not found for user" };
+        if (Object.keys(payload).length === 0) {
+          return { success: true };
         }
 
-        if (profile.role !== "OWNER") {
-          return { success: false, error: "Only OWNER can update business" };
-        }
-
-        // 2. Update Business
-        const { error } = await authClient
-          .from("businesses")
-          .update(data)
-          .eq("id", profile.business_id);
-
-        if (error) {
-          console.error("[Auth] Update business error:", error);
-          return { success: false, error: error.message };
-        }
+        await apiFetch("/businesses/me", {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
 
         console.log("[Auth] Business updated successfully");
         return { success: true };
@@ -604,8 +676,8 @@ function registerAuthIPC() {
 
 function registerSyncIPC() {
   // Pull data from server to local
-  ipcMain.handle("sync:pull", async () => {
-    if (!isSyncReady()) {
+  ipcMain.handle("sync:pull", async (_event, opts?: { force?: boolean }) => {
+    if (!getStoredRefreshToken()) {
       return { success: false, synced: 0, error: "Not authenticated" };
     }
 
@@ -614,11 +686,33 @@ function registerSyncIPC() {
     await processQueue();
     console.log("[Sync] Queue flushed, starting pull...");
 
-    const result = await pullAll();
+    const result = await pullAll({ force: opts?.force });
     return result;
   });
 
   console.log("[Sync] IPC handlers registered");
+}
+
+function registerShellIPC() {
+  ipcMain.handle("shell:open-external", async (_event, url: string) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        throw new Error("Unsupported URL protocol");
+      }
+
+      await shell.openExternal(parsed.toString());
+      return { success: true };
+    } catch (err: any) {
+      console.error("[Shell] openExternal failed:", err);
+      return {
+        success: false,
+        error: err?.message || "Cannot open external URL",
+      };
+    }
+  });
+
+  console.log("[Shell] IPC handlers registered");
 }
 
 // ==================== APP LIFECYCLE ====================
@@ -633,8 +727,94 @@ app.whenReady().then(async () => {
   registerPrinterIPC();
   registerAuthIPC();
   registerSyncIPC();
+  registerShellIPC();
   registerExportIPC(mainWindow);
   registerStaffIPC();
+
+  // AI parse (Invoice/Sales/Stock/Recipe) via BE-SnapKO hybrid pipeline
+  ipcMain.handle(
+    "ai:parse",
+    async (
+      _event,
+      body: {
+        type: "IMPORT" | "SALES" | "STOCK_CHECK" | "RECIPE";
+        image?: string;
+        images?: string[];
+        areaType?: "warehouse" | "bar" | "SERVICE" | "STORAGE";
+        inventoryModel?: "SIMPLE" | "STANDARD" | "CHAIN";
+        qualityMode?: "standard" | "high_accuracy";
+      }
+    ) => {
+      try {
+        return await apiFetch<any>("/ai/parse", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+      } catch (err: any) {
+        console.error("[AI] parse error:", err);
+        if (err instanceof ApiFetchError && err.status === 429) {
+          return { success: false, error: "QUOTA_EXCEEDED", quotaExceeded: true };
+        }
+        return { success: false, error: err.message };
+      }
+    }
+  );
+
+  // ==================== DIALOG (focus-safe confirm) ====================
+  ipcMain.handle("dialog:confirm", async (event, message: string, detail?: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showMessageBox(win!, {
+      type: "question",
+      buttons: ["Hủy", "Xác nhận"],
+      defaultId: 0,
+      cancelId: 0,
+      message,
+      detail,
+    });
+    return result.response === 1;
+  });
+
+  // ==================== STORAGE AREAS ====================
+  ipcMain.handle("storage-areas:list", async () => {
+    try {
+      return await apiFetch<any[]>("/storage-areas");
+    } catch (err: any) {
+      console.error("[StorageAreas] list error:", err);
+      return [];
+    }
+  });
+
+  ipcMain.handle("storage-areas:create", async (_event, data: { name: string; type?: string }) => {
+    try {
+      return await apiFetch<any>("/storage-areas", {
+        method: "POST",
+        body: JSON.stringify({ name: data.name, type: data.type ?? "STORAGE" }),
+      });
+    } catch (err: any) {
+      throw new Error(err.message ?? "Không thể tạo khu vực kho");
+    }
+  });
+
+  ipcMain.handle("storage-areas:update", async (_event, id: string, data: { name?: string; isActive?: boolean }) => {
+    try {
+      return await apiFetch<any>(`/storage-areas/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
+    } catch (err: any) {
+      throw new Error(err.message ?? "Không thể cập nhật khu vực kho");
+    }
+  });
+
+  ipcMain.handle("storage-areas:delete", async (_event, id: string) => {
+    try {
+      await apiFetch<any>(`/storage-areas/${id}`, { method: "DELETE" });
+      return { success: true };
+    } catch (err: any) {
+      throw new Error(err.message ?? "Không thể xóa khu vực kho");
+    }
+  });
+
   console.log("[SnapKO Desktop] All IPC handlers registered");
 
   // ==================== AUTH STATE LISTENER (MAIN PROCESS) ====================
@@ -647,29 +827,24 @@ app.whenReady().then(async () => {
         if (session) {
           currentSession = session;
 
-          // CRITICAL: Update Sync Client Token
-          setAuthToken(session.access_token);
+          // Keep Supabase client wired for database.ts historical queries
+          setDatabaseSupabaseClient(authClient);
 
-          // Update Sync Clients for other modules
-          const client = getSyncClient();
-          if (client) {
-            setStaffSupabaseClient(client);
-            setDatabaseSupabaseClient(client);
-          }
-
-          // Persist to disk
+          // Persist to disk (preserve existing business_id if already known)
+          const existing = loadSession();
           saveSession({
             access_token: session.access_token,
             refresh_token: session.refresh_token || "",
             user: {
               id: session.user.id,
               email: session.user.email || "",
+              business_id: existing?.user.business_id,
             },
           });
         }
       } else if (event === "SIGNED_OUT") {
         currentSession = null;
-        setAuthToken(null);
+        clearTokens();
         clearSession();
       }
     });
@@ -735,39 +910,45 @@ app.whenReady().then(async () => {
           });
         }
 
-        // Set token for sync client
-        setAuthToken(data.session.access_token);
+        // Wire Supabase client for database.ts historical queries
+        setDatabaseSupabaseClient(authClient);
 
-        // Set Supabase client for staff module
-        const client = getSyncClient();
-        if (client) {
-          setStaffSupabaseClient(client);
-          setDatabaseSupabaseClient(client);
+        // Ensure backend tokens exist — if not (first restore after migration),
+        // re-exchange the Supabase session for backend JWTs.
+        if (!getStoredRefreshToken()) {
+          try {
+            await loginMobileExchange(data.session.access_token);
+          } catch (e) {
+            console.warn(
+              "[Session] Re-exchange for backend tokens failed:",
+              e
+            );
+          }
         }
 
-        // Fetch profile to get/refresh business_id (Restore Session)
-        // This is non-blocking if we have cached ID, but we should await it to be safe for Realtime
+        // Fetch profile from backend (auto-refreshes access token if stale)
         if (!currentSession.business_id) {
-          const { data: profile } = await authClient
-            .from("profiles")
-            .select("business_id")
-            .eq("id", data.session.user.id)
-            .single();
+          try {
+            const backendProfile = await apiFetch<{
+              id: string;
+              businessId: string | null;
+            }>("/profiles/me");
+            if (backendProfile?.businessId) {
+              setDatabaseBusinessId(backendProfile.businessId);
+              currentSession.business_id = backendProfile.businessId;
 
-          if (profile?.business_id) {
-            setDatabaseBusinessId(profile.business_id);
-            currentSession.business_id = profile.business_id;
-
-            // Update cache with found business_id
-            saveSession({
-              access_token: data.session.access_token,
-              refresh_token: data.session.refresh_token || "",
-              user: {
-                id: data.session.user?.id || "",
-                email: data.session.user?.email || "",
-                business_id: profile.business_id,
-              },
-            });
+              saveSession({
+                access_token: data.session.access_token,
+                refresh_token: data.session.refresh_token || "",
+                user: {
+                  id: data.session.user?.id || "",
+                  email: data.session.user?.email || "",
+                  business_id: backendProfile.businessId,
+                },
+              });
+            }
+          } catch (e) {
+            console.warn("[Session] Backend profile fetch failed:", e);
           }
         }
       }

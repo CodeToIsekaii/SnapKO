@@ -11,7 +11,9 @@ let initPromise: Promise<SQLite.SQLiteDatabase> | null = null; // Mutex lock
 // v8: Fixed InventoryService to use shared getDB
 // v9: Added archived column to local_ingredients for soft delete sync
 // v11: Added local_pending_lends for OFFline LEND/RETURN feature
-const SCHEMA_VERSION = 11;
+// v12: Added shelf_life_days to local_ingredients for expiry tracking
+// v13: Added local_ingredient_components for batch recipe system
+const SCHEMA_VERSION = 13;
 
 /**
  * Initialize local SQLite database with all tables
@@ -63,6 +65,7 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       DROP TABLE IF EXISTS local_recipe_ingredients;
       DROP TABLE IF EXISTS local_batch_recipes;
       DROP TABLE IF EXISTS local_pending_lends; -- Added
+      DROP TABLE IF EXISTS local_ingredient_components;
     `);
 
       // Update version
@@ -84,6 +87,29 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       // Column already exists, ignore error
     }
 
+    // Dynamic migration: purchase price fields
+    for (const col of [
+      "ALTER TABLE local_ingredients ADD COLUMN last_purchase_price REAL",
+      "ALTER TABLE local_ingredients ADD COLUMN last_purchase_qty REAL",
+      "ALTER TABLE local_ingredients ADD COLUMN last_purchase_unit TEXT",
+    ]) {
+      try { await db.runAsync(col); } catch { /* already exists */ }
+    }
+
+    // Dynamic migration: deleted_at for stock levels soft-delete
+    try {
+      await db.runAsync("ALTER TABLE local_stock_levels ADD COLUMN deleted_at TEXT");
+    } catch { /* already exists */ }
+
+    // Dynamic migration: recipe aliases for sales AI auto-learn
+    try {
+      await db.runAsync("ALTER TABLE local_recipes ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]'");
+    } catch { /* already exists or table not created yet */ }
+
+    try {
+      await db.runAsync("ALTER TABLE local_ingredients ADD COLUMN stock_check_unit TEXT");
+    } catch { /* already exists */ }
+
     // Create all tables (will be no-op if they exist)
     await db.execAsync(`
     PRAGMA journal_mode = WAL;
@@ -96,7 +122,7 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       status TEXT NOT NULL,
       full_name TEXT,
       phone_number TEXT,
-      inventory_model TEXT NOT NULL DEFAULT 'STANDARD',
+      inventory_model TEXT NOT NULL DEFAULT 'SIMPLE',
       created_at TEXT NOT NULL
     );
 
@@ -118,6 +144,7 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       area_id TEXT NOT NULL,
       quantity REAL NOT NULL DEFAULT 0,
       last_counted_at TEXT,
+      deleted_at TEXT,
       synced INTEGER NOT NULL DEFAULT 0,
       UNIQUE(ingredient_id, area_id)
     );
@@ -231,6 +258,7 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       business_id TEXT,
       name TEXT NOT NULL,
       base_unit TEXT,
+      stock_check_unit TEXT,
       min_threshold REAL NOT NULL DEFAULT 0,
       average_unit_cost REAL NOT NULL DEFAULT 0,
       unit_cost REAL,
@@ -250,6 +278,10 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       allowable_variance REAL NOT NULL DEFAULT 0,
       unit_weight REAL,
       unit_weight_unit TEXT,
+      shelf_life_days INTEGER,
+      last_purchase_price REAL,
+      last_purchase_qty REAL,
+      last_purchase_unit TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -258,6 +290,7 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
       id TEXT PRIMARY KEY NOT NULL,
       business_id TEXT,
       name TEXT NOT NULL,
+      aliases TEXT NOT NULL DEFAULT '[]',
       price INTEGER NOT NULL DEFAULT 0,
       category TEXT,
       is_active INTEGER NOT NULL DEFAULT 1,
@@ -336,6 +369,16 @@ export async function initLocalDb(): Promise<SQLite.SQLiteDatabase> {
     CREATE INDEX IF NOT EXISTS idx_recipes_business ON local_recipes(business_id);
     CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON local_recipe_ingredients(recipe_id);
     CREATE INDEX IF NOT EXISTS idx_batch_recipes_output ON local_batch_recipes(output_ingredient_id);
+
+    CREATE TABLE IF NOT EXISTS local_ingredient_components (
+      id TEXT PRIMARY KEY NOT NULL,
+      parent_id TEXT NOT NULL,
+      child_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      unit TEXT NOT NULL,
+      FOREIGN KEY (parent_id) REFERENCES local_ingredients(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_components_parent ON local_ingredient_components(parent_id);
 
     -- Sync Queue for Master Data (Mobile -> Cloud)
     CREATE TABLE IF NOT EXISTS local_sync_queue (

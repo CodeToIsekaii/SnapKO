@@ -5,7 +5,7 @@
 
 // ================== ENUMS ==================
 
-export type TierEnum = "FREE" | "PERSONAL" | "CHAIN";
+export type TierEnum = "FREE" | "PRO" | "CHAIN";
 export type ProfileRoleEnum = "OWNER" | "STAFF";
 export type ProfileStatusEnum = "PENDING" | "ACTIVE" | "INACTIVE" | "REJECTED";
 export type InventoryLocationEnum = "WAREHOUSE" | "BAR";
@@ -51,11 +51,10 @@ export interface Ingredient {
   name: string;
   aliases: string[];
   base_unit: string | null;
+  stock_check_unit?: string | null;
   warehouse_qty: number;
   bar_qty: number;
-  conversion_rate: number | null;
   unit_cost: number;
-  alert_threshold: number | null;
   created_at: string;
 }
 

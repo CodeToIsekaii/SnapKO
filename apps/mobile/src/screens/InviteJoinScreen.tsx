@@ -8,7 +8,7 @@
  * - Data minimization (Name + Phone only)
  */
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   View,
   Text,
@@ -27,9 +27,14 @@ import {
 } from "@snapko/shared";
 import { Env } from "../env";
 import { supabase } from "../lib/supabase";
+import {
+  getJoinErrorMessage,
+  runOnceInFlight,
+  unwrapJoinPayload,
+} from "./inviteJoin.utils";
 
 interface InviteJoinScreenProps {
-  onSuccess: (profileId: string) => void;
+  onSuccess: (profileId: string) => void | Promise<void>;
   onBack: () => void;
 }
 
@@ -58,6 +63,7 @@ export default function InviteJoinScreen({
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submitInFlightRef = useRef(false);
 
   // Format invite code as user types (uppercase, max 6 chars)
   const handleCodeChange = (text: string) => {
@@ -81,6 +87,8 @@ export default function InviteJoinScreen({
 
   // Submit join request - calls new auth-join-staff Edge Function
   const handleSubmit = async () => {
+    if (loading || submitInFlightRef.current) return;
+
     // Validate with Zod
     const data: InviteJoinInput = {
       inviteCode,
@@ -95,59 +103,65 @@ export default function InviteJoinScreen({
       return;
     }
 
-    setLoading(true);
-    setError(null);
+    await runOnceInFlight(submitInFlightRef, async () => {
+      setLoading(true);
+      setError(null);
 
-    try {
-      const response = await fetch(`${Env.BACKEND_URL}/staff/join`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${Env.SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify(data),
-      });
-
-      const result = await response.json();
-
-      console.log("[InviteJoin] Response status:", response.status);
-      console.log("[InviteJoin] Response body:", result);
-
-      if (!response.ok) {
-        if (response.status === 429) {
-          setError("Bạn đã thử quá nhiều lần. Vui lòng đợi 1 giờ.");
-        } else {
-          console.error("[InviteJoin] Error:", result.error);
-          setError(result.error || "Có lỗi xảy ra");
-        }
-        return;
-      }
-
-      // AUTO-LOGIN: Set the session returned from Edge Function
-      if (result.session) {
-        console.log("[InviteJoin] Setting session for auto-login...");
-        const { error: sessionError } = await supabase.auth.setSession({
-          access_token: result.session.access_token,
-          refresh_token: result.session.refresh_token,
+      try {
+        const response = await fetch(`${Env.BACKEND_URL}/auth/staff/join`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
         });
 
-        if (sessionError) {
-          console.error("[InviteJoin] Session error:", sessionError);
-          setError("Không thể đăng nhập tự động. Vui lòng thử lại.");
+        const rawResult = await response.json().catch(() => ({}));
+        const result = unwrapJoinPayload(rawResult);
+
+        console.log("[InviteJoin] Response status:", response.status);
+        console.log("[InviteJoin] Response body:", rawResult);
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            setError("Bạn đã thử quá nhiều lần. Vui lòng đợi 1 giờ.");
+          } else {
+            const backendMessage = getJoinErrorMessage(rawResult);
+            setError(backendMessage || "Có lỗi xảy ra");
+          }
           return;
         }
 
-        console.log("[InviteJoin] Auto-login successful!");
-      }
+        // AUTO-LOGIN: backend tokens (from /auth/staff/join response) + Supabase session
+        if (result.accessToken && result.refreshToken) {
+          const { setBackendAccessToken, setBackendRefreshToken } = await import("../services/api");
+          setBackendAccessToken(result.accessToken);
+          await setBackendRefreshToken(result.refreshToken);
+        }
+        if (result.session) {
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token: result.session.access_token,
+            refresh_token: result.session.refresh_token,
+          });
+          if (sessionError) {
+            console.error("[InviteJoin] Session error:", sessionError);
+            setError("Không thể đăng nhập tự động. Vui lòng thử lại.");
+            return;
+          }
+        }
 
-      // Success - navigate to pending screen (now authenticated!)
-      onSuccess(result.profileId);
-    } catch (err) {
-      console.error("[InviteJoin] Network error:", err);
-      setError("Không thể kết nối. Kiểm tra mạng và thử lại.");
-    } finally {
-      setLoading(false);
-    }
+        if (!result.profileId) {
+          setError("Không nhận được hồ sơ người dùng. Vui lòng thử lại.");
+          return;
+        }
+
+        // Success - navigate to pending screen (now authenticated!)
+        await Promise.resolve(onSuccess(result.profileId));
+      } catch (err) {
+        console.error("[InviteJoin] Network error:", err);
+        setError("Không thể kết nối. Kiểm tra mạng và thử lại.");
+      } finally {
+        setLoading(false);
+      }
+    });
   };
 
   const isCodeValid = inviteCode.length === 6;

@@ -54,7 +54,7 @@ interface ImportReviewListProps {
   onUpdateItem: (index: number, updates: Partial<ImportItem>) => void;
   onRemoveItem: (index: number) => void;
   onAddItem: (item: ImportItem) => void;
-  inventoryModel?: "SIMPLE" | "STANDARD";
+  inventoryModel?: "SIMPLE" | "STANDARD" | "CHAIN";
   targetAreaId?: string;
   onTargetAreaChange?: (areaId: string) => void;
 }
@@ -270,7 +270,7 @@ export function ImportReviewList({
             {invoiceNumber && (
               <Text style={styles.invoiceNumber}>Số: {invoiceNumber}</Text>
             )}
-            {inventoryModel === "STANDARD" && (
+            {inventoryModel !== "SIMPLE" && (
               <View style={styles.standardBadge}>
                 <Text style={styles.standardBadgeText}>Standard</Text>
               </View>
@@ -299,8 +299,8 @@ export function ImportReviewList({
         </View>
       </View>
 
-      {/* Target Area Selector (STANDARD Only) */}
-      {inventoryModel === "STANDARD" && (
+      {/* Target Area Selector (dual warehouse models only) */}
+      {inventoryModel !== "SIMPLE" && (
         <View style={styles.areaSelectorContainer}>
           <Text style={styles.areaSelectorLabel}>Nhập hàng vào:</Text>
           <View style={styles.areaOptions}>

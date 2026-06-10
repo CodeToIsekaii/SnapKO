@@ -6,6 +6,13 @@
 import { ipcMain, dialog, BrowserWindow } from "electron";
 import * as XLSX from "xlsx";
 import fs from "fs";
+import {
+  calculateInventoryItemValue,
+  formatInventoryQuantity,
+  getInventoryDisplayQuantities,
+  getInventoryDisplayUnits,
+  getInventoryQuantitiesInBase,
+} from "../shared/inventoryValue";
 
 /**
  * Format date for filename (avoid Windows colon error)
@@ -33,9 +40,13 @@ export function registerExportIPC(mainWindow: BrowserWindow | null): void {
       data: Array<{
         name: string;
         base_unit: string;
+        stock_check_unit?: string | null;
         warehouse_qty: number;
         bar_qty: number;
         unit_cost: number;
+        density?: number | null;
+        unit_weight?: number | null;
+        unit_weight_unit?: string | null;
       }>
     ) => {
       try {
@@ -51,16 +62,23 @@ export function registerExportIPC(mainWindow: BrowserWindow | null): void {
         }
 
         // 2. Transform data for Vietnamese headers
-        const exportData = data.map((item, index) => ({
-          STT: index + 1,
-          "Tên nguyên liệu": item.name,
-          "Đơn vị": item.base_unit || "N/A",
-          "SL Kho": item.warehouse_qty,
-          "SL Quầy": item.bar_qty,
-          "Tổng SL": item.warehouse_qty + item.bar_qty,
-          "Đơn giá (VNĐ)": item.unit_cost,
-          "Giá trị (VNĐ)": (item.warehouse_qty + item.bar_qty) * item.unit_cost,
-        }));
+        const exportData = data.map((item, index) => {
+          const { totalQtyInBase } = getInventoryQuantitiesInBase(item);
+          const { warehouseUnit, barUnit } = getInventoryDisplayUnits(item);
+          const { warehouseQty, barQty } = getInventoryDisplayQuantities(item);
+
+          return {
+            STT: index + 1,
+            "Tên nguyên liệu": item.name,
+            "Đơn vị kho": item.base_unit || "N/A",
+            "SL Kho": formatInventoryQuantity(warehouseQty, warehouseUnit, item),
+            "Đơn vị quầy": barUnit || warehouseUnit || "N/A",
+            "SL Quầy": formatInventoryQuantity(barQty, barUnit, item),
+            "Tổng SL (đv kho)": totalQtyInBase,
+            "Đơn giá / ĐV gốc (VNĐ)": item.unit_cost,
+            "Giá trị (VNĐ)": calculateInventoryItemValue(item),
+          };
+        });
 
         // Add summary row
         const totalValue = exportData.reduce(
@@ -70,11 +88,12 @@ export function registerExportIPC(mainWindow: BrowserWindow | null): void {
         exportData.push({
           STT: 0,
           "Tên nguyên liệu": "TỔNG CỘNG",
-          "Đơn vị": "",
-          "SL Kho": 0,
-          "SL Quầy": 0,
-          "Tổng SL": 0,
-          "Đơn giá (VNĐ)": 0,
+          "Đơn vị kho": "",
+          "SL Kho": "",
+          "Đơn vị quầy": "",
+          "SL Quầy": "",
+          "Tổng SL (đv kho)": 0,
+          "Đơn giá / ĐV gốc (VNĐ)": 0,
           "Giá trị (VNĐ)": totalValue,
         });
 
@@ -85,10 +104,11 @@ export function registerExportIPC(mainWindow: BrowserWindow | null): void {
         worksheet["!cols"] = [
           { wch: 5 }, // STT
           { wch: 25 }, // Tên
-          { wch: 10 }, // Đơn vị
+          { wch: 10 }, // Đơn vị kho
           { wch: 10 }, // SL Kho
+          { wch: 12 }, // Đơn vị quầy
           { wch: 10 }, // SL Quầy
-          { wch: 10 }, // Tổng SL
+          { wch: 15 }, // Tổng SL
           { wch: 15 }, // Đơn giá
           { wch: 18 }, // Giá trị
         ];

@@ -3,6 +3,7 @@
 // UI and Hooks must NOT call SQLite directly, always through this service
 
 import { getDB } from "../../../db";
+import { incrementStockLevel, resolveLocalAreaByLocation, syncLegacyQtyLocal } from "../../../db/stockLevelHelper";
 
 export interface IngredientData {
   id: string;
@@ -133,19 +134,36 @@ export const InventoryService = {
   getTotalValue: async (): Promise<number> => {
     const database = await getDB();
     const result = await database.getFirstAsync<{ total: number }>(
-      "SELECT SUM((warehouse_qty + bar_qty) * unit_cost) as total FROM local_ingredients"
+      `SELECT SUM(sl_total.qty * i.unit_cost) AS total
+       FROM local_ingredients i
+       JOIN (
+         SELECT sl.ingredient_id, SUM(sl.quantity) AS qty
+         FROM local_stock_levels sl
+         JOIN local_storage_areas sa ON sa.id = sl.area_id AND sa.is_active = 1
+         GROUP BY sl.ingredient_id
+       ) sl_total ON sl_total.ingredient_id = i.id
+       WHERE (i.archived != 1 OR i.archived IS NULL)`
     );
     return result?.total || 0;
   },
 
   /**
-   * Get low stock items (less than 10 units)
+   * Get low stock items (total across all areas < min_threshold, fallback 10)
    * Excludes archived/deleted ingredients
    */
   getLowStock: async (): Promise<IngredientData[]> => {
     const database = await getDB();
     return await database.getAllAsync<IngredientData>(
-      "SELECT * FROM local_ingredients WHERE (warehouse_qty + bar_qty) < 10 AND (archived != 1 OR archived IS NULL)"
+      `SELECT i.*
+       FROM local_ingredients i
+       LEFT JOIN (
+         SELECT sl.ingredient_id, SUM(sl.quantity) AS total_qty
+         FROM local_stock_levels sl
+         JOIN local_storage_areas sa ON sa.id = sl.area_id AND sa.is_active = 1
+         GROUP BY sl.ingredient_id
+       ) sl_total ON sl_total.ingredient_id = i.id
+       WHERE (i.archived != 1 OR i.archived IS NULL)
+         AND COALESCE(sl_total.total_qty, 0) < 10`
     );
   },
 
@@ -213,15 +231,17 @@ export const InventoryService = {
       unitCost
     );
 
-    // Update stock and cost
-    const qtyColumn = location === "WAREHOUSE" ? "warehouse_qty" : "bar_qty";
+    // Update unit_cost
     await database.runAsync(
-      `UPDATE local_ingredients 
-       SET ${qtyColumn} = ${qtyColumn} + ?, 
-           unit_cost = ?
-       WHERE id = ?`,
-      [quantity, newCost, ingredientId]
+      `UPDATE local_ingredients SET unit_cost = ? WHERE id = ?`,
+      [newCost, ingredientId]
     );
+
+    // Update stock via stock_levels (syncLegacyQtyLocal keeps cache in sync)
+    const importAreaId = await resolveLocalAreaByLocation(database, location);
+    if (importAreaId) {
+      await incrementStockLevel(database, ingredientId, importAreaId, quantity);
+    }
 
     console.log(
       `[Import] Added ${quantity} to ${location}, new COGS: ${newCost}`
@@ -237,36 +257,42 @@ export const InventoryService = {
   ): Promise<number> => {
     const database = await getDB();
 
-    // Safety check: Only proceed if we have a valid DB connection
     if (!database) return 0;
 
-    let query = "";
-    let params: string[] = [];
-
-    if (countedIngredientIds.length === 0) {
-      // Logic: If user counted NOTHING, then EVERYTHING is 0?
-      // Or maybe safety check prevents sending empty list?
-      // Assuming valid empty list means "I checked and found nothing" -> Reset All.
-      query = `
-        UPDATE local_ingredients 
-        SET warehouse_qty = 0 
-        WHERE (archived != 1 OR archived IS NULL)
-      `;
-    } else {
-      const placeholders = countedIngredientIds.map(() => "?").join(",");
-      query = `
-        UPDATE local_ingredients 
-        SET warehouse_qty = 0 
-        WHERE (archived != 1 OR archived IS NULL) 
-        AND id NOT IN (${placeholders})
-      `;
-      params = countedIngredientIds;
-    }
-
     try {
-      const result = await database.runAsync(query, params);
-      console.log(`[FullCount] Reset ${result.changes} uncounted items to 0`);
-      return result.changes;
+      // Find STORAGE area to zero out
+      const storageArea = await database.getFirstAsync<{ id: string }>(
+        `SELECT id FROM local_storage_areas WHERE type = 'STORAGE' AND is_active = 1 ORDER BY is_default DESC LIMIT 1`
+      );
+      if (!storageArea) return 0;
+
+      // Fetch ingredient IDs that need zeroing
+      let uncountedIds: string[];
+      if (countedIngredientIds.length === 0) {
+        const rows = await database.getAllAsync<{ id: string }>(
+          `SELECT id FROM local_ingredients WHERE (archived != 1 OR archived IS NULL)`
+        );
+        uncountedIds = rows.map((r) => r.id);
+      } else {
+        const placeholders = countedIngredientIds.map(() => "?").join(",");
+        const rows = await database.getAllAsync<{ id: string }>(
+          `SELECT id FROM local_ingredients WHERE (archived != 1 OR archived IS NULL) AND id NOT IN (${placeholders})`,
+          countedIngredientIds
+        );
+        uncountedIds = rows.map((r) => r.id);
+      }
+
+      for (const id of uncountedIds) {
+        await database.runAsync(
+          `INSERT OR REPLACE INTO local_stock_levels (id, ingredient_id, area_id, quantity, synced)
+           VALUES (COALESCE((SELECT id FROM local_stock_levels WHERE ingredient_id=? AND area_id=?), lower(hex(randomblob(16)))), ?, ?, 0, 0)`,
+          [id, storageArea.id, id, storageArea.id]
+        );
+        await syncLegacyQtyLocal(database, id);
+      }
+
+      console.log(`[FullCount] Reset ${uncountedIds.length} uncounted items to 0`);
+      return uncountedIds.length;
     } catch (e) {
       console.error("[FullCount] Error resetting stock:", e);
       return 0;

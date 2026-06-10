@@ -1,69 +1,46 @@
 /**
  * SnapKO Desktop - Staff Management IPC Handlers
- * CRITICAL FIX: Sync invite codes and staff actions to Supabase
+ *
+ * Migrated to BE-SnapKO:
+ * - generateInviteCode → POST /businesses/invite-codes
+ * - staff:action       → PATCH /profiles/:id/status
  */
 
 import { ipcMain } from "electron";
 import { getDatabase } from "./database";
+import { apiFetch } from "./apiClient";
 
-// Get Supabase client from sync module
-let supabaseClient: any = null;
-
-export function setStaffSupabaseClient(client: any) {
-  supabaseClient = client;
+// Kept for backward compat so callers can still call setStaffSupabaseClient()
+// without breaking; it's now a no-op because all server calls go through apiFetch.
+export function setStaffSupabaseClient(_client: any) {
+  // no-op — retained for API compatibility during migration
 }
 
-// Simple 6-char alphanumeric code generator
-function generateCode(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Exclude confusing chars
-  let code = "";
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-}
-
-/**
- * Register Staff Management IPC handlers
- */
 export function registerStaffIPC(): void {
-  // Generate invite code - MUST sync to Supabase
+  // Generate invite code — backend generates the code and persists to DB
   ipcMain.handle("staff:generateInviteCode", async () => {
     try {
-      const code = generateCode();
-      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
-
-      if (!supabaseClient) {
-        console.error("[Staff] No Supabase client - cannot sync invite code");
-        return { code: "", expiresAt: "", error: "Not authenticated" };
-      }
-
-      // CRITICAL: Call Edge Function to store invite code on server
-      const { data, error } = await supabaseClient.functions.invoke(
-        "staff-generate-invite",
+      const data = await apiFetch<{ code: string; expiresAt: string }>(
+        "/businesses/invite-codes",
         {
-          body: { code, expiresAt: expiresAt.toISOString() },
+          method: "POST",
+          body: JSON.stringify({ expiresInHours: 48 }),
         }
       );
 
-      if (error) {
-        console.error("[Staff] Edge Function error:", error);
-        return { code: "", expiresAt: "", error: error.message };
+      if (!data?.code) {
+        return { code: "", expiresAt: "", error: "No code returned" };
       }
 
-      console.log(`[Staff] Generated invite code synced to server: ${code}`);
-
-      return {
-        code,
-        expiresAt: expiresAt.toISOString(),
-      };
+      console.log(`[Staff] Generated invite code: ${data.code}`);
+      return { code: data.code, expiresAt: data.expiresAt };
     } catch (err: any) {
       console.error("[Staff] Generate code error:", err);
       return { code: "", expiresAt: "", error: err.message };
     }
   });
 
-  // Staff actions: approve, reject, deactivate - MUST sync to Supabase
+  // Staff actions: approve, reject, deactivate
   ipcMain.handle(
     "staff:action",
     async (
@@ -74,42 +51,37 @@ export function registerStaffIPC(): void {
       try {
         const database = getDatabase();
 
-        let newStatus: string;
+        // Backend currently supports ACTIVE / REJECTED (see UpdateStaffStatusDto).
+        // "deactivate" locally maps to REJECTED (backend will also disconnect businessId).
+        let backendStatus: "ACTIVE" | "REJECTED";
+        let localStatus: string;
         switch (action) {
           case "approve":
-            newStatus = "ACTIVE";
+            backendStatus = "ACTIVE";
+            localStatus = "ACTIVE";
             break;
           case "reject":
-            newStatus = "REJECTED"; // Proper enum value for rejected applicants
+            backendStatus = "REJECTED";
+            localStatus = "REJECTED";
             break;
           case "deactivate":
-            newStatus = "INACTIVE";
+            backendStatus = "REJECTED";
+            localStatus = "INACTIVE";
             break;
           default:
             return { success: false, error: "Invalid action" };
         }
 
-        if (!supabaseClient) {
-          console.error("[Staff] No Supabase client - cannot sync action");
-          return { success: false, error: "Not authenticated" };
-        }
+        await apiFetch(`/profiles/${profileId}/status`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: backendStatus }),
+        });
 
-        // CRITICAL: Update on Supabase first
-        const { error: updateError } = await supabaseClient
-          .from("profiles")
-          .update({ status: newStatus })
-          .eq("id", profileId);
-
-        if (updateError) {
-          console.error("[Staff] Supabase update error:", updateError);
-          return { success: false, error: updateError.message };
-        }
-
-        // Then update local database
+        // Update local SQLite cache
         const stmt = database.prepare(
           "UPDATE local_profiles SET status = ? WHERE id = ?"
         );
-        stmt.run(newStatus, profileId);
+        stmt.run(localStatus, profileId);
 
         console.log(`[Staff] ${action} profile synced: ${profileId}`);
         return { success: true };

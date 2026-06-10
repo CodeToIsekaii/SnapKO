@@ -23,6 +23,10 @@ import { NotificationModal } from "../components/NotificationModal";
 import { LowStockModal } from "../components/LowStockModal";
 import { useLowStock } from "../hooks/useLowStock";
 import { InventoryService } from "../features/inventory/services/inventory.service";
+import {
+  checkSalesPrerequisite,
+  type SalesGuardScope,
+} from "../features/inventory/services/salesPrerequisite.service";
 import { useInventoryModel } from "../contexts/InventoryModelContext";
 import { useAuth } from "../contexts/AuthContext";
 import { getDB } from "../db";
@@ -33,7 +37,12 @@ import AreaSelectorModal, {
 import { PendingLendsWidget } from "../components/PendingLendsWidget";
 import { useSubscription, SubscriptionStatus } from "../hooks/useSubscription";
 import { checkAndNotifySubscription } from "../utils/subscriptionNotification";
+import {
+  getProRebaselineState,
+  type ProRebaselineState,
+} from "../utils/proRebaseline";
 import { COLORS } from "../shared/theme/colors";
+import { api } from "../services/api";
 
 interface DailySummary {
   date: string;
@@ -48,6 +57,14 @@ interface RecentLog {
   quantity: number | null;
   created_at: string;
   ai_parsed_json?: string;
+}
+
+interface ExpiringLotAlert {
+  lotId: string;
+  ingredientName: string;
+  daysRemaining: number;
+  expiryDate: string;
+  shouldAlert: boolean;
 }
 
 interface DashboardScreenProps {
@@ -75,7 +92,11 @@ export default function DashboardScreen({
   onOpenQuickOut,
   refreshKey = 0,
 }: DashboardScreenProps) {
-  const { model, businessId, isStandard, syncModel } = useInventoryModel();
+  const {
+    model: contextModel,
+    businessId,
+    syncModel,
+  } = useInventoryModel();
   const { authState } = useAuth();
   const [showAreaModal, setShowAreaModal] = useState(false);
   const [currentSnapMode, setCurrentSnapMode] = useState<string>("stock");
@@ -102,12 +123,22 @@ export default function DashboardScreen({
   // Subscription Hook
   const profile =
     authState.status === "authenticated" ? authState.profile : null;
+  const model = profile?.effectiveInventoryModel || contextModel;
+  const isStandard = model !== "SIMPLE";
 
   const subscription = useSubscription(
     profile?.tier,
     profile?.subscriptionExpiresAt,
     profile?.businessCreatedAt,
   );
+  const canUseAdvancedReports =
+    profile?.entitlements?.canUseAdvancedReports ??
+    subscription.canUseAdvancedReports;
+  const [proRebaseline, setProRebaseline] = useState<ProRebaselineState>({
+    required: false,
+    warehouseDone: false,
+    barDone: false,
+  });
 
   // Check for subscription notification on mount
   useEffect(() => {
@@ -139,6 +170,9 @@ export default function DashboardScreen({
       time: string;
     }[]
   >([]);
+  const [expiringLotAlerts, setExpiringLotAlerts] = useState<ExpiringLotAlert[]>(
+    [],
+  );
 
   // Load real notifications from database
   const loadNotifications = useCallback(async () => {
@@ -188,6 +222,35 @@ export default function DashboardScreen({
         });
       }
 
+      // 2.5 Expiring lots from backend report (paid plans only)
+      if (canUseAdvancedReports) {
+        try {
+          const expiringRes = await api.get<
+            { data?: ExpiringLotAlert[] } | ExpiringLotAlert[]
+          >("/reports/expiring-lots?days=2&forecastWindow=7");
+          const rows = Array.isArray(expiringRes)
+            ? expiringRes
+            : Array.isArray(expiringRes?.data)
+              ? expiringRes.data
+              : [];
+          const alerts = rows.filter((row) => row.shouldAlert);
+          setExpiringLotAlerts(alerts);
+
+          if (alerts.length > 0) {
+            notifs.push({
+              id: "expiring_lots",
+              type: "warning",
+              message: `${alerts.length} lô nguyên liệu sắp hết hạn`,
+              time: "Hiện tại",
+            });
+          }
+        } catch {
+          setExpiringLotAlerts([]);
+        }
+      } else {
+        setExpiringLotAlerts([]);
+      }
+
       // 3. Variance alerts (check for flagged inventory logs in last 24h)
       // Note: local_inventory_logs has is_flagged column, not variance_pct
       const flaggedLogs = await db.getFirstAsync<{ count: number }>(`
@@ -220,7 +283,7 @@ export default function DashboardScreen({
     } catch (err) {
       console.error("[Dashboard] Failed to load notifications:", err);
     }
-  }, []);
+  }, [canUseAdvancedReports]);
 
   // Debug: Log when Dashboard mounts with current businessId
   useEffect(() => {
@@ -236,6 +299,44 @@ export default function DashboardScreen({
 
   // Load today's sales and transfer logs for guards
   const [pendingReminders, setPendingReminders] = useState<any[]>([]);
+
+  const showSalesGuardAlert = useCallback(() => {
+    Alert.alert(
+      "⚠️ Cần chụp Bán hàng trước",
+      "Cần chụp Bán hàng sau lần kiểm kho gần nhất để tính chênh lệch chính xác.",
+      [
+        {
+          text: "Đi tới Bán hàng",
+          onPress: () => onOpenInventory("sales"),
+          style: "default",
+        },
+        {
+          text: "Hủy",
+          style: "cancel",
+        },
+      ],
+    );
+  }, [onOpenInventory]);
+
+  const requireSalesBeforeStock = useCallback(
+    async (scope: SalesGuardScope): Promise<boolean> => {
+      try {
+        const db = await getDB();
+        const result = await checkSalesPrerequisite(db, scope);
+        if (result.hasSales) return true;
+        showSalesGuardAlert();
+        return false;
+      } catch (err) {
+        console.error("[Dashboard] checkSalesPrerequisite error:", err);
+        Alert.alert(
+          "Lỗi",
+          "Không thể kiểm tra điều kiện Bán hàng. Vui lòng thử lại.",
+        );
+        return false;
+      }
+    },
+    [showSalesGuardAlert],
+  );
 
   const loadTodayData = useCallback(async () => {
     try {
@@ -268,6 +369,8 @@ export default function DashboardScreen({
       }
 
       setIsOwner(isOwnerRole);
+
+      setProRebaseline(await getProRebaselineState(db));
 
       // FIX: Migrate old logs with incorrect type values (one-time fix)
       await db.runAsync(
@@ -454,12 +557,13 @@ export default function DashboardScreen({
 
       // Also load today's data for guards
       await loadTodayData();
+      await loadNotifications();
     } catch (err) {
       console.log("Dashboard load error:", err);
     } finally {
       setLoading(false);
     }
-  }, [syncModel, loadTodayData, refetchLowStock]);
+  }, [syncModel, loadTodayData, refetchLowStock, loadNotifications]);
 
   useEffect(() => {
     loadData();
@@ -476,42 +580,17 @@ export default function DashboardScreen({
     }
   }, [refreshKey, loadTodayData]);
 
-  // SALES → STOCK GUARD: Now handled in AreaSelectorModal.onSelect for BAR area only
-  // This allows user to access WAREHOUSE stock check without needing sales data
-  const handleStockSnapPress = () => {
+  // SALES → STOCK GUARD:
+  // - STANDARD: only BAR requires sales
+  // - SIMPLE/FREE: stock check can save without sales prerequisite
+  const handleStockSnapPress = async () => {
     if (isStandard) {
-      // STANDARD mode: Show area selector modal first
-      // Sales warning will be shown only when BAR area is selected (in onSelect callback)
       setCurrentSnapMode("stock");
       setShowAreaModal(true);
-    } else {
-      // LITE mode: Direct to stock check (no area selection needed)
-      // Still check for sales in non-STANDARD mode
-      if (!hasTodaySales) {
-        Alert.alert(
-          "⚠️ Chưa Có Doanh Thu Hôm Nay",
-          "Bạn chưa nhập Doanh thu (Kết ca) hôm nay. Nếu kiểm kho ngay bây giờ, số liệu chênh lệch sẽ KHÔNG CHÍNH XÁC (vì chưa trừ hàng bán).\n\nBạn muốn làm gì?",
-          [
-            {
-              text: "📉 Nhập Doanh Thu Trước",
-              onPress: () => onOpenInventory("sales"),
-              style: "default",
-            },
-            {
-              text: "⚠️ Bỏ Qua (Chấp nhận sai số)",
-              onPress: () => onOpenInventory("stock"),
-              style: "destructive",
-            },
-            {
-              text: "Hủy",
-              style: "cancel",
-            },
-          ],
-        );
-      } else {
-        onOpenInventory("stock");
-      }
+      return;
     }
+
+    onOpenInventory("stock");
   };
 
   // Separate refreshing state for pull-to-refresh (like Facebook)
@@ -552,6 +631,7 @@ export default function DashboardScreen({
       const rCount = await InventoryService.getRecipeCount();
       setRecipeCount(rCount);
       await refetchLowStock();
+      await loadNotifications();
 
       console.log("✅ Refresh complete!");
     } catch (err) {
@@ -563,7 +643,7 @@ export default function DashboardScreen({
     } finally {
       setRefreshing(false);
     }
-  }, [syncModel, refetchLowStock]);
+  }, [syncModel, refetchLowStock, loadNotifications]);
 
   const formatCurrency = (value: number) => {
     return value.toLocaleString("vi-VN") + " đ";
@@ -669,6 +749,31 @@ export default function DashboardScreen({
             <Ionicons name="chevron-forward" size={20} color="white" />
           </Pressable>
         )}
+
+        {isStandard && proRebaseline.required && (
+          <Pressable
+            style={{
+              backgroundColor: "#2563EB",
+              padding: 12,
+              marginBottom: 16,
+              borderRadius: 8,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+            onPress={() => {
+              setCurrentSnapMode("stock");
+              setShowAreaModal(true);
+            }}
+          >
+            <Text style={{ color: "white", fontWeight: "600", flex: 1 }}>
+              {proRebaseline.warehouseDone
+                ? "Cần kiểm lại Bar để khôi phục Kho Kép."
+                : "Cần kiểm lại Kho tổng và Bar để khôi phục Kho Kép."}
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="white" />
+          </Pressable>
+        )}
       </View>
       {/* Header */}
       <View
@@ -747,7 +852,7 @@ export default function DashboardScreen({
         <Pressable
           onPress={onRefresh}
           style={{
-            backgroundColor: model === "STANDARD" ? "#6B8E2320" : "#E07A2F20",
+            backgroundColor: model !== "SIMPLE" ? "#6B8E2320" : "#E07A2F20",
             borderRadius: 8,
             padding: 10,
             marginBottom: 12,
@@ -758,7 +863,7 @@ export default function DashboardScreen({
         >
           <Text
             style={{
-              color: model === "STANDARD" ? "#6B8E23" : "#E07A2F",
+              color: model !== "SIMPLE" ? "#6B8E23" : "#E07A2F",
               fontSize: 12,
               fontWeight: "600",
             }}
@@ -780,6 +885,29 @@ export default function DashboardScreen({
             refreshKey={refreshKey}
             onReturnComplete={loadTodayData}
           />
+        )}
+
+        {expiringLotAlerts.length > 0 && (
+          <View
+            style={{
+              backgroundColor: "#7F1D1D",
+              borderRadius: 12,
+              padding: 12,
+              marginBottom: 12,
+              borderWidth: 1,
+              borderColor: "#B91C1C",
+            }}
+          >
+            <Text style={{ color: "#FEE2E2", fontWeight: "700", marginBottom: 4 }}>
+              ⏳ {expiringLotAlerts.length} lô sắp hết hạn
+            </Text>
+            <Text style={{ color: "#FECACA", fontSize: 12 }}>
+              {expiringLotAlerts
+                .slice(0, 2)
+                .map((row) => `${row.ingredientName} (${row.daysRemaining} ngày)`)
+                .join(" • ")}
+            </Text>
+          </View>
         )}
 
         {/* Main Stats - OWNER ONLY per .script */}
@@ -1229,7 +1357,8 @@ export default function DashboardScreen({
               textTransform: "uppercase",
             }}
           >
-            3 Snaps - Thao tác nhanh {isStandard ? "(Kho Kép)" : "(Kho Đơn)"}
+            3 Snaps - Thao tác nhanh{" "}
+            {model === "CHAIN" ? "(Nhiều khu)" : isStandard ? "(Kho Kép)" : "(Kho Đơn)"}
           </Text>
           <View style={{ flexDirection: "row", gap: 8 }}>
             {/* 📸 IMPORT SNAP */}
@@ -1386,33 +1515,33 @@ export default function DashboardScreen({
           visible={showAreaModal}
           onClose={() => setShowAreaModal(false)}
           hasTodaySales={hasTodaySales}
-          onSelect={(area, mode) => {
-            // For BAR area: require SALES snap first (same logic as handleStockSnapPress)
-            if (area === "BAR" && !hasTodaySales) {
-              Alert.alert(
-                "⚠️ Chưa Có Doanh Thu Hôm Nay",
-                "Bạn chưa nhập Doanh thu (Kết ca) hôm nay. Nếu kiểm kho Bar ngay bây giờ, số liệu chênh lệch sẽ KHÔNG CHÍNH XÁC.\n\nBạn muốn làm gì?",
-                [
-                  {
-                    text: "📉 Nhập Doanh Thu Trước",
-                    onPress: () => {
-                      setShowAreaModal(false);
-                      onOpenInventory("sales");
-                    },
-                    style: "default",
-                  },
-                  {
-                    text: "⚠️ Bỏ Qua (Chấp nhận sai số)",
-                    onPress: () => onOpenInventory(currentSnapMode, area, mode),
-                    style: "destructive",
-                  },
-                  {
-                    text: "Hủy",
-                    style: "cancel",
-                  },
-                ],
-              );
-              return;
+          barDisabled={proRebaseline.required && !proRebaseline.warehouseDone}
+          warehouseSpotDisabled={proRebaseline.required}
+          onSelect={async (area, mode) => {
+            if (proRebaseline.required) {
+              if (area === "BAR" && !proRebaseline.warehouseDone) {
+                Alert.alert(
+                  "Cần kiểm Kho tổng trước",
+                  "Sau khi mua lại PRO, hãy kiểm toàn bộ Kho tổng trước rồi mới kiểm Bar.",
+                );
+                return;
+              }
+
+              if (area === "WAREHOUSE" && mode !== "FULL") {
+                Alert.alert(
+                  "Cần kiểm toàn bộ Kho tổng",
+                  "Lần khôi phục Kho Kép cần kiểm toàn bộ Kho tổng để đặt lại số chuẩn.",
+                );
+                return;
+              }
+            }
+
+            // BAR requires SALES after latest BAR stock check
+            if (area === "BAR" && !proRebaseline.required) {
+              const canProceed = await requireSalesBeforeStock("BAR");
+              if (!canProceed) {
+                return;
+              }
             }
 
             // Show Freeze Alert for FULL_COUNT mode (Warehouse only)
@@ -1432,10 +1561,10 @@ export default function DashboardScreen({
                   },
                 ],
               );
-            } else {
-              // SPOT check or BAR (already passed hasTodaySales check) - proceed normally
-              onOpenInventory(currentSnapMode, area, mode);
+              return;
             }
+
+            onOpenInventory(currentSnapMode, area, mode);
           }}
         />
 

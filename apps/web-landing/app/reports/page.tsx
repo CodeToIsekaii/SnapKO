@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
+import { useEffect, useState } from "react";
+import { apiFetch, getStoredRefreshToken } from "@/lib/backendClient";
 import Link from "next/link";
 
 interface Ingredient {
@@ -12,24 +12,31 @@ interface Ingredient {
   unit_cost: number;
 }
 
-interface InventoryLog {
-  id: string;
-  type: string;
-  final_confirmed_quantity: number;
-  unit_cost_at_time: number;
-  created_at: string;
-}
-
 interface DailySummary {
   date: string;
   imports: number;
   waste: number;
 }
 
+interface ShrinkageBreakdown {
+  ingredientId: string;
+  name: string;
+  lossQty: number;
+  lossVnd: number;
+  flagged: boolean;
+}
+
+interface ShrinkageData {
+  totalLossVnd: number;
+  totalLossQty: number;
+  period: { days: number; startDate: string; endDate: string };
+  breakdown: ShrinkageBreakdown[];
+}
+
 export default function ReportsPage() {
-  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [dailySummary, setDailySummary] = useState<DailySummary[]>([]);
+  const [shrinkage, setShrinkage] = useState<ShrinkageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
@@ -38,8 +45,7 @@ export default function ReportsPage() {
   }, []);
 
   async function checkSession() {
-    const { data } = await supabase.auth.getSession();
-    if (data.session) {
+    if (getStoredRefreshToken()) {
       setIsLoggedIn(true);
       loadData();
     } else {
@@ -50,47 +56,75 @@ export default function ReportsPage() {
   async function loadData() {
     setLoading(true);
 
-    // Load ingredients
-    const { data: ing } = await supabase
-      .from("ingredients")
-      .select("id, name, warehouse_qty, bar_qty, unit_cost")
-      .eq("archived", false);
+    try {
+      // Load ingredients via BE-SnapKO (already filtered by businessId + deletedAt)
+      const ing = await apiFetch<
+        Array<{
+          id: string;
+          name: string;
+          warehouseQty?: number;
+          barQty?: number;
+          unitCost?: number;
+        }>
+      >("/ingredients");
 
-    if (ing) setIngredients(ing);
+      if (ing) {
+        setIngredients(
+          ing.map((i) => ({
+            id: i.id,
+            name: i.name,
+            warehouse_qty: Number(i.warehouseQty ?? 0),
+            bar_qty: Number(i.barQty ?? 0),
+            unit_cost: Number(i.unitCost ?? 0),
+          }))
+        );
+      }
 
-    // Load logs for last 30 days
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      // Load inventory logs for last 30 days
+      const logs = await apiFetch<
+        Array<{
+          id: string;
+          type: string;
+          finalConfirmedQuantity?: number;
+          unitCostAtTime?: number;
+          createdAt: string;
+        }>
+      >("/inventory/logs?days=30&limit=500");
 
-    const { data: logs } = await supabase
-      .from("inventory_logs")
-      .select(
-        "id, type, final_confirmed_quantity, unit_cost_at_time, created_at"
-      )
-      .gte("created_at", thirtyDaysAgo.toISOString())
-      .order("created_at", { ascending: false });
+      if (logs) {
+        const dailyMap = new Map<string, { imports: number; waste: number }>();
 
-    if (logs) {
-      const dailyMap = new Map<string, { imports: number; waste: number }>();
+        logs.forEach((log) => {
+          const date = log.createdAt.split("T")[0];
+          const existing = dailyMap.get(date) || { imports: 0, waste: 0 };
+          const cost =
+            (Number(log.finalConfirmedQuantity) || 0) *
+            (Number(log.unitCostAtTime) || 0);
 
-      logs.forEach((log) => {
-        const date = log.created_at.split("T")[0];
-        const existing = dailyMap.get(date) || { imports: 0, waste: 0 };
-        const cost =
-          (log.final_confirmed_quantity || 0) * (log.unit_cost_at_time || 0);
+          if (log.type === "IMPORT") existing.imports += cost;
+          else if (log.type === "WASTE") existing.waste += Math.abs(cost);
 
-        if (log.type === "IMPORT") existing.imports += cost;
-        else if (log.type === "WASTE") existing.waste += Math.abs(cost);
+          dailyMap.set(date, existing);
+        });
 
-        dailyMap.set(date, existing);
-      });
-
-      const summary: DailySummary[] = [];
-      dailyMap.forEach((value, date) => summary.push({ date, ...value }));
-      setDailySummary(summary.sort((a, b) => b.date.localeCompare(a.date)));
+        const summary: DailySummary[] = [];
+        dailyMap.forEach((value, date) => summary.push({ date, ...value }));
+        setDailySummary(summary.sort((a, b) => b.date.localeCompare(a.date)));
+      }
+      // Load shrinkage breakdown from backend (BE-SnapKO uses COGS + flagged)
+      try {
+        const shrinkageRes = await apiFetch<ShrinkageData>(
+          "/reports/shrinkage?days=30"
+        );
+        if (shrinkageRes) setShrinkage(shrinkageRes);
+      } catch (e) {
+        console.error("Shrinkage load failed:", e);
+      }
+    } catch (err) {
+      console.error("Reports load failed:", err);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }
 
   // Calculations
@@ -223,6 +257,54 @@ export default function ReportsPage() {
                 </span>
               </div>
             </div>
+
+            {/* Shrinkage Breakdown (from backend /reports/shrinkage) */}
+            {shrinkage && shrinkage.breakdown.length > 0 && (
+              <div className="bg-slate-800 rounded-xl p-6 mb-8">
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h2 className="text-lg font-semibold">Hao hụt chi tiết</h2>
+                    <p className="text-slate-400 text-sm">
+                      {shrinkage.period.days} ngày · tính theo COGS
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold text-red-400">
+                      {shrinkage.totalLossVnd.toLocaleString("vi-VN")} đ
+                    </p>
+                    <p className="text-slate-500 text-xs">
+                      {shrinkage.totalLossQty.toFixed(2)} đơn vị
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  {shrinkage.breakdown.slice(0, 10).map((item) => (
+                    <div
+                      key={item.ingredientId}
+                      className="flex justify-between items-center py-2 border-b border-slate-700"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span>{item.name}</span>
+                        {item.flagged && (
+                          <span className="text-xs bg-red-900/40 text-red-400 px-2 py-0.5 rounded">
+                            ⚠ Nghi vấn
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <span className="text-red-400 font-semibold">
+                          {item.lossVnd.toLocaleString("vi-VN")} đ
+                        </span>
+                        <span className="text-slate-500 text-xs ml-3">
+                          {item.lossQty.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Top Ingredients by Value */}
             <div className="bg-slate-800 rounded-xl p-6">

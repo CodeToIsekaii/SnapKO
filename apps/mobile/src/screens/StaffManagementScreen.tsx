@@ -19,6 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { Env } from "../env";
+import { api } from "../services/api";
 
 interface StaffMember {
   id: string;
@@ -51,16 +52,19 @@ export default function StaffManagementScreen({
       if (authState.status !== "authenticated" || !authState.profile.businessId)
         return;
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id, full_name, phone_number, status")
-        .eq("business_id", authState.profile.businessId)
-        .eq("role", "STAFF")
-        .in("status", ["ACTIVE", "PENDING"]) // Show Active and Pending
-        .order("full_name");
+      const data = await api.get<any[]>("/profiles/staff");
 
-      if (error) throw error;
-      setStaffList(data || []);
+      const mapped: StaffMember[] = (data || [])
+        .filter((p: any) => ["ACTIVE", "PENDING"].includes(p.status))
+        .map((p: any) => ({
+          id: p.id,
+          full_name: p.fullName ?? p.full_name ?? "",
+          phone_number: p.phoneNumber ?? p.phone_number ?? "",
+          status: p.status,
+        }))
+        .sort((a, b) => a.full_name.localeCompare(b.full_name));
+
+      setStaffList(mapped);
     } catch (err: any) {
       console.error("Fetch staff error:", err);
       Alert.alert("Lỗi", "Không thể tải danh sách nhân viên");

@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { Env } from "../../env";
 import { COLORS } from "../styles/theme";
 import GuideModal from "../components/GuideModal";
 import {
@@ -27,6 +26,8 @@ import {
   Loader2,
   CheckCircle,
   AlertCircle,
+  Receipt,
+  Search,
 } from "lucide-react";
 
 interface Ingredient {
@@ -77,6 +78,12 @@ export default function RecipesPage() {
   // NEW: Store multiple scanned recipes from AI
   const [scannedRecipes, setScannedRecipes] = useState<any[]>([]);
   const [showGuide, setShowGuide] = useState(false);
+  const [recipeSearch, setRecipeSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [ingSearch, setIngSearch] = useState("");
+  const [showIngDropdown, setShowIngDropdown] = useState(false);
+  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+  const [recipeToDelete, setRecipeToDelete] = useState<Recipe | null>(null);
 
   useEffect(() => {
     loadData();
@@ -121,22 +128,15 @@ export default function RecipesPage() {
           reader.readAsDataURL(file);
         });
 
-        // Call NestJS Backend
-        const token = await (window as any).electronAPI?.getAccessToken?.();
-        const response = await fetch(
-          `${Env.VITE_BACKEND_URL}/ai/parse-recipe`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-            body: JSON.stringify({ imageBase64: base64 }),
-          },
-        );
+        // Route via IPC → BE-SnapKO /ai/parse (hybrid pipeline)
+        const data = await window.electronAPI.aiParse({
+          type: "RECIPE",
+          image: base64,
+        });
 
-        if (!response.ok) throw new Error("AI Scan failed");
-        const data = await response.json();
+        if (!data || data.success === false) {
+          throw new Error(data?.error || "AI Scan failed");
+        }
 
         // Handle multiple recipes from AI response
         const recipesToProcess = data.recipes || (data.name ? [data] : []);
@@ -374,6 +374,8 @@ export default function RecipesPage() {
   const profit = newRecipe.price - cogs;
   const margin = newRecipe.price > 0 ? (profit / newRecipe.price) * 100 : 0;
 
+  const uniqueCategories = Array.from(new Set(recipes.map((r) => r.category).filter(Boolean))).sort();
+
   return (
     <div style={styles.container}>
       {/* Toast Notification */}
@@ -452,6 +454,20 @@ export default function RecipesPage() {
                 Giá vốn món ăn được tính <strong>tức thời</strong> (Real-time)
                 dựa trên giá nhập nguyên liệu mới nhất. Khi giá Chanh tăng, chi
                 phí món "Trà Chanh" sẽ tự động tăng theo.
+              </p>
+            ),
+          },
+          {
+            title: "Quan trọng: Tên công thức",
+            content: (
+              <p style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+                <Receipt size={16} style={{ marginTop: "4px", flexShrink: 0 }} />
+                <span>
+                  <strong>Đồng bộ Z-Report:</strong> Nên nhập tên công thức{" "}
+                  <strong>đúng y chang</strong> với tên trên tờ giấy kết ca (Z
+                  Report). Điều này giúp AI nhận diện chính xác hơn khi nhân
+                  viên quét báo cáo cuối ngày.
+                </span>
               </p>
             ),
           },
@@ -630,16 +646,80 @@ export default function RecipesPage() {
                 style={styles.input}
               />
             </div>
-            <div style={{ ...styles.field, flex: 1 }}>
+            <div style={{ ...styles.field, flex: 1, position: "relative" }}>
               <label style={styles.label}>Danh mục</label>
               <input
                 value={newRecipe.category}
-                onChange={(e) =>
-                  setNewRecipe((p) => ({ ...p, category: e.target.value }))
-                }
-                placeholder="VD: Trà"
+                onChange={(e) => {
+                  setNewRecipe((p) => ({ ...p, category: e.target.value }));
+                  setShowCategoryDropdown(true);
+                }}
+                onFocus={() => setShowCategoryDropdown(true)}
+                onBlur={() => setTimeout(() => setShowCategoryDropdown(false), 200)}
+                placeholder="Chọn hoặc nhập mới..."
                 style={styles.input}
               />
+              {showCategoryDropdown && uniqueCategories.length > 0 && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    left: 0,
+                    right: 0,
+                    maxHeight: "200px",
+                    overflowY: "auto",
+                    backgroundColor: "white",
+                    border: `1px solid ${COLORS.border}`,
+                    borderRadius: "8px",
+                    boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                    zIndex: 10,
+                    marginTop: "4px",
+                  }}
+                >
+                  {uniqueCategories
+                    .filter((cat) =>
+                      cat.toLowerCase().includes(newRecipe.category.toLowerCase())
+                    )
+                    .map((cat) => (
+                      <div
+                        key={cat}
+                        onClick={() => {
+                          setNewRecipe((p) => ({ ...p, category: cat }));
+                          setShowCategoryDropdown(false);
+                        }}
+                        style={{
+                          padding: "10px 12px",
+                          cursor: "pointer",
+                          borderBottom: `1px solid #f1f5f9`,
+                          fontSize: "14px",
+                          color: COLORS.textPrimary,
+                        }}
+                        onMouseEnter={(e) =>
+                          (e.currentTarget.style.backgroundColor = "#F1F5F9")
+                        }
+                        onMouseLeave={(e) =>
+                          (e.currentTarget.style.backgroundColor = "transparent")
+                        }
+                      >
+                        {cat}
+                      </div>
+                    ))}
+                  {uniqueCategories.filter((cat) =>
+                    cat.toLowerCase().includes(newRecipe.category.toLowerCase())
+                  ).length === 0 && (
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        fontSize: "13px",
+                        color: COLORS.textSecondary,
+                        textAlign: "center",
+                      }}
+                    >
+                      Nhập và lưu để tạo danh mục mới
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -698,30 +778,119 @@ export default function RecipesPage() {
             ))}
           </div>
 
-          {/* Add ingredient dropdown */}
-          <select
-            onChange={(e) => {
-              const ing = ingredients.find((i) => i.id === e.target.value);
-              if (ing) addIngredientToRecipe(ing);
-              e.target.value = "";
-            }}
-            style={{ ...styles.input, marginBottom: 16 }}
-          >
-            <option value="">+ Thêm nguyên liệu...</option>
-            {ingredients
-              .filter(
-                (i) =>
-                  !newRecipe.ingredients.find(
-                    (ni) => ni.ingredient_id === i.id,
-                  ),
-              )
-              .map((ing) => (
-                <option key={ing.id} value={ing.id}>
-                  {ing.name} ({ing.unit_cost.toLocaleString("vi-VN")} đ/
-                  {ing.base_unit})
-                </option>
-              ))}
-          </select>
+          {/* Add ingredient dropdown with search */}
+          <div style={{ position: "relative", marginBottom: 16 }}>
+            <div
+              style={{
+                ...styles.searchWrapper,
+                width: "100%",
+                backgroundColor: "white",
+                padding: "10px 12px",
+                maxWidth: "none",
+              }}
+            >
+              <Search size={16} color={COLORS.textSecondary} />
+              <input
+                placeholder="+ Tìm và chọn nguyên liệu (Gõ để tìm)..."
+                value={ingSearch}
+                onChange={(e) => {
+                  setIngSearch(e.target.value);
+                  setShowIngDropdown(true);
+                }}
+                onFocus={() => setShowIngDropdown(true)}
+                onBlur={() => setTimeout(() => setShowIngDropdown(false), 200)}
+                style={{ ...styles.searchInput, fontSize: "14px" }}
+              />
+            </div>
+
+            {showIngDropdown && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  maxHeight: "250px",
+                  overflowY: "auto",
+                  backgroundColor: "white",
+                  border: `1px solid ${COLORS.border}`,
+                  borderRadius: "8px",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                  zIndex: 10,
+                  marginTop: "4px",
+                }}
+              >
+                {ingredients
+                  .filter(
+                    (i) =>
+                      !newRecipe.ingredients.find(
+                        (ni) => ni.ingredient_id === i.id,
+                      ) &&
+                      i.name.toLowerCase().includes(ingSearch.toLowerCase()),
+                  )
+                  .map((ing) => (
+                    <div
+                      key={ing.id}
+                      onClick={() => {
+                        addIngredientToRecipe(ing);
+                        setIngSearch("");
+                        setShowIngDropdown(false);
+                      }}
+                      style={{
+                        padding: "10px 12px",
+                        cursor: "pointer",
+                        borderBottom: `1px solid #f1f5f9`,
+                        fontSize: "14px",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.backgroundColor = "#F1F5F9")
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.backgroundColor = "transparent")
+                      }
+                    >
+                      <span
+                        style={{
+                          fontWeight: 500,
+                          color: COLORS.textPrimary,
+                        }}
+                      >
+                        {ing.name}
+                      </span>
+                      <span
+                        style={{
+                          color: COLORS.textSecondary,
+                          fontSize: "13px",
+                        }}
+                      >
+                        {ing.unit_cost.toLocaleString("vi-VN")} đ/
+                        {ing.base_unit}
+                      </span>
+                    </div>
+                  ))}
+                {ingredients.filter(
+                  (i) =>
+                    !newRecipe.ingredients.find(
+                      (ni) => ni.ingredient_id === i.id,
+                    ) && i.name.toLowerCase().includes(ingSearch.toLowerCase()),
+                ).length === 0 && (
+                  <div
+                    style={{
+                      padding: "12px",
+                      fontSize: "14px",
+                      color: COLORS.textSecondary,
+                      textAlign: "center",
+                    }}
+                  >
+                    Không tìm thấy nguyên liệu
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Summary */}
           <div style={styles.summary}>
@@ -769,11 +938,52 @@ export default function RecipesPage() {
 
         {/* Recipe list */}
         <div style={styles.card}>
-          <h3 style={styles.cardTitle}>Danh sách món</h3>
+          <div style={{ marginBottom: 16 }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 16, color: COLORS.textPrimary }}>
+              Danh sách món
+            </h3>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ ...styles.searchWrapper, maxWidth: "none", flex: 2 }}>
+                <Search size={14} color={COLORS.textSecondary} />
+                <input
+                  placeholder="Tìm món..."
+                  value={recipeSearch}
+                  onChange={(e) => setRecipeSearch(e.target.value)}
+                  style={styles.searchInput}
+                />
+              </div>
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                style={{
+                  ...styles.input,
+                  flex: 1,
+                  padding: "8px",
+                  marginBottom: 0,
+                  fontSize: "13px",
+                  backgroundColor: "#F1F5F9",
+                  border: `1px solid ${COLORS.border}`,
+                }}
+              >
+                <option value="">Tất cả danh mục</option>
+                {uniqueCategories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           {recipes.length === 0 ? (
             <p style={{ color: "#64748B" }}>Chưa có món nào</p>
           ) : (
-            recipes.map((r) => (
+            recipes
+              .filter(
+                (r) =>
+                  r.name.toLowerCase().includes(recipeSearch.toLowerCase()) &&
+                  (categoryFilter === "" || r.category === categoryFilter)
+              )
+              .map((r) => (
               <div key={r.id} style={styles.recipeItem}>
                 <div style={{ flex: 1 }}>
                   <span style={{ fontWeight: 500 }}>{r.name}</span>
@@ -849,29 +1059,7 @@ export default function RecipesPage() {
                     Sửa
                   </button>
                   <button
-                    onClick={async () => {
-                      if (confirm(`Xóa công thức "${r.name}"?`)) {
-                        try {
-                          if ((window as any).electronAPI?.deleteRecipe) {
-                            await (window as any).electronAPI.deleteRecipe(
-                              r.id,
-                            );
-                            await loadData(); // Reload from DB
-                          } else {
-                            setRecipes((prev) =>
-                              prev.filter((x) => x.id !== r.id),
-                            );
-                          }
-                          setToast({
-                            message: "🗑️ Đã xóa công thức",
-                            type: "success",
-                          });
-                          setTimeout(() => setToast(null), 3000);
-                        } catch (err) {
-                          console.error("Delete failed:", err);
-                        }
-                      }
-                    }}
+                    onClick={() => setRecipeToDelete(r)}
                     style={{
                       padding: "4px 10px",
                       fontSize: 12,
@@ -890,6 +1078,95 @@ export default function RecipesPage() {
           )}
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {recipeToDelete && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 10000,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: "white",
+              padding: 24,
+              borderRadius: 12,
+              width: 400,
+              maxWidth: "90%",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.2)",
+            }}
+          >
+            <h3 style={{ margin: "0 0 16px", color: COLORS.textPrimary }}>
+              Xóa công thức
+            </h3>
+            <p style={{ margin: "0 0 24px", color: COLORS.textSecondary, lineHeight: 1.5 }}>
+              Bạn có chắc chắn muốn xóa công thức "<strong>{recipeToDelete.name}</strong>"? Hành động này không thể hoàn tác.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
+              <button
+                onClick={() => setRecipeToDelete(null)}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: 6,
+                  border: `1px solid ${COLORS.border}`,
+                  backgroundColor: "white",
+                  color: COLORS.textPrimary,
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                Hủy
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    if ((window as any).electronAPI?.deleteRecipe) {
+                      await (window as any).electronAPI.deleteRecipe(recipeToDelete.id);
+                      await loadData();
+                    } else {
+                      setRecipes((prev) => prev.filter((x) => x.id !== recipeToDelete.id));
+                    }
+                    setToast({
+                      message: "🗑️ Đã xóa công thức",
+                      type: "success",
+                    });
+                    setTimeout(() => setToast(null), 3000);
+                  } catch (err) {
+                    console.error("Delete failed:", err);
+                    setToast({
+                      message: "❌ Lỗi khi xóa",
+                      type: "error",
+                    });
+                    setTimeout(() => setToast(null), 3000);
+                  } finally {
+                    setRecipeToDelete(null);
+                  }
+                }}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: 6,
+                  border: "none",
+                  backgroundColor: "#EF4444",
+                  color: "white",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                Xóa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1019,5 +1296,24 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: 6,
+  },
+  searchWrapper: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "6px 10px",
+    backgroundColor: "#F1F5F9",
+    borderRadius: "6px",
+    border: `1px solid ${COLORS.border}`,
+    flex: 1,
+    maxWidth: "180px",
+  },
+  searchInput: {
+    border: "none",
+    background: "transparent",
+    fontSize: "12px",
+    outline: "none",
+    width: "100%",
+    color: COLORS.textPrimary,
   },
 };

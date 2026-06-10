@@ -20,6 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
 import { Env } from "../env";
 import { useAuth } from "../contexts/AuthContext";
+import { api } from "../services/api";
 
 interface ProfileEditScreenProps {
   onBack: () => void;
@@ -69,23 +70,15 @@ export default function ProfileEditScreen({
         });
       }
 
-      // For owners, fetch business name from database
+      // For owners, fetch business name via BE-SnapKO /profiles/me
       if (isOwner) {
         try {
-          const {
-            data: { user },
-          } = await supabase.auth.getUser();
-          if (user) {
-            const { data: profile } = await supabase
-              .from("profiles")
-              .select("business_id, businesses(name)")
-              .eq("id", user.id)
-              .single();
-
-            if (profile?.businesses) {
-              const businessName = (profile.businesses as any)?.name || "";
-              setFormData((prev) => ({ ...prev, businessName }));
-            }
+          const profile = await api.get<{
+            business?: { name?: string };
+          }>("/profiles/me");
+          const businessName = profile?.business?.name || "";
+          if (businessName) {
+            setFormData((prev) => ({ ...prev, businessName }));
           }
         } catch (err) {
           console.error("[ProfileEdit] Failed to load business name:", err);

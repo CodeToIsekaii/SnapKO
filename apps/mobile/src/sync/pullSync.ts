@@ -1,151 +1,184 @@
 /**
- * Smart Pull Sync - Fetches changes from server with Clock Skew protection
- * Per Implementation Plan: 60s safety buffer to prevent missing data
+ * Smart Pull Sync - Fetches changes from BE-SnapKO via single /sync/pull call.
+ * Backend returns camelCase; we map to snake_case for local SQLite tables.
  */
 
-import { supabase } from "../lib/supabase";
+import { api } from "../services/api";
 import { getDB } from "../db";
+import { syncLegacyQtyLocal } from "../db/stockLevelHelper";
 
-const SAFETY_BUFFER_MS = 60000; // 60 seconds buffer for clock skew
-
-/**
- * Pull latest stock levels with safety buffer
- */
-export async function pullLatestStock(): Promise<{ synced: number }> {
-  try {
-    const db = await getDB();
-
-    // DEFENSIVE: Ensure db is not null before any operations
-    if (!db) {
-      console.error("[PullSync] Database not ready yet, skipping stock sync");
-      throw new Error("Database not initialized");
-    }
-
-    // Get last sync time from metadata
-    const lastSyncRow = await db.getFirstAsync<{ value: string }>(
-      "SELECT value FROM local_metadata WHERE key = 'last_stock_sync'"
-    );
-    const lastSyncTime = lastSyncRow?.value || "2000-01-01T00:00:00Z";
-
-    // Apply safety buffer to prevent clock skew issues
-    const safeSyncTime = new Date(
-      new Date(lastSyncTime).getTime() - SAFETY_BUFFER_MS
-    ).toISOString();
-
-    console.log("[PullSync] Fetching stock changes since:", safeSyncTime);
-
-    // Fetch updated stock levels (includes soft-deleted ones)
-    const { data: stockLevels, error } = await supabase
-      .from("stock_levels")
-      .select("*")
-      .gte("updated_at", safeSyncTime);
-
-    if (error) {
-      console.error("[PullSync] Stock fetch error:", error);
-      throw error;
-    }
-
-    if (!stockLevels || stockLevels.length === 0) {
-      console.log("[PullSync] No new stock changes");
-      return { synced: 0 };
-    }
-
-    // Upsert to local SQLite (handles both updates and soft deletes)
-    for (const stock of stockLevels) {
-      await db.runAsync(
-        `INSERT OR REPLACE INTO local_stock_levels 
-        (id, ingredient_id, area_id, quantity, last_counted_at, synced, deleted_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?)`,
-        [
-          stock.id,
-          stock.ingredient_id,
-          stock.area_id,
-          stock.quantity,
-          stock.last_counted_at,
-          stock.deleted_at,
-        ]
-      );
-    }
-
-    // Update last sync timestamp
-    await db.runAsync(
-      "INSERT OR REPLACE INTO local_metadata (key, value) VALUES ('last_stock_sync', ?)",
-      [new Date().toISOString()]
-    );
-
-    console.log(`[PullSync] Synced ${stockLevels.length} stock changes`);
-    return { synced: stockLevels.length };
-  } catch (err) {
-    console.error("[PullSync] Error:", err);
-    return { synced: 0 };
-  }
+function isNetworkRequestFailure(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("Network request failed");
 }
 
-/**
- * Pull latest ingredients (master data) with safety buffer
- */
-export async function pullLatestIngredients(): Promise<{ synced: number }> {
-  try {
-    const db = await getDB();
+interface SyncPullResponse {
+  ingredients: any[];
+  recipes: any[]; // each includes `ingredients` (recipe_ingredients)
+  storageAreas: any[];
+  stockLevels: any[];
+  recentLogs: any[];
+  activePendingLends: any[];
+}
 
-    // DEFENSIVE: Ensure db is not null before any operations
-    if (!db) {
-      console.error(
-        "[PullSync] Database not ready yet, skipping ingredient sync"
-      );
-      throw new Error("Database not initialized");
+function normalizeSyncPullResponse(raw: any): SyncPullResponse | null {
+  const candidate = raw?.ingredients ? raw : raw?.data?.ingredients ? raw.data : null;
+  if (!candidate) {
+    console.warn("[PullSync] Unexpected /sync/pull shape:", raw);
+    return null;
+  }
+
+  return {
+    ingredients: candidate.ingredients ?? [],
+    recipes: candidate.recipes ?? [],
+    storageAreas: candidate.storageAreas ?? [],
+    stockLevels: candidate.stockLevels ?? [],
+    recentLogs: candidate.recentLogs ?? [],
+    activePendingLends: candidate.activePendingLends ?? [],
+  };
+}
+
+const inFlight = new Map<string, Promise<SyncPullResponse | null>>();
+const cached = new Map<string, { data: SyncPullResponse; at: number }>();
+const CACHE_TTL_MS = 5000;
+
+export async function fetchSyncPull(
+  lastMasterDataUpdate?: string,
+): Promise<SyncPullResponse | null> {
+  const key = lastMasterDataUpdate ?? "";
+
+  const cachedEntry = cached.get(key);
+  if (cachedEntry && Date.now() - cachedEntry.at < CACHE_TTL_MS) {
+    return cachedEntry.data;
+  }
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    try {
+      const query = lastMasterDataUpdate
+        ? `?lastMasterDataUpdate=${encodeURIComponent(lastMasterDataUpdate)}`
+        : "";
+      const raw = await api.get<any>(`/sync/pull${query}`);
+      const data = normalizeSyncPullResponse(raw);
+      if (data) {
+        cached.set(key, { data, at: Date.now() });
+        console.log("[PullSync] /sync/pull counts:", {
+          ingredients: data.ingredients.length,
+          recipes: data.recipes.length,
+          stockLevels: data.stockLevels.length,
+          recentLogs: data.recentLogs.length,
+        });
+      }
+      return data;
+    } catch (err) {
+      if (isNetworkRequestFailure(err)) {
+        console.log("[PullSync] /sync/pull skipped: backend unavailable.");
+      } else {
+        console.error("[PullSync] /sync/pull error:", err);
+      }
+      return null;
+    } finally {
+      inFlight.delete(key);
     }
+  })();
 
-    const lastSyncRow = await db.getFirstAsync<{ value: string }>(
-      "SELECT value FROM local_metadata WHERE key = 'last_ingredients_sync'"
+  inFlight.set(key, promise);
+  return promise;
+}
+
+export function invalidatePullCache(): void {
+  cached.clear();
+}
+
+async function upsertStockLevels(db: any, stockLevels: any[]): Promise<number> {
+  if (!stockLevels?.length) return 0;
+  const affected = new Set<string>();
+  for (const stock of stockLevels) {
+    const ingredientId = stock.ingredientId ?? stock.ingredient_id;
+    await db.runAsync(
+      `INSERT OR REPLACE INTO local_stock_levels
+        (id, ingredient_id, area_id, quantity, last_counted_at, synced, deleted_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      [
+        stock.id,
+        ingredientId,
+        stock.storageAreaId ?? stock.areaId ?? stock.area_id ?? null,
+        stock.quantity ?? stock.qty ?? 0,
+        stock.lastCountedAt ?? stock.last_counted_at ?? null,
+        stock.deletedAt ?? stock.deleted_at ?? null,
+      ]
     );
-    const lastSyncTime = lastSyncRow?.value || "2000-01-01T00:00:00Z";
+    if (ingredientId) affected.add(ingredientId);
+  }
+  for (const ingredientId of affected) {
+    await syncLegacyQtyLocal(db, ingredientId);
+  }
+  return stockLevels.length;
+}
 
-    // Apply safety buffer
-    const safeSyncTime = new Date(
-      new Date(lastSyncTime).getTime() - SAFETY_BUFFER_MS
-    ).toISOString();
+async function upsertStorageAreas(db: any, storageAreas: any[]): Promise<number> {
+  if (!storageAreas?.length) return 0;
 
-    console.log("[PullSync] Fetching ingredient changes since:", safeSyncTime);
+  const idsByBusiness = new Map<string, string[]>();
+  for (const sa of storageAreas) {
+    const businessId = sa.businessId ?? sa.business_id;
+    if (!businessId || !sa.id) continue;
 
-    // Fetch all updated ingredients (including archived/deleted)
-    // FORCE FULL SYNC: Removed .gte('created_at', safeSyncTime) to ensure backfilled data is fetched
-    const { data: ingredients, error } = await supabase
-      .from("ingredients")
-      .select("*");
+    await db.runAsync(
+      `INSERT OR REPLACE INTO local_storage_areas
+        (id, business_id, name, type, is_default, is_active, synced)
+        VALUES (?, ?, ?, ?, ?, ?, 1)`,
+      [
+        sa.id,
+        businessId,
+        sa.name,
+        sa.type ?? "STORAGE",
+        (sa.isDefault ?? sa.is_default) ? 1 : 0,
+        (sa.isActive ?? sa.is_active ?? true) ? 1 : 0,
+      ]
+    );
 
-    if (error) {
-      console.error("[PullSync] Ingredients fetch error:", error);
-      throw error;
-    }
+    const existing = idsByBusiness.get(businessId) ?? [];
+    existing.push(sa.id);
+    idsByBusiness.set(businessId, existing);
+  }
 
-    if (!ingredients || ingredients.length === 0) {
-      console.log("[PullSync] No new ingredient changes");
-      return { synced: 0 };
-    }
+  for (const [businessId, ids] of idsByBusiness.entries()) {
+    const placeholders = ids.map(() => "?").join(",");
+    await db.runAsync(
+      `UPDATE local_storage_areas
+       SET is_active = 0, synced = 1
+       WHERE business_id = ? AND id NOT IN (${placeholders})`,
+      [businessId, ...ids]
+    );
+  }
 
-    // Upsert to local SQLite (with new batch item columns + inventory config)
-    // FIX: Use ON CONFLICT to preserve local-only fields when server doesn't return them
-    for (const ing of ingredients) {
-      const aliases = ing.aliases ? JSON.stringify(ing.aliases) : "[]";
+  return storageAreas.length;
+}
 
-      await db.runAsync(
-        `INSERT INTO local_ingredients 
-        (id, business_id, name, base_unit, min_threshold, average_unit_cost, unit_cost,
-         density, tare_weight, aliases, archived, warehouse_qty, bar_qty, 
+async function upsertIngredients(db: any, ingredients: any[]): Promise<number> {
+  if (!ingredients?.length) return 0;
+  for (const ing of ingredients) {
+    const aliases = ing.aliases ? JSON.stringify(ing.aliases) : "[]";
+    await db.runAsync(
+      `INSERT INTO local_ingredients
+        (id, business_id, name, base_unit, stock_check_unit, min_threshold, average_unit_cost, unit_cost,
+         density, tare_weight, aliases, archived, shelf_life_days, warehouse_qty, bar_qty,
          is_batch_item, batch_yield_qty, batch_yield_unit,
          type, item_type, tracking_mode, allowable_variance, unit_weight, unit_weight_unit,
+         last_purchase_price, last_purchase_qty, last_purchase_unit,
          created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           business_id = excluded.business_id,
           name = excluded.name,
           base_unit = excluded.base_unit,
+          stock_check_unit = excluded.stock_check_unit,
           unit_cost = excluded.unit_cost,
+          shelf_life_days = excluded.shelf_life_days,
           warehouse_qty = excluded.warehouse_qty,
           bar_qty = excluded.bar_qty,
           created_at = excluded.created_at,
-          -- Server-managed fields that should sync:
           min_threshold = COALESCE(excluded.min_threshold, min_threshold),
           archived = COALESCE(excluded.archived, archived),
           density = COALESCE(excluded.density, density),
@@ -155,51 +188,220 @@ export async function pullLatestIngredients(): Promise<{ synced: number }> {
           is_batch_item = excluded.is_batch_item,
           batch_yield_qty = excluded.batch_yield_qty,
           batch_yield_unit = excluded.batch_yield_unit,
-          -- Inventory config fields:
           type = COALESCE(excluded.type, type),
           item_type = COALESCE(excluded.item_type, item_type),
           tracking_mode = COALESCE(excluded.tracking_mode, tracking_mode),
           allowable_variance = COALESCE(excluded.allowable_variance, allowable_variance),
           unit_weight = COALESCE(excluded.unit_weight, unit_weight),
-          unit_weight_unit = COALESCE(excluded.unit_weight_unit, unit_weight_unit)
+          unit_weight_unit = COALESCE(excluded.unit_weight_unit, unit_weight_unit),
+          last_purchase_price = excluded.last_purchase_price,
+          last_purchase_qty = excluded.last_purchase_qty,
+          last_purchase_unit = excluded.last_purchase_unit
         `,
+      [
+        ing.id,
+        ing.businessId ?? ing.business_id ?? null,
+        ing.name,
+        ing.baseUnit ?? ing.base_unit ?? null,
+        ing.stockCheckUnit ?? ing.stock_check_unit ?? null,
+        ing.minThreshold ?? ing.min_threshold ?? 0,
+        ing.averageUnitCost ?? ing.average_unit_cost ?? 0,
+        ing.unitCost ?? ing.unit_cost ?? 0,
+        ing.density ?? null,
+        ing.tareWeight ?? ing.tare_weight ?? null,
+        aliases,
+        (ing.archived ?? ing.deletedAt ?? ing.deleted_at ?? false) ? 1 : 0,
+        ing.shelfLifeDays ?? ing.shelf_life_days ?? null,
+        ing.warehouseQty ?? ing.warehouse_qty ?? 0,
+        ing.barQty ?? ing.bar_qty ?? 0,
+        (ing.isBatchItem ?? ing.is_batch_item ?? false) ? 1 : 0,
+        ing.batchYieldQty ?? ing.batch_yield_qty ?? null,
+        ing.batchYieldUnit ?? ing.batch_yield_unit ?? null,
+        ing.type ?? "raw_material",
+        ing.itemType ?? ing.item_type ?? "STOCK",
+        ing.trackingMode ?? ing.tracking_mode ?? "STRICT",
+        ing.allowableVariance ?? ing.allowable_variance ?? 0,
+        ing.unitWeight ?? ing.unit_weight ?? null,
+        ing.unitWeightUnit ?? ing.unit_weight_unit ?? null,
+        ing.lastPurchasePrice ?? ing.last_purchase_price ?? null,
+        ing.lastPurchaseQty ?? ing.last_purchase_qty ?? null,
+        ing.lastPurchaseUnit ?? ing.last_purchase_unit ?? null,
+        ing.createdAt ?? ing.created_at ?? new Date().toISOString(),
+      ]
+    );
+
+    // Store batch components if present (owner sees them; staff sees if shareRecipesWithStaff=true)
+    const components: any[] = ing.batchComponents ?? ing.batch_components ?? [];
+    if (components.length > 0) {
+      await db.runAsync(
+        `DELETE FROM local_ingredient_components WHERE parent_id = ?`,
+        [ing.id]
+      );
+      for (const comp of components) {
+        await db.runAsync(
+          `INSERT OR REPLACE INTO local_ingredient_components (id, parent_id, child_id, quantity, unit)
+           VALUES (?, ?, ?, ?, ?)`,
+          [
+            comp.id,
+            ing.id,
+            comp.childIngredientId ?? comp.child_ingredient_id ?? comp.childId,
+            comp.quantity,
+            comp.unit,
+          ]
+        );
+      }
+    }
+  }
+  return ingredients.length;
+}
+
+async function upsertRecipes(db: any, recipes: any[]): Promise<number> {
+  if (!recipes?.length) return 0;
+  for (const recipe of recipes) {
+    const aliases = recipe.aliases ? JSON.stringify(recipe.aliases) : "[]";
+    await db.runAsync(
+      `INSERT OR REPLACE INTO local_recipes
+        (id, business_id, name, aliases, price, category, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        recipe.id,
+        recipe.businessId ?? recipe.business_id,
+        recipe.name,
+        aliases,
+        recipe.price,
+        recipe.category,
+        (recipe.isActive ?? recipe.is_active ?? false) ? 1 : 0,
+        recipe.createdAt ?? recipe.created_at,
+        recipe.updatedAt ?? recipe.updated_at ?? recipe.createdAt ?? recipe.created_at,
+      ]
+    );
+
+    // Replace recipe ingredients (nested in response as `ingredients`)
+    await db.runAsync(
+      "DELETE FROM local_recipe_ingredients WHERE recipe_id = ?",
+      [recipe.id]
+    );
+
+    const ings = recipe.ingredients ?? [];
+    for (const ri of ings) {
+      await db.runAsync(
+        `INSERT INTO local_recipe_ingredients (id, recipe_id, ingredient_id, quantity, unit)
+           VALUES (?, ?, ?, ?, ?)`,
         [
-          ing.id,
-          ing.business_id ?? null,
-          ing.name,
-          ing.base_unit ?? null,
-          ing.min_threshold ?? 0,
-          ing.average_unit_cost ?? 0,
-          ing.unit_cost ?? 0,
-          ing.density ?? null,
-          ing.tare_weight ?? null,
-          aliases, // Bound as string "[]" or '["foo"]'
-          ing.archived ? 1 : 0,
-          ing.warehouse_qty ?? 0,
-          ing.bar_qty ?? 0,
-          ing.is_batch_item ? 1 : 0,
-          ing.batch_yield_qty ?? null,
-          ing.batch_yield_unit ?? null,
-          // New inventory config fields:
-          ing.type ?? "raw_material",
-          ing.item_type ?? "STOCK",
-          ing.tracking_mode ?? "STRICT",
-          ing.allowable_variance ?? 0,
-          ing.unit_weight ?? null,
-          ing.unit_weight_unit ?? null,
-          ing.created_at,
+          ri.id,
+          ri.recipeId ?? ri.recipe_id ?? recipe.id,
+          ri.ingredientId ?? ri.ingredient_id,
+          ri.quantity,
+          ri.unit,
         ]
       );
     }
+  }
+  return recipes.length;
+}
 
-    // Update last sync timestamp
+async function upsertInventoryLogs(db: any, logs: any[]): Promise<number> {
+  if (!logs?.length) return 0;
+  for (const log of logs) {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO local_inventory_logs
+        (id, ingredient_id, location, type, ai_parsed_quantity, ai_confidence_score,
+         final_confirmed_quantity, quantity_change_base, unit_cost_at_time,
+         source_photo_urls, ai_parsed_json, staff_note, is_verified, diff_percentage,
+         created_at, created_by, business_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        log.id,
+        log.ingredientId ?? log.ingredient_id ?? null,
+        log.location || "",
+        log.type,
+        log.aiParsedQuantity ?? log.ai_parsed_quantity ?? null,
+        log.aiConfidenceScore ?? log.ai_confidence_score ?? null,
+        log.finalConfirmedQuantity ?? log.final_confirmed_quantity ?? null,
+        log.quantityChangeBase ?? log.quantity_change_base ?? null,
+        log.unitCostAtTime ?? log.unit_cost_at_time ?? null,
+        JSON.stringify(log.sourcePhotoUrls ?? log.source_photo_urls ?? []),
+        log.aiParsedJson ?? log.ai_parsed_json ?? null,
+        log.staffNote ?? log.staff_note ?? null,
+        (log.isVerified ?? log.is_verified ?? false) ? 1 : 0,
+        log.diffPercentage ?? log.diff_percentage ?? null,
+        log.createdAt ?? log.created_at,
+        log.createdById ?? log.created_by ?? null,
+        log.businessId ?? log.business_id ?? null,
+      ]
+    );
+  }
+  return logs.length;
+}
+
+async function upsertPendingLends(db: any, lends: any[]): Promise<number> {
+  if (!lends) return 0;
+  await db.withTransactionAsync(async () => {
+    await db.runAsync("DELETE FROM local_pending_lends WHERE is_returned = 0");
+    for (const lend of lends) {
+      await db.runAsync(
+        `INSERT INTO local_pending_lends (
+            id, business_id, ingredient_id, ingredient_name, quantity, unit,
+            source_location, lent_at, related_log_id, synced
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        [
+          lend.id,
+          lend.businessId ?? lend.business_id,
+          lend.ingredientId ?? lend.ingredient_id,
+          lend.ingredient?.name ?? lend.ingredientName ?? lend.ingredient_name ?? "",
+          lend.quantity,
+          lend.unit,
+          lend.sourceLocation ?? lend.source_location ?? null,
+          lend.lentAt ?? lend.lent_at ?? null,
+          lend.relatedLogId ?? lend.related_log_id ?? null,
+        ]
+      );
+    }
+  });
+  return lends.length;
+}
+
+/**
+ * Pull latest stock levels (via /sync/pull)
+ */
+export async function pullLatestStock(): Promise<{ synced: number }> {
+  try {
+    const db = await getDB();
+    if (!db) throw new Error("Database not initialized");
+    const pull = await fetchSyncPull();
+    if (!pull) return { synced: 0 };
+
+    await upsertStorageAreas(db, pull.storageAreas);
+    const synced = await upsertStockLevels(db, pull.stockLevels);
+    await db.runAsync(
+      "INSERT OR REPLACE INTO local_metadata (key, value) VALUES ('last_stock_sync', ?)",
+      [new Date().toISOString()]
+    );
+    console.log(`[PullSync] Synced ${synced} stock changes`);
+    return { synced };
+  } catch (err) {
+    console.error("[PullSync] Stock error:", err);
+    return { synced: 0 };
+  }
+}
+
+/**
+ * Pull latest ingredients (via /sync/pull)
+ */
+export async function pullLatestIngredients(): Promise<{ synced: number }> {
+  try {
+    const db = await getDB();
+    if (!db) throw new Error("Database not initialized");
+    const pull = await fetchSyncPull();
+    if (!pull) return { synced: 0 };
+
+    const synced = await upsertIngredients(db, pull.ingredients);
     await db.runAsync(
       "INSERT OR REPLACE INTO local_metadata (key, value) VALUES ('last_ingredients_sync', ?)",
       [new Date().toISOString()]
     );
-
-    console.log(`[PullSync] Synced ${ingredients.length} ingredient changes`);
-    return { synced: ingredients.length };
+    console.log(`[PullSync] Synced ${synced} ingredient changes`);
+    return { synced };
   } catch (err) {
     console.error("[PullSync] Ingredients error:", err);
     return { synced: 0 };
@@ -207,81 +409,18 @@ export async function pullLatestIngredients(): Promise<{ synced: number }> {
 }
 
 /**
- * Pull latest recipes from Supabase
+ * Pull latest recipes (via /sync/pull, recipe_ingredients nested)
  */
 export async function pullLatestRecipes(): Promise<{ synced: number }> {
   try {
     const db = await getDB();
+    if (!db) throw new Error("Database not initialized");
+    const pull = await fetchSyncPull();
+    if (!pull) return { synced: 0 };
 
-    // Fetch all active recipes
-    const { data: recipes, error } = await supabase
-      .from("recipes")
-      .select(
-        "id, business_id, name, price, category, is_active, created_at, updated_at"
-      );
-
-    if (error) {
-      console.error("[PullSync] Recipes fetch error:", error);
-      throw error;
-    }
-
-    if (!recipes || recipes.length === 0) {
-      console.log("[PullSync] No recipes to sync");
-      return { synced: 0 };
-    }
-
-    // Fetch recipe ingredients
-    const { data: recipeIngredients, error: riError } = await supabase
-      .from("recipe_ingredients")
-      .select("id, recipe_id, ingredient_id, quantity, unit");
-
-    if (riError) throw riError;
-
-    // Upsert recipes and ingredients
-    // DEBUG: Log raw recipe data from server
-    console.log(
-      "[PullSync] Recipes from server:",
-      recipes.map((r) => ({ id: r.id, name: r.name, is_active: r.is_active }))
-    );
-
-    for (const recipe of recipes) {
-      await db.runAsync(
-        `INSERT OR REPLACE INTO local_recipes 
-        (id, business_id, name, price, category, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          recipe.id,
-          recipe.business_id,
-          recipe.name,
-          recipe.price,
-          recipe.category,
-          recipe.is_active ? 1 : 0,
-          recipe.created_at,
-          recipe.updated_at || recipe.created_at,
-        ]
-      );
-
-      // Delete old ingredients for this recipe
-      await db.runAsync(
-        "DELETE FROM local_recipe_ingredients WHERE recipe_id = ?",
-        [recipe.id]
-      );
-
-      // Insert new ingredients
-      const ings = (recipeIngredients || []).filter(
-        (ri: any) => ri.recipe_id === recipe.id
-      );
-      for (const ri of ings) {
-        await db.runAsync(
-          `INSERT INTO local_recipe_ingredients (id, recipe_id, ingredient_id, quantity, unit)
-           VALUES (?, ?, ?, ?, ?)`,
-          [ri.id, ri.recipe_id, ri.ingredient_id, ri.quantity, ri.unit]
-        );
-      }
-    }
-
-    console.log(`[PullSync] Synced ${recipes.length} recipes`);
-    return { synced: recipes.length };
+    const synced = await upsertRecipes(db, pull.recipes);
+    console.log(`[PullSync] Synced ${synced} recipes`);
+    return { synced };
   } catch (err) {
     console.error("[PullSync] Recipes error:", err);
     return { synced: 0 };
@@ -289,117 +428,28 @@ export async function pullLatestRecipes(): Promise<{ synced: number }> {
 }
 
 /**
- * Pull latest batch recipes (semi-finished products)
+ * Pull latest batch recipes (NOT YET IN /sync/pull — TODO: extend backend)
  */
 export async function pullLatestBatchRecipes(): Promise<{ synced: number }> {
-  try {
-    const db = await getDB();
-
-    const { data: batchRecipes, error } = await supabase
-      .from("batch_recipes")
-      .select("*");
-
-    if (error) {
-      console.error("[PullSync] Batch recipes fetch error:", error);
-      throw error;
-    }
-
-    if (!batchRecipes || batchRecipes.length === 0) {
-      console.log("[PullSync] No batch recipes to sync");
-      return { synced: 0 };
-    }
-
-    for (const batch of batchRecipes) {
-      await db.runAsync(
-        `INSERT OR REPLACE INTO local_batch_recipes 
-        (id, business_id, output_ingredient_id, name, yield_qty, yield_unit, instructions, is_active, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          batch.id,
-          batch.business_id,
-          batch.output_ingredient_id,
-          batch.name,
-          batch.yield_qty,
-          batch.yield_unit,
-          batch.instructions,
-          1, // Defaulting to 1 (active) since Supabase doesn't have this column yet
-          batch.created_at,
-        ]
-      );
-    }
-
-    console.log(`[PullSync] Synced ${batchRecipes.length} batch recipes`);
-    return { synced: batchRecipes.length };
-  } catch (err) {
-    console.error("[PullSync] Batch recipes error:", err);
-    return { synced: 0 };
-  }
+  // TODO: Backend /sync/pull does not yet return batch_recipes.
+  // When added, read pull.batchRecipes and upsert to local_batch_recipes.
+  console.log("[PullSync] Batch recipes sync skipped (backend not ready)");
+  return { synced: 0 };
 }
 
 /**
- * Pull latest inventory logs (activity history)
+ * Pull latest inventory logs (via /sync/pull → recentLogs, last 50)
  */
 export async function pullLatestInventoryLogs(): Promise<{ synced: number }> {
   try {
     const db = await getDB();
+    if (!db) throw new Error("Database not initialized");
+    const pull = await fetchSyncPull();
+    if (!pull) return { synced: 0 };
 
-    if (!db) {
-      console.error(
-        "[PullSync] Database not ready, skipping inventory logs sync"
-      );
-      throw new Error("Database not initialized");
-    }
-
-    // Fetch recent inventory logs (last 50 for performance)
-    const { data: logs, error } = await supabase
-      .from("inventory_logs")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(50);
-
-    if (error) {
-      console.error("[PullSync] Inventory logs fetch error:", error);
-      throw error;
-    }
-
-    if (!logs || logs.length === 0) {
-      console.log("[PullSync] No inventory logs to sync");
-      return { synced: 0 };
-    }
-
-    // Upsert to local_inventory_logs
-    for (const log of logs) {
-      await db.runAsync(
-        `INSERT OR REPLACE INTO local_inventory_logs
-        (id, ingredient_id, location, type, ai_parsed_quantity, ai_confidence_score,
-         final_confirmed_quantity, quantity_change_base, unit_cost_at_time,
-         source_photo_urls, ai_parsed_json, staff_note, is_verified, diff_percentage,
-         created_at, created_by, business_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          log.id,
-          log.ingredient_id,
-          log.location || "",
-          log.type,
-          log.ai_parsed_quantity,
-          log.ai_confidence_score,
-          log.final_confirmed_quantity,
-          log.quantity_change_base,
-          log.unit_cost_at_time,
-          JSON.stringify(log.source_photo_urls || []),
-          log.ai_parsed_json,
-          log.staff_note,
-          log.is_verified ? 1 : 0,
-          log.diff_percentage,
-          log.created_at,
-          log.created_by,
-          log.business_id,
-        ]
-      );
-    }
-
-    console.log(`[PullSync] Synced ${logs.length} inventory logs`);
-    return { synced: logs.length };
+    const synced = await upsertInventoryLogs(db, pull.recentLogs);
+    console.log(`[PullSync] Synced ${synced} inventory logs`);
+    return { synced };
   } catch (err) {
     console.error("[PullSync] Inventory logs error:", err);
     return { synced: 0 };
@@ -407,7 +457,7 @@ export async function pullLatestInventoryLogs(): Promise<{ synced: number }> {
 }
 
 /**
- * Full pull - stock, ingredients, recipes, batch recipes, inventory logs
+ * Full pull — single /sync/pull call, then write all tables.
  */
 export async function pullAllData(): Promise<{
   stock: number;
@@ -416,98 +466,64 @@ export async function pullAllData(): Promise<{
   batchRecipes: number;
   inventoryLogs: number;
 }> {
-  const stockResult = await pullLatestStock();
-  const ingredientsResult = await pullLatestIngredients();
-  const recipesResult = await pullLatestRecipes();
-  const batchRecipesResult = await pullLatestBatchRecipes();
-  const inventoryLogsResult = await pullLatestInventoryLogs();
+  const result = {
+    stock: 0,
+    ingredients: 0,
+    recipes: 0,
+    batchRecipes: 0,
+    inventoryLogs: 0,
+  };
 
-  console.log("[PullSync] Full sync complete:", {
-    stock: stockResult.synced,
-    ingredients: ingredientsResult.synced,
-    recipes: recipesResult.synced,
-    batchRecipes: batchRecipesResult.synced,
-    inventoryLogs: inventoryLogsResult.synced,
-  });
-
-  // 🔔 Pull Pending Lends (Fire and forget, or await)
   try {
     const db = await getDB();
-    const profile = await db.getFirstAsync<{ business_id: string }>(
-      "SELECT business_id FROM local_profiles LIMIT 1"
-    );
-    if (profile?.business_id) {
-      await pullPendingLends(profile.business_id);
+    if (!db) {
+      console.error("[PullSync] Database not ready");
+      return result;
     }
-  } catch (e) {
-    console.warn("[PullSync] Auto-pull pending lends failed", e);
+
+    const pull = await fetchSyncPull();
+    if (!pull) return result;
+
+    result.ingredients = await upsertIngredients(db, pull.ingredients);
+    result.recipes = await upsertRecipes(db, pull.recipes);
+    await upsertStorageAreas(db, pull.storageAreas);
+    result.stock = await upsertStockLevels(db, pull.stockLevels);
+    result.inventoryLogs = await upsertInventoryLogs(db, pull.recentLogs);
+    await upsertPendingLends(db, pull.activePendingLends ?? []);
+
+    await db.runAsync(
+      "INSERT OR REPLACE INTO local_metadata (key, value) VALUES ('last_ingredients_sync', ?)",
+      [new Date().toISOString()]
+    );
+    await db.runAsync(
+      "INSERT OR REPLACE INTO local_metadata (key, value) VALUES ('last_stock_sync', ?)",
+      [new Date().toISOString()]
+    );
+
+    console.log("[PullSync] Full sync complete:", result);
+  } catch (err) {
+    console.error("[PullSync] pullAllData error:", err);
   }
 
-  return {
-    stock: stockResult.synced,
-    ingredients: ingredientsResult.synced,
-    recipes: recipesResult.synced,
-    batchRecipes: batchRecipesResult.synced,
-    inventoryLogs: inventoryLogsResult.synced,
-  };
+  return result;
 }
 
 /**
- * Pull pending lends (LEND/RETURN Feature)
- * Fetches active lends and updates local database
+ * Pull pending lends (via /sync/pull → activePendingLends)
+ * businessId param kept for back-compat; backend scopes by JWT.
  */
-export async function pullPendingLends(businessId: string): Promise<void> {
+export async function pullPendingLends(_businessId: string): Promise<void> {
   try {
     const db = await getDB();
     if (!db) return;
 
-    console.log("[PullSync] Pulling pending lends...");
+    const pull = await fetchSyncPull();
+    if (!pull) return;
 
-    // Fetch ONLY active lends (is_returned = false) from server
-    // We don't need history of returned items for the widget
-    const { data, error } = await supabase
-      .from("pending_lends")
-      .select("*")
-      .eq("business_id", businessId)
-      .eq("is_returned", false);
-
-    if (error) throw error;
-
-    if (data && data.length > 0) {
-      await db.withTransactionAsync(async () => {
-        // Clear existing local active lends to avoid duplicates/stale data
-        // (Simple strategy: Replace all active lends)
-        await db.runAsync(
-          "DELETE FROM local_pending_lends WHERE is_returned = 0"
-        );
-
-        for (const lend of data) {
-          await db.runAsync(
-            `INSERT INTO local_pending_lends (
-              id, business_id, ingredient_id, ingredient_name, quantity, unit,
-              source_location, lent_at, related_log_id, synced
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`, // synced=1 because fetched from server
-            [
-              lend.id,
-              lend.business_id,
-              lend.ingredient_id,
-              lend.ingredient_name,
-              lend.quantity,
-              lend.unit,
-              lend.source_location,
-              lend.lent_at,
-              lend.related_log_id,
-            ]
-          );
-        }
-      });
-      console.log(`[PullSync] Synced ${data.length} pending lends`);
-    } else {
-      // If no active lends on server, clear local active lends too
-      await db.runAsync(
-        "DELETE FROM local_pending_lends WHERE is_returned = 0"
-      );
-    }
+    await upsertPendingLends(db, pull.activePendingLends ?? []);
+    console.log(
+      `[PullSync] Synced ${pull.activePendingLends?.length ?? 0} pending lends`
+    );
   } catch (err) {
     console.error("[PullSync] Failed to pull pending lends:", err);
   }

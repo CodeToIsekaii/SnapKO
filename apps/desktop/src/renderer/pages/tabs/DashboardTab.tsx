@@ -2,11 +2,10 @@
 // SOLID: Presentational component - receives data via props
 
 import React from "react";
-import { COGSReport } from "../../types";
+import { COGSReport, ActivityLog } from "../../types";
 import { COGSDashboard } from "../../components/COGSChart";
 import { ActivityLogTable } from "../../components/ActivityLogTable";
 import { COLORS } from "../../styles/theme";
-import { ActivityLog } from "../../types";
 import { BarChart3, RefreshCw, Download } from "lucide-react";
 
 interface DashboardTabProps {
@@ -78,7 +77,7 @@ export function DashboardTab({
       {/* COGS Dashboard Charts */}
       <COGSDashboard
         barData={(cogsReport.monthly || []).map((m) => ({
-          name: m.month,
+          name: (m as any).month ?? (m as any).name ?? "",
           warehouse: m.warehouse,
           bar: m.bar,
         }))}
@@ -112,6 +111,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   actions: {
     display: "flex",
+    alignItems: "center",
     gap: 8,
   },
   actionButton: {

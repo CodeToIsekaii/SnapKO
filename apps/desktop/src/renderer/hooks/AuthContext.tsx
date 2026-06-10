@@ -22,9 +22,18 @@ interface Profile {
   role: string;
   status: string;
   full_name: string | null;
-  inventory_model: string | null; // MODEL_A or MODEL_B
+  inventory_model: string | null; // effective SIMPLE | STANDARD | CHAIN
+  stored_inventory_model?: string | null;
   // Subscription data (from businesses table)
   tier?: string | null;
+  effective_tier?: string | null;
+  subscription_status?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED" | null;
+  entitlements?: {
+    canUseDualWarehouse: boolean;
+    canUseCustomStorageAreas: boolean;
+    canInviteStaff: boolean;
+    canUseAdvancedReports: boolean;
+  } | null;
   subscription_expires_at?: string | null;
   business_created_at?: string | null;
 }
@@ -237,63 +246,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [fetchProfile]);
 
-  // Register function
+  // Register function — delegates to main process IPC (signUp + backend exchange)
   const register = useCallback(
     async (data: RegisterData): Promise<LoginResult> => {
       setState((s) => ({ ...s, loading: true, error: null }));
 
       try {
-        if (!supabase) {
-          throw new Error("Supabase not available");
-        }
+        const result = await window.electronAPI.register(
+          data.email,
+          data.password,
+          data.fullName,
+          data.businessName
+        );
 
-        const { data: authData, error: signUpError } =
-          await supabase.auth.signUp({
-            email: data.email,
-            password: data.password,
-            options: {
-              data: {
-                full_name: data.fullName,
-                business_name: data.businessName,
-              },
-            },
-          });
-
-        if (signUpError) {
-          throw new Error(signUpError.message);
-        }
-
-        if (authData.user) {
-          if (authData.session) {
-            await window.electronAPI.setAuthToken(
-              authData.session.access_token
-            );
-          }
-
-          setState({
-            user: {
-              id: authData.user.id,
-              email: authData.user.email || "",
-              created_at: authData.user.created_at,
-            },
-            profile: null,
-            loading: false,
-            error: null,
-          });
-          // Note: Profile will be auto-created by trigger, then we fetch it
-          await fetchProfile();
-          return { success: true };
-        } else {
+        if (!result.success) {
           setState((s) => ({
             ...s,
             loading: false,
-            error: null,
+            error: result.error || "Đăng ký thất bại",
           }));
+          return { success: false, error: result.error };
+        }
+
+        if (result.needsVerification || !result.session?.user) {
+          setState((s) => ({ ...s, loading: false, error: null }));
           return {
             success: true,
             error: "Vui lòng kiểm tra email để xác nhận",
           };
         }
+
+        setState({
+          user: {
+            id: result.session.user.id,
+            email: result.session.user.email || "",
+            created_at: result.session.user.created_at,
+          },
+          profile: null,
+          loading: false,
+          error: null,
+        });
+        await fetchProfile();
+        return { success: true };
       } catch (err: any) {
         const errorMsg = err.message || "Đăng ký thất bại";
         setState((s) => ({ ...s, loading: false, error: errorMsg }));

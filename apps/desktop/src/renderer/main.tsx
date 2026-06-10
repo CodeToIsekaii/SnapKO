@@ -68,13 +68,18 @@ function AppContent() {
           if (updateProfile) {
             try {
               // 1. Update Global Business
-              await (window as any).electronAPI?.updateBusiness?.({
+              const businessResult = await (window as any).electronAPI?.updateBusiness?.({
                 inventory_model: model,
               });
+              if (!businessResult?.success) {
+                throw new Error(businessResult?.error || "Business update failed");
+              }
               // 2. Update Legacy Profile
-              await updateProfile({ inventory_model: model });
+              const profileResult = await updateProfile({ inventory_model: model });
+              if (!profileResult) throw new Error("Profile update failed");
             } catch (e) {
               console.error("Model setup failed", e);
+              alert("Không thể lưu mô hình này. Vui lòng kiểm tra gói hiện tại.");
             }
           }
         }}

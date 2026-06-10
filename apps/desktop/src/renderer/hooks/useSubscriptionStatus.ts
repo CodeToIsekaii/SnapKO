@@ -5,7 +5,7 @@
  * States:
  * - TRIAL: Free trial period (14 days from account creation)
  * - PRO_ACTIVE: Paid subscription, plenty of time left
- * - PRO_WARNING: Paid subscription expiring in ≤3 days
+ * - PRO_WARNING: Paid subscription expiring in ≤5 days
  * - EXPIRED: Trial or subscription has ended
  */
 
@@ -34,7 +34,7 @@ interface UseSubscriptionStatusParams {
 }
 
 const TRIAL_DAYS = 14;
-const WARNING_THRESHOLD_DAYS = 3;
+const WARNING_THRESHOLD_DAYS = 5;
 
 /**
  * Calculate days between two dates

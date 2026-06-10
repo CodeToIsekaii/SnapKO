@@ -4,7 +4,7 @@
  *
  * Features:
  * - Dynamic profile from SQLite
- * - Model selector (SIMPLE/STANDARD) - Owner only
+ * - Model selector (SIMPLE/STANDARD/CHAIN) - Owner only
  * - Staff invite - Owner only
  * - Delete account with 30-day grace
  * - Privacy/Terms links
@@ -26,6 +26,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { getDB } from "../../../db";
 import { supabase } from "../../../lib/supabase";
+import { api } from "../../../services/api";
 // SecureStore removed - using supabase.auth.getSession() instead
 import InviteCodeGeneratorModal from "../../../components/InviteCodeGeneratorModal";
 import { useAuth } from "../../../contexts/AuthContext";
@@ -57,6 +58,20 @@ interface LocalProfile {
   inventory_model: string;
 }
 
+type InventoryModel = "SIMPLE" | "STANDARD" | "CHAIN";
+
+function normalizeInventoryModel(value?: string | null): InventoryModel {
+  if (value === "STANDARD" || value === "MODEL_B") return "STANDARD";
+  if (value === "CHAIN") return "CHAIN";
+  return "SIMPLE";
+}
+
+const MODEL_LABEL: Record<InventoryModel, string> = {
+  SIMPLE: "Kho Đơn",
+  STANDARD: "Kho Kép",
+  CHAIN: "Nhiều khu vực",
+};
+
 export default function SettingsScreen() {
   console.log("⚙️ [Settings] Component rendering...");
   const router = useRouter();
@@ -65,7 +80,7 @@ export default function SettingsScreen() {
   // State
   const [profile, setProfile] = useState<LocalProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [model, setModel] = useState<"SIMPLE" | "STANDARD">("STANDARD");
+  const [model, setModel] = useState<InventoryModel>("SIMPLE");
   const [changingModel, setChangingModel] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -76,6 +91,16 @@ export default function SettingsScreen() {
     (authState.status === "authenticated" &&
       authState.profile?.role === "OWNER") ||
     profile?.role === "OWNER";
+  const authProfile =
+    authState.status === "authenticated" ? authState.profile : null;
+  const effectiveTier = authProfile?.effectiveTier ?? authProfile?.tier ?? "FREE";
+  const entitlements = authProfile?.entitlements;
+  const canUseDualWarehouse =
+    entitlements?.canUseDualWarehouse ??
+    (effectiveTier === "PRO" || effectiveTier === "CHAIN");
+  const canUseCustomStorageAreas =
+    entitlements?.canUseCustomStorageAreas ?? effectiveTier === "CHAIN";
+  const canInviteStaff = entitlements?.canInviteStaff ?? true;
 
   // Debug log
   console.log(
@@ -91,7 +116,7 @@ export default function SettingsScreen() {
   useFocusEffect(
     useCallback(() => {
       loadProfileAndConfig();
-    }, []),
+    }, [authProfile?.effectiveInventoryModel]),
   );
 
   const loadProfileAndConfig = async () => {
@@ -104,13 +129,8 @@ export default function SettingsScreen() {
 
       if (localUser) {
         setProfile(localUser);
-        // Map inventory_model to our SIMPLE/STANDARD (backend uses MODEL_A/MODEL_B or SIMPLE/STANDARD)
-        const modelValue = localUser.inventory_model;
-        if (modelValue === "MODEL_A" || modelValue === "SIMPLE") {
-          setModel("SIMPLE");
-        } else {
-          setModel("STANDARD");
-        }
+        const modelValue = authProfile?.effectiveInventoryModel || "SIMPLE";
+        setModel(normalizeInventoryModel(modelValue));
       }
     } catch (e) {
       console.error("[Settings] Load profile error:", e);
@@ -119,11 +139,27 @@ export default function SettingsScreen() {
     }
   };
 
-  // Toggle inventory model (Owner only) with Optimistic UI
-  // IMPORTANT: Must update BOTH profiles table AND businesses table for cross-device sync
-  const handleToggleModel = async () => {
+  const showUpgradePrompt = (targetModel: InventoryModel) => {
+    Alert.alert(
+      "Tính năng bị khóa",
+      targetModel === "CHAIN"
+        ? "Mô hình nhiều khu vực cần gói CHAIN còn hiệu lực."
+        : "Kho Kép cần gói PRO hoặc CHAIN còn hiệu lực.",
+      [{ text: "OK" }],
+    );
+  };
+
+  const isModelLocked = (targetModel: InventoryModel) => {
+    if (targetModel === "STANDARD") return !canUseDualWarehouse;
+    if (targetModel === "CHAIN") return !canUseCustomStorageAreas;
+    return false;
+  };
+
+  // Select inventory model (Owner only) with Optimistic UI.
+  // Business inventory_model is the source of truth; profile field is legacy-only.
+  const handleSelectModel = async (newModel: InventoryModel) => {
     console.log(
-      "[Settings] handleToggleModel called, business_id:",
+      "[Settings] handleSelectModel called, business_id:",
       profile?.business_id,
       "profile:",
       profile?.id,
@@ -137,52 +173,46 @@ export default function SettingsScreen() {
       return;
     }
 
+    if (isModelLocked(newModel)) {
+      showUpgradePrompt(newModel);
+      return;
+    }
+
     const oldModel = model;
-    const newModel = model === "SIMPLE" ? "STANDARD" : "SIMPLE";
 
     // Optimistic UI update
     setModel(newModel);
     setChangingModel(true);
 
     try {
-      // 1. Update profiles table (legacy compatibility)
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({ inventory_model: newModel })
-        .eq("id", profile.id);
+      const business = await api.patch<{
+        inventoryModel?: string;
+        effectiveInventoryModel?: string;
+      }>("/businesses/me", { inventoryModel: newModel });
+      const effectiveModel = normalizeInventoryModel(
+        business?.effectiveInventoryModel || "SIMPLE",
+      );
 
-      if (profileError) throw profileError;
-
-      // 2. Update businesses table (CRITICAL for Desktop sync)
-      // Desktop reads inventory_model from businesses table first
-      const { error: businessError } = await supabase
-        .from("businesses")
-        .update({ inventory_model: newModel })
-        .eq("id", profile.business_id);
-
-      if (businessError) {
-        console.warn("[Settings] Failed to sync to businesses:", businessError);
-        // Don't fail the whole operation, but log the warning
-      }
-
-      // 3. Update Local SQLite
+      // Update Local SQLite with effective model returned by backend
       const db = await getDB();
       await db.runAsync(
         "UPDATE local_profiles SET inventory_model = ? WHERE id = ?",
-        [newModel, profile.id],
+        [effectiveModel, profile.id],
       );
+      setModel(effectiveModel);
 
-      // 4. Show success message
       Alert.alert(
         "Thành công",
-        `Đã đổi sang ${
-          newModel === "SIMPLE" ? "Kho Đơn" : "Kho Kép"
-        }.\n\nTất cả thiết bị sẽ tự đồng bộ sau vài giây.`,
+        `Đã đổi sang ${MODEL_LABEL[effectiveModel]}.\n\nTất cả thiết bị sẽ tự đồng bộ sau vài giây.`,
         [{ text: "OK" }],
       );
     } catch (err: any) {
-      console.error("[Settings] Toggle model error:", err);
-      Alert.alert("Lỗi", "Không thể cập nhật mô hình kho");
+      console.error("[Settings] Select model error:", err);
+      if (err?.status === 403) {
+        Alert.alert("Tính năng bị khóa", "Gói hiện tại không hỗ trợ mô hình này.");
+      } else {
+        Alert.alert("Lỗi", "Không thể cập nhật mô hình kho");
+      }
       // Revert on error
       setModel(oldModel);
     } finally {
@@ -352,8 +382,12 @@ export default function SettingsScreen() {
               Tạo mã mời để nhân viên tham gia quản lý kho cùng bạn.
             </Text>
             <TouchableOpacity
-              style={styles.inviteButton}
-              onPress={() => setShowInviteModal(true)}
+              style={[styles.inviteButton, !canInviteStaff && styles.lockedButton]}
+              onPress={() =>
+                canInviteStaff
+                  ? setShowInviteModal(true)
+                  : Alert.alert("Tính năng bị khóa", "Mời nhân viên cần gói PRO/CHAIN còn hiệu lực.")
+              }
             >
               <Ionicons name="person-add" size={18} color="#FFF" />
               <Text style={styles.inviteButtonText}>Tạo mã mời nhân viên</Text>
@@ -375,61 +409,70 @@ export default function SettingsScreen() {
               cách nhân viên kiểm kho.
             </Text>
             <View style={styles.modelSelector}>
-              {/* SIMPLE */}
-              <TouchableOpacity
-                style={[
-                  styles.modelOption,
-                  model === "SIMPLE" && styles.modelOptionActive,
-                ]}
-                onPress={() =>
-                  model !== "SIMPLE" && !changingModel && handleToggleModel()
-                }
-                disabled={changingModel}
-              >
-                <Text style={styles.modelIcon}>🏠</Text>
-                <Text
-                  style={[
-                    styles.modelName,
-                    model === "SIMPLE" && styles.modelNameActive,
-                  ]}
-                >
-                  KHO ĐƠN
-                </Text>
-                <Text style={styles.modelDesc}>1 kho duy nhất</Text>
-                {model === "SIMPLE" && (
-                  <View style={styles.modelCheck}>
-                    <Ionicons name="checkmark" size={14} color="#FFF" />
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              {/* STANDARD */}
-              <TouchableOpacity
-                style={[
-                  styles.modelOption,
-                  model === "STANDARD" && styles.modelOptionActive,
-                ]}
-                onPress={() =>
-                  model !== "STANDARD" && !changingModel && handleToggleModel()
-                }
-                disabled={changingModel}
-              >
-                <Text style={styles.modelIcon}>🏭→🍸</Text>
-                <Text
-                  style={[
-                    styles.modelName,
-                    model === "STANDARD" && styles.modelNameActive,
-                  ]}
-                >
-                  KHO KÉP
-                </Text>
-                <Text style={styles.modelDesc}>Kho Tổng + Quầy Bar</Text>
-                {model === "STANDARD" && (
-                  <View style={styles.modelCheck}>
-                    <Ionicons name="checkmark" size={14} color="#FFF" />
-                  </View>
-                )}
-              </TouchableOpacity>
+              {([
+                {
+                  id: "SIMPLE" as const,
+                  icon: "home" as const,
+                  title: "BASIC / KHO ĐƠN",
+                  desc: "1 kho duy nhất",
+                },
+                {
+                  id: "STANDARD" as const,
+                  icon: "wine" as const,
+                  title: "PRO / KHO KÉP",
+                  desc: "Kho Tổng + Quầy Bar",
+                },
+                {
+                  id: "CHAIN" as const,
+                  icon: "business" as const,
+                  title: "CHAIN / NHIỀU KHU",
+                  desc: "Nhiều khu vực tùy chỉnh",
+                },
+              ]).map((option) => {
+                const locked = isModelLocked(option.id);
+                const active = model === option.id;
+                return (
+                  <TouchableOpacity
+                    key={option.id}
+                    style={[
+                      styles.modelOption,
+                      active && styles.modelOptionActive,
+                      locked && !active && styles.modelOptionDisabled,
+                    ]}
+                    onPress={() =>
+                      !changingModel &&
+                      (locked ? showUpgradePrompt(option.id) : handleSelectModel(option.id))
+                    }
+                    disabled={changingModel}
+                  >
+                    <Ionicons
+                      name={option.icon}
+                      size={28}
+                      color={active ? COLORS.primary : COLORS.textSecondary}
+                    />
+                    <Text
+                      style={[
+                        styles.modelName,
+                        active && styles.modelNameActive,
+                      ]}
+                    >
+                      {option.title}
+                    </Text>
+                    <Text style={styles.modelDesc}>{option.desc}</Text>
+                    {locked && !active && (
+                      <View style={styles.modelLock}>
+                        <Ionicons name="lock-closed" size={12} color={COLORS.warning} />
+                        <Text style={styles.modelLockText}>Khóa</Text>
+                      </View>
+                    )}
+                    {active && (
+                      <View style={styles.modelCheck}>
+                        <Ionicons name="checkmark" size={14} color="#FFF" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
             </View>
             {changingModel && (
               <View style={styles.changingIndicator}>
@@ -642,9 +685,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
   },
+  lockedButton: {
+    opacity: 0.5,
+  },
   // Model selector
   modelSelector: {
-    flexDirection: "row",
+    flexDirection: "column",
     gap: 12,
     padding: 16,
     paddingTop: 0,
@@ -663,6 +709,9 @@ const styles = StyleSheet.create({
     borderColor: COLORS.primary,
     backgroundColor: `${COLORS.primary}15`,
   },
+  modelOptionDisabled: {
+    opacity: 0.5,
+  },
   modelIcon: {
     fontSize: 24,
     marginBottom: 8,
@@ -680,6 +729,17 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: COLORS.textMuted,
     textAlign: "center",
+  },
+  modelLock: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 8,
+  },
+  modelLockText: {
+    color: COLORS.warning,
+    fontSize: 11,
+    fontWeight: "600",
   },
   modelCheck: {
     position: "absolute",

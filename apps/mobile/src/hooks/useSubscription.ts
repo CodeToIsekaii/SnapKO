@@ -5,7 +5,7 @@
  * States:
  * - TRIAL: Free trial period (14 days from account creation)
  * - PRO_ACTIVE: Paid PRO subscription, plenty of time left
- * - PRO_WARNING: Paid PRO subscription expiring in ≤3 days
+ * - PRO_WARNING: Paid PRO subscription expiring in ≤5 days
  * - EXPIRED: Trial or subscription has ended
  */
 
@@ -36,13 +36,13 @@ export interface SubscriptionStatus {
 }
 
 const TRIAL_DAYS = 14;
-const WARNING_THRESHOLD_DAYS = 3;
+const WARNING_THRESHOLD_DAYS = 5;
 
 const FREE_FEATURES = {
   canUseDualWarehouse: false,
   canUseCloudSync: false,
   canUseAdvancedReports: false,
-  canInviteStaff: false,
+  canInviteStaff: true,
 };
 
 const PRO_FEATURES = {
@@ -162,9 +162,8 @@ export function useSubscription(
 export function getExpirationWarning(daysRemaining: number): string | null {
   if (daysRemaining <= 0)
     return "⚠️ Gói của bạn đã hết hạn. Nâng cấp để tiếp tục sử dụng tính năng nâng cao.";
-  if (daysRemaining <= 3)
+  if (daysRemaining <= 5)
     return `💡 Gói PRO còn ${daysRemaining} ngày! Gia hạn ngay để giữ tính năng Kho Kép & Báo cáo doanh thu không bị gián đoạn.`;
-  if (daysRemaining <= 7) return `📅 Gói PRO còn ${daysRemaining} ngày.`;
   return null;
 }
 

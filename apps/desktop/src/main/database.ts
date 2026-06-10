@@ -6,14 +6,30 @@
 import Database from "better-sqlite3";
 import { app, ipcMain } from "electron";
 import { join } from "node:path";
+import { apiFetch, ApiFetchError } from "./apiClient";
+import {
+  calculateInventoryItemValue,
+  getInventoryQuantitiesInBase,
+} from "../shared/inventoryValue";
 
 let db: Database.Database | null = null;
-let authClient: any = null;
 let currentBusinessId: string | null = null;
 
-// Set Supabase client for Cloud queries (staff profiles)
-export function setDatabaseSupabaseClient(client: any) {
-  authClient = client;
+type InventoryValuationRow = {
+  base_unit?: string | null;
+  stock_check_unit?: string | null;
+  warehouse_qty?: number | null;
+  bar_qty?: number | null;
+  unit_cost?: number | null;
+  min_threshold?: number | null;
+  density?: number | null;
+  unit_weight?: number | null;
+  unit_weight_unit?: string | null;
+};
+
+// Retained for backward compatibility; database.ts no longer touches Supabase directly.
+export function setDatabaseSupabaseClient(_client: any) {
+  // no-op: data calls go through apiFetch (see apiClient.ts)
 }
 
 // Set Business ID and Backfill Logic
@@ -70,7 +86,9 @@ export function setDatabaseBusinessId(id: string) {
       if (!checkMig) {
         console.log("[Database] Starting Re-queue V2...");
         const ingredients = database
-          .prepare("SELECT * FROM local_ingredients WHERE business_id = ?")
+          .prepare(
+            "SELECT * FROM local_ingredients WHERE business_id = ? AND (archived != 1 OR archived IS NULL)",
+          )
           .all(id);
 
         const insertQueue = database.prepare(
@@ -161,6 +179,7 @@ export function initDatabase(): Database.Database {
       business_id TEXT,
       name TEXT NOT NULL,
       base_unit TEXT,
+      stock_check_unit TEXT,
       warehouse_qty REAL NOT NULL DEFAULT 0,
       bar_qty REAL NOT NULL DEFAULT 0,
       unit_cost REAL NOT NULL DEFAULT 0,
@@ -169,6 +188,7 @@ export function initDatabase(): Database.Database {
       min_threshold REAL NOT NULL DEFAULT 0,
       unit_weight REAL,
       unit_weight_unit TEXT,
+      shelf_life_days INTEGER,
       aliases TEXT,
       archived INTEGER DEFAULT 0,
       created_at TEXT NOT NULL
@@ -185,7 +205,7 @@ export function initDatabase(): Database.Database {
 
     CREATE TABLE IF NOT EXISTS local_sync_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      action TEXT NOT NULL, -- 'UPSERT', 'DELETE'
+      action TEXT NOT NULL, -- 'UPSERT', 'DELETE', 'RESTORE'
       table_name TEXT NOT NULL, -- 'ingredients', 'recipes', 'batch_recipes'
       payload TEXT NOT NULL, -- JSON String
       status TEXT DEFAULT 'PENDING', -- 'PENDING', 'FAILED', 'ERROR'
@@ -200,6 +220,7 @@ export function initDatabase(): Database.Database {
       price INTEGER NOT NULL DEFAULT 0,
       category TEXT,
       is_active INTEGER NOT NULL DEFAULT 1,
+      is_synced INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -225,6 +246,13 @@ export function initDatabase(): Database.Database {
       updated_at TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  // Migration: track last retry timestamp on sync queue (exponential backoff)
+  try {
+    db.exec(`ALTER TABLE local_sync_queue ADD COLUMN last_attempt_at INTEGER`);
+  } catch (e) {
+    /* Column already exists */
+  }
 
   // Migration: Add missing columns if table already exists
   try {
@@ -253,6 +281,12 @@ export function initDatabase(): Database.Database {
 
   try {
     db.exec(`ALTER TABLE local_ingredients ADD COLUMN aliases TEXT`);
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN stock_check_unit TEXT`);
   } catch (e) {
     /* Column already exists */
   }
@@ -312,6 +346,91 @@ export function initDatabase(): Database.Database {
   } catch (e) {
     /* Column already exists */
   }
+
+  // Migration: dirty flag for selective push sync
+  try {
+    db.exec(
+      `ALTER TABLE local_recipes ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE local_recipe_ingredients ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE local_recipes ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch (e) {
+    /* Column already exists */
+  }
+
+  // Migration: batch recipe fields on ingredients
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN is_batch_item INTEGER NOT NULL DEFAULT 0`);
+  } catch (e) { /* already exists */ }
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN batch_yield_qty REAL`);
+  } catch (e) { /* already exists */ }
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN batch_yield_unit TEXT`);
+  } catch (e) { /* already exists */ }
+
+  // Migration: purchase price fields
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN last_purchase_price REAL`);
+  } catch (e) { /* already exists */ }
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN last_purchase_qty REAL`);
+  } catch (e) { /* already exists */ }
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN last_purchase_unit TEXT`);
+  } catch (e) { /* already exists */ }
+  try {
+    db.exec(`ALTER TABLE local_ingredients ADD COLUMN shelf_life_days INTEGER`);
+  } catch (e) { /* already exists */ }
+
+  // Batch components lookup table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS local_ingredient_components (
+      id TEXT PRIMARY KEY NOT NULL,
+      parent_id TEXT NOT NULL,
+      child_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      unit TEXT NOT NULL,
+      FOREIGN KEY (parent_id) REFERENCES local_ingredients(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_components_parent ON local_ingredient_components(parent_id);
+  `);
+
+  // Stock level tables (multi-location inventory)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS local_storage_areas (
+      id TEXT PRIMARY KEY NOT NULL,
+      business_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'STORAGE',
+      is_default INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      synced INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS local_stock_levels (
+      id TEXT PRIMARY KEY NOT NULL,
+      ingredient_id TEXT NOT NULL,
+      area_id TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 0,
+      last_counted_at TEXT,
+      deleted_at TEXT,
+      synced INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(ingredient_id, area_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_levels_ingredient ON local_stock_levels(ingredient_id);
+  `);
 
   // Create System Meta table for migration flags
   db.exec(`
@@ -457,22 +576,30 @@ export function runDailySnapshot(database: Database.Database): void {
     if (!existing) {
       console.log("[Snapshot] Running daily inventory snapshot...");
 
-      // Calculate total values
-      const stats = database
+      // Calculate total values in the ingredient base unit before applying cost.
+      const ingredients = database
         .prepare(
           `
-        SELECT 
-          SUM(warehouse_qty * unit_cost) as wh_val,
-          SUM(bar_qty * unit_cost) as bar_val,
-          COUNT(*) as item_count
+        SELECT base_unit, stock_check_unit, warehouse_qty, bar_qty, unit_cost,
+               density, unit_weight, unit_weight_unit
         FROM local_ingredients
       `,
         )
-        .get() as {
-        wh_val: number | null;
-        bar_val: number | null;
-        item_count: number;
-      };
+        .all() as InventoryValuationRow[];
+
+      const stats = ingredients.reduce(
+        (acc, item) => {
+          const { warehouseQtyInBase, barQtyInBase } =
+            getInventoryQuantitiesInBase(item);
+          const unitCost = Number(item.unit_cost ?? 0);
+
+          acc.wh_val += warehouseQtyInBase * unitCost;
+          acc.bar_val += barQtyInBase * unitCost;
+          acc.item_count += 1;
+          return acc;
+        },
+        { wh_val: 0, bar_val: 0, item_count: 0 },
+      );
 
       // Insert snapshot
       database
@@ -576,7 +703,7 @@ export function registerDatabaseIPC(): void {
     },
   );
 
-  // Add/update ingredient
+  // Add/update ingredient (local SQLite + sync queue for non-batch items)
   ipcMain.handle(
     "db:upsertIngredient",
     (
@@ -594,10 +721,18 @@ export function registerDatabaseIPC(): void {
         min_threshold?: number;
         unit_weight?: number;
         unit_weight_unit?: string;
-        type?: "raw_material" | "supply" | "semi_product";
+        stock_check_unit?: string | null;
+        type?: "raw_material" | "supply" | "semi_product" | "resale_item";
         item_type?: "STOCK" | "PHANTOM";
         tracking_mode?: "STRICT" | "LOOSE";
         allowable_variance?: number;
+        is_batch_item?: boolean;
+        batch_yield_qty?: number | null;
+        batch_yield_unit?: string | null;
+        last_purchase_price?: number | null;
+        last_purchase_qty?: number | null;
+        last_purchase_unit?: string | null;
+        shelf_life_days?: number | null;
       },
     ) => {
       const database = getDatabase();
@@ -613,11 +748,10 @@ export function registerDatabaseIPC(): void {
       }
 
       const transaction = database.transaction(() => {
-        // 1. Local Upsert (includes type and inventory config)
         const stmt = database.prepare(`
-          INSERT OR REPLACE INTO local_ingredients 
-          (id, business_id, name, base_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, min_threshold, unit_weight, unit_weight_unit, type, item_type, tracking_mode, allowable_variance, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+          INSERT OR REPLACE INTO local_ingredients
+          (id, business_id, name, base_unit, stock_check_unit, warehouse_qty, bar_qty, unit_cost, density, tare_weight, min_threshold, unit_weight, unit_weight_unit, type, item_type, tracking_mode, allowable_variance, is_batch_item, batch_yield_qty, batch_yield_unit, last_purchase_price, last_purchase_qty, last_purchase_unit, shelf_life_days, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         `);
 
         stmt.run(
@@ -625,6 +759,7 @@ export function registerDatabaseIPC(): void {
           ingredient.business_id ?? null,
           ingredient.name,
           ingredient.base_unit ?? null,
+          ingredient.stock_check_unit ?? null,
           ingredient.warehouse_qty ?? 0,
           ingredient.bar_qty ?? 0,
           ingredient.unit_cost ?? 0,
@@ -637,20 +772,19 @@ export function registerDatabaseIPC(): void {
           ingredient.item_type ?? "STOCK",
           ingredient.tracking_mode ?? "STRICT",
           ingredient.allowable_variance ?? 0,
+          ingredient.is_batch_item ? 1 : 0,
+          ingredient.batch_yield_qty ?? null,
+          ingredient.batch_yield_unit ?? null,
+          ingredient.last_purchase_price ?? null,
+          ingredient.last_purchase_qty ?? null,
+          ingredient.last_purchase_unit ?? null,
+          ingredient.shelf_life_days ?? null,
         );
 
-        // 2. Add to Sync Queue
         const queueStmt = database.prepare(`
           INSERT INTO local_sync_queue (action, table_name, payload)
           VALUES (?, ?, ?)
         `);
-
-        // Payload needs to match Supabase schema exactly
-        // Convert camelCase to snake_case if needed (Supabase usually handles raw update if columns match)
-        // Check database.ts schema vs Supabase schema
-        // local: warehouse_qty, bar_qty. Supabase: same.
-        // It seems safer to pass the ingredient object directly as payload,
-        // SyncWorker will handle transformation if needed.
         queueStmt.run("UPSERT", "ingredients", JSON.stringify(ingredient));
       });
 
@@ -661,9 +795,133 @@ export function registerDatabaseIPC(): void {
         console.error("Upsert ingredient failed:", err);
         return { success: false, error: err.message };
       }
-      return { success: true };
     },
   );
+
+  // Save batch ingredient via backend API (server computes unitCost + cascades)
+  ipcMain.handle(
+    "ingredients:saveWithComponents",
+    async (
+      _event,
+      data: {
+        id?: string;
+        name: string;
+        baseUnit: string;
+        stockCheckUnit?: string | null;
+        minThreshold?: number;
+        density?: number;
+        isBatchItem: boolean;
+        batchYieldQty: number;
+        batchYieldUnit: string;
+        components: Array<{ childId: string; quantity: number; unit: string }>;
+        // Local-only fields (not sent to backend, stored only in SQLite)
+        itemType?: "STOCK" | "PHANTOM";
+        trackingMode?: "STRICT" | "LOOSE";
+        allowableVariance?: number;
+        shelfLifeDays?: number | null;
+      },
+    ) => {
+      try {
+        const isNew = !data.id;
+
+        // Pre-pull to resolve any recently-created component ingredients that were
+        // posted to backend with a different UUID (syncWorker POST without id → server
+        // generates new UUID, local has stale UUID). Pull first so SQLite has server rows,
+        // then remap component childIds to server UUIDs before sending.
+        const { invalidatePullCache, pullIngredients } = await import("./sync");
+        invalidatePullCache();
+        await pullIngredients();
+
+        const resolveServerId = (localId: string, name: string): string => {
+          // After a pull, local_ingredients may contain the server's row (different UUID, same name).
+          // Find the most-recently inserted row with this name that is NOT the stale local UUID.
+          const db = getDatabase();
+          const row = db
+            .prepare(
+              "SELECT id FROM local_ingredients WHERE name = ? AND id != ? AND (archived = 0 OR archived IS NULL) ORDER BY rowid DESC LIMIT 1",
+            )
+            .get(name, localId) as { id: string } | undefined;
+          return row?.id ?? localId;
+        };
+
+        // Remap component IDs: if a component's childId is a stale local UUID (not on backend),
+        // find the server UUID by looking for a different row with the same ingredient name.
+        const db = getDatabase();
+        const remappedComponents = data.components.map((comp) => {
+          const localRow = db
+            .prepare("SELECT name FROM local_ingredients WHERE id = ?")
+            .get(comp.childId) as { name: string } | undefined;
+          if (!localRow) return comp;
+          const serverId = resolveServerId(comp.childId, localRow.name);
+          if (serverId !== comp.childId) {
+            console.log(`[Ingredients] Remapped component ${comp.childId} → ${serverId} (${localRow.name})`);
+          }
+          return { ...comp, childId: serverId };
+        });
+
+        const payload = JSON.stringify({
+          name: data.name,
+          baseUnit: data.baseUnit,
+          stockCheckUnit: data.stockCheckUnit ?? null,
+          minThreshold: data.minThreshold ?? 0,
+          density: data.density ?? 1,
+          type: "semi_product",
+          isBatchItem: true,
+          batchYieldQty: data.batchYieldQty,
+          batchYieldUnit: data.batchYieldUnit,
+          components: remappedComponents,
+          itemType: data.itemType ?? "STOCK",
+          trackingMode: data.trackingMode ?? "STRICT",
+          allowableVariance: data.allowableVariance ?? 0,
+          shelfLifeDays: data.shelfLifeDays ?? null,
+        });
+
+        let result: any;
+        if (isNew) {
+          result = await apiFetch<any>("/ingredients", { method: "POST", body: payload });
+        } else {
+          try {
+            result = await apiFetch<any>(`/ingredients/${data.id}`, { method: "PATCH", body: payload });
+          } catch (patchErr: any) {
+            if (!patchErr.message?.includes("404")) throw patchErr;
+            // Local UUID not recognised by server. Try POST first.
+            try {
+              result = await apiFetch<any>("/ingredients", { method: "POST", body: payload });
+            } catch (postErr: any) {
+              // Duplicate name → ingredient exists on server with a different ID.
+              // Find the server's UUID from local_ingredients (written during last pull) and PATCH it.
+              if (postErr.message?.includes("500") || postErr.message?.includes("409")) {
+                const serverId = resolveServerId(data.id ?? "", data.name);
+                if (!serverId || serverId === data.id) throw postErr; // still the same stale ID — give up
+                result = await apiFetch<any>(`/ingredients/${serverId}`, { method: "PATCH", body: payload });
+              } else {
+                throw postErr;
+              }
+            }
+          }
+        }
+
+        // Post-save pull: invalidate again so fresh data is fetched after save
+        invalidatePullCache();
+        await pullIngredients();
+
+        return { success: true, data: result };
+      } catch (err: any) {
+        console.error("[Ingredients] saveWithComponents error:", err);
+        return { success: false, error: err.message };
+      }
+    },
+  );
+
+  // Get batch components for an ingredient (from backend, OWNER only)
+  ipcMain.handle("ingredients:getComponents", async (_event, ingredientId: string) => {
+    try {
+      const result = await apiFetch<any>(`/ingredients/${ingredientId}/components`);
+      return { success: true, data: result };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
 
   // Get pending sync logs
   ipcMain.handle("db:getPendingLogs", () => {
@@ -770,179 +1028,159 @@ export function registerDatabaseIPC(): void {
   ipcMain.handle(
     "db:getInventoryLogs",
     async (_event, input: number | { limit?: number; days?: number } = 50) => {
-      // 1. Try fetching from Cloud (Supabase) if authenticated
-      if (authClient) {
-        try {
-          // Determine parameters
-          const limit = typeof input === "object" ? input.limit || 50 : input;
-          const days = typeof input === "object" ? input.days : undefined;
+      const mapBackendLogs = (backendLogs: any[]) => {
+        const normalised = backendLogs.map((log: any) => ({
+          ...log,
+          staff_note: log.staffNote,
+          ai_parsed_json: log.aiParsedJson,
+          quantity_change_base: log.quantityChangeBase,
+          created_at: log.createdAt,
+          profiles: { full_name: log.createdBy?.fullName ?? "Unknown" },
+        }));
+        return normalised.map((log: any) => {
+          // Extract details from ai_parsed_json if staff_note is empty
+          let details = log.staff_note || "";
+          if (!details && log.ai_parsed_json) {
+            try {
+              const parsed =
+                typeof log.ai_parsed_json === "string"
+                  ? JSON.parse(log.ai_parsed_json)
+                  : log.ai_parsed_json;
 
-          let query = authClient
-            .from("inventory_logs")
-            .select(
-              `
-              id,
-              type,
-              staff_note,
-              ai_parsed_json,
-              quantity_change_base,
-              created_at,
-              created_by,
-              profiles:created_by ( full_name )
-            `,
-            )
-            .eq("business_id", currentBusinessId) // Ensure RLS
-            .order("created_at", { ascending: false })
-            .limit(limit);
+              // Build details string with reason + items
+              const parts: string[] = [];
 
-          // Apply Date Filter if days provided
-          if (days && days > 0) {
-            const cutoffDate = new Date();
-            cutoffDate.setDate(cutoffDate.getDate() - days);
-            query = query.gte("created_at", cutoffDate.toISOString());
-            console.log(
-              "[Database] Filtering cloud logs after:",
-              cutoffDate.toISOString(),
-            );
-          }
+              // Add reason label if exists (e.g., "Vỡ/Hỏng", "Cho mượn")
+              if (parsed.reason_label) parts.push(parsed.reason_label);
+              else if (parsed.notes) parts.push(parsed.notes);
 
-          const { data, error } = await query;
+              // SPECIAL HANDLING FOR SALES: Show summary instead of item list
+              if (log.type === "SALES" && parsed.items?.length) {
+                const totalItems = parsed.items.reduce(
+                  (sum: number, i: any) => sum + (i.quantity || 1),
+                  0,
+                );
+                const totalRevenue =
+                  parsed.total_revenue ||
+                  parsed.items.reduce(
+                    (sum: number, i: any) =>
+                      sum + (i.unit_cost || 0) * (i.quantity || 1),
+                    0,
+                  );
 
-          if (error) {
-            console.error("[Database] Failed to fetch cloud logs:", error);
-            // Fall through to local fallback
-          } else if (data && data.length > 0) {
-            // Return cloud data only if we have results
-            console.log("[Database] Cloud inventory_logs count:", data.length);
-            return data.map((log: any) => {
-              // Extract details from ai_parsed_json if staff_note is empty
-              let details = log.staff_note || "";
-              if (!details && log.ai_parsed_json) {
-                try {
-                  const parsed =
-                    typeof log.ai_parsed_json === "string"
-                      ? JSON.parse(log.ai_parsed_json)
-                      : log.ai_parsed_json;
-
-                  // Build details string with reason + items
-                  const parts: string[] = [];
-
-                  // Add reason label if exists (e.g., "Vỡ/Hỏng", "Cho mượn")
-                  if (parsed.reason_label) parts.push(parsed.reason_label);
-                  else if (parsed.notes) parts.push(parsed.notes);
-
-                  // SPECIAL HANDLING FOR SALES: Show summary instead of item list
-                  if (log.type === "SALES" && parsed.items?.length) {
-                    const totalItems = parsed.items.reduce(
-                      (sum: number, i: any) => sum + (i.quantity || 1),
-                      0,
-                    );
-                    const totalRevenue =
-                      parsed.total_revenue ||
-                      parsed.items.reduce(
-                        (sum: number, i: any) =>
-                          sum + (i.unit_cost || 0) * (i.quantity || 1),
-                        0,
-                      );
-
-                    let summary = `${totalItems} món`;
-                    if (totalRevenue > 0) {
-                      summary += `, ${totalRevenue.toLocaleString("vi-VN")}đ`;
-                    }
-                    parts.push(summary);
-                  } else if (parsed.items?.length) {
-                    // Default: Add item names for non-SALES logs
-                    const itemNames = parsed.items
-                      .slice(0, 3)
-                      .map((i: any) => {
-                        const name =
-                          i.ingredient_name ||
-                          i.name ||
-                          i.rawName ||
-                          i.original_name ||
-                          "";
-                        const qty = i.quantity ? `: ${i.quantity}` : "";
-                        return name + qty;
-                      })
-                      .filter(Boolean)
-                      .join(", ");
-                    if (itemNames) parts.push(itemNames);
-                    if (parsed.items.length > 3)
-                      parts.push(`(+${parsed.items.length - 3} khác)`);
-                  }
-
-                  details = parts.join(" - ");
-                } catch {}
-              }
-
-              // Generate proper action label for STOCK logs
-              let actionLabel = log.type || "UNKNOWN";
-              if (log.type === "SALES") {
-                actionLabel = "Kết ca";
-              } else if (log.type === "STOCK" || log.type === "STOCK_CHECK") {
-                // Parse check_type and location from ai_parsed_json
-                try {
-                  const parsedAction =
-                    typeof log.ai_parsed_json === "string"
-                      ? JSON.parse(log.ai_parsed_json)
-                      : log.ai_parsed_json;
-                  const checkType = parsedAction?.check_type;
-                  const location = parsedAction?.location;
-
-                  if (location === "BAR" || checkType === "BAR") {
-                    actionLabel = "Kiểm quầy bar";
-                  } else if (checkType === "FULL" || checkType === "STORAGE") {
-                    actionLabel = "Kiểm kho toàn phần";
-                  } else if (checkType === "SPOT") {
-                    actionLabel = "Kiểm kho 1 phần";
-                  } else {
-                    actionLabel = "Kiểm kho";
-                  }
-                } catch {
-                  actionLabel = "Kiểm kho";
+                let summary = `${totalItems} món`;
+                if (totalRevenue > 0) {
+                  summary += `, ${totalRevenue.toLocaleString("vi-VN")}đ`;
                 }
-              } else if (log.type === "IMPORT") {
-                actionLabel = "Nhập hàng";
-              } else if (log.type === "WASTE") {
-                actionLabel = "Hủy/Hao hụt";
-              } else if (log.type === "LENT") {
-                actionLabel = "Cho mượn";
-              } else if (log.type === "TRANSFER") {
-                actionLabel = "Chuyển kho";
+                parts.push(summary);
+              } else if (parsed.items?.length) {
+                // Default: Add item names for non-SALES logs
+                const itemNames = parsed.items
+                  .slice(0, 3)
+                  .map((i: any) => {
+                    const name =
+                      i.ingredient_name ||
+                      i.name ||
+                      i.rawName ||
+                      i.original_name ||
+                      "";
+                    const qty = i.quantity ? `: ${i.quantity}` : "";
+                    return name + qty;
+                  })
+                  .filter(Boolean)
+                  .join(", ");
+                if (itemNames) parts.push(itemNames);
+                if (parsed.items.length > 3)
+                  parts.push(`(+${parsed.items.length - 3} khác)`);
               }
 
-              return {
-                id: log.id,
-                created_at: log.created_at,
-                action: actionLabel,
-                staff_name: log.profiles?.full_name || "Unknown Staff",
-                details: details || "Không có chi tiết",
-                quantity_change: log.quantity_change_base,
-                // Pass raw items for STOCK/IMPORT logs to enable dropdown expansion
-                items:
-                  (log.type === "STOCK" || log.type === "IMPORT") &&
-                  log.ai_parsed_json
-                    ? (() => {
-                        try {
-                          const p =
-                            typeof log.ai_parsed_json === "string"
-                              ? JSON.parse(log.ai_parsed_json)
-                              : log.ai_parsed_json;
-                          return p.items || [];
-                        } catch {
-                          return [];
-                        }
-                      })()
-                    : undefined,
-              };
-            });
+              details = parts.join(" - ");
+            } catch {}
           }
-          // Cloud returned empty, fall through to local
+
+          // Generate proper action label for STOCK logs
+          let actionLabel = log.type || "UNKNOWN";
+          if (log.type === "SALES") {
+            actionLabel = "Kết ca";
+          } else if (log.type === "STOCK" || log.type === "STOCK_CHECK") {
+            // Parse check_type and location from ai_parsed_json
+            try {
+              const parsedAction =
+                typeof log.ai_parsed_json === "string"
+                  ? JSON.parse(log.ai_parsed_json)
+                  : log.ai_parsed_json;
+              const checkType = parsedAction?.check_type;
+              const location = parsedAction?.location;
+
+              if (location === "BAR" || checkType === "BAR") {
+                actionLabel = "Kiểm quầy bar";
+              } else if (checkType === "FULL" || checkType === "STORAGE") {
+                actionLabel = "Kiểm kho toàn phần";
+              } else if (checkType === "SPOT") {
+                actionLabel = "Kiểm kho 1 phần";
+              } else {
+                actionLabel = "Kiểm kho";
+              }
+            } catch {
+              actionLabel = "Kiểm kho";
+            }
+          } else if (log.type === "IMPORT") {
+            actionLabel = "Nhập hàng";
+          } else if (log.type === "WASTE") {
+            actionLabel = "Hủy/Hao hụt";
+          } else if (log.type === "LENT") {
+            actionLabel = "Cho mượn";
+          } else if (log.type === "TRANSFER") {
+            actionLabel = "Chuyển kho";
+          }
+
+          return {
+            id: log.id,
+            created_at: log.created_at,
+            action: actionLabel,
+            staff_name: log.profiles?.full_name || "Unknown Staff",
+            details: details || "Không có chi tiết",
+            quantity_change: log.quantity_change_base,
+            // Pass raw items for STOCK/IMPORT logs to enable dropdown expansion
+            items:
+              (log.type === "STOCK" || log.type === "IMPORT") &&
+              log.ai_parsed_json
+                ? (() => {
+                    try {
+                      const p =
+                        typeof log.ai_parsed_json === "string"
+                          ? JSON.parse(log.ai_parsed_json)
+                          : log.ai_parsed_json;
+                      return p.items || [];
+                    } catch {
+                      return [];
+                    }
+                  })()
+                : undefined,
+          };
+        });
+      };
+
+      // 1. Try fetching from Backend API if authenticated
+      try {
+        const limit = typeof input === "object" ? input.limit || 50 : input;
+        const days = typeof input === "object" ? input.days : undefined;
+
+        const params = new URLSearchParams({ limit: String(limit) });
+        if (days && days > 0) params.set("days", String(days));
+
+        const data = await apiFetch<any[]>(`/inventory/logs?${params}`);
+
+        if (data && data.length > 0) {
+          console.log("[Database] Backend inventory logs count:", data.length);
+          return mapBackendLogs(data);
+        }
+
+        // Backend returned empty, fall through to local
         } catch (err) {
-          console.error("[Database] Cloud log fetch exception:", err);
+          console.error("[Database] Backend log fetch exception:", err);
           // Fall through to local fallback
         }
-      }
 
       // 2. Fallback: Read from local pending_sync_logs
       const database = getDatabase();
@@ -1077,51 +1315,31 @@ export function registerDatabaseIPC(): void {
     }
   });
 
-  // Export Full Log History from Cloud (Owner Only)
+  // Export Full Log History from Backend (Owner Only)
   ipcMain.handle(
     "export:inventoryLogsHistory",
     async (_event, options?: { startDate?: string; endDate?: string }) => {
-      if (!authClient || !currentBusinessId) {
-        return { success: false, error: "Not authenticated" };
-      }
-
       try {
-        console.log("[Database] Fetching full log history from Cloud...");
+        console.log("[Database] Fetching full log history from Backend...");
 
-        let query = authClient
-          .from("inventory_logs")
-          .select(
-            `
-            id,
-            type,
-            staff_note,
-            ai_parsed_json,
-            quantity_change_base,
-            created_at,
-            created_by,
-            profiles:created_by ( full_name )
-          `,
-          )
-          .eq("business_id", currentBusinessId)
-          .order("created_at", { ascending: false });
+        const params = new URLSearchParams({ limit: "500" });
+        if (options?.startDate) params.set("startDate", options.startDate);
+        if (options?.endDate) params.set("endDate", options.endDate);
 
-        // Apply date filters if provided
-        if (options?.startDate) {
-          query = query.gte("created_at", options.startDate);
-        }
-        if (options?.endDate) {
-          query = query.lte("created_at", options.endDate);
-        }
+        const raw = await apiFetch<any[]>(`/inventory/logs?${params}`);
 
-        const { data, error } = await query;
-
-        if (error) {
-          console.error("[Database] Failed to fetch cloud logs:", error);
-          return { success: false, error: error.message };
-        }
+        // Normalise camelCase → snake_case for the transform below
+        const data = (raw || []).map((log: any) => ({
+          ...log,
+          staff_note: log.staffNote,
+          ai_parsed_json: log.aiParsedJson,
+          quantity_change_base: log.quantityChangeBase,
+          created_at: log.createdAt,
+          profiles: { full_name: log.createdBy?.fullName ?? "Unknown" },
+        }));
 
         // Transform for export
-        const exportData = (data || []).map((log: any, idx: number) => {
+        const exportData = data.map((log: any, idx: number) => {
           let details = log.staff_note || "";
           let totalQty = log.quantity_change_base || 0;
 
@@ -1185,23 +1403,32 @@ export function registerDatabaseIPC(): void {
   ipcMain.handle("db:getCOGSReport", () => {
     const database = getDatabase();
 
-    // Get summary data (exclude archived, use min_threshold for low stock)
-    const summaryRow = database
+    // Get summary data (exclude archived, use base-unit quantities for valuation)
+    const summaryIngredients = database
       .prepare(
         `
-        SELECT 
-          COUNT(*) as itemCount,
-          SUM((warehouse_qty + bar_qty) * unit_cost) as totalValue,
-          SUM(CASE WHEN (warehouse_qty + bar_qty) < min_threshold AND min_threshold > 0 THEN 1 ELSE 0 END) as lowStockCount
+        SELECT base_unit, stock_check_unit, warehouse_qty, bar_qty, unit_cost,
+               min_threshold, density, unit_weight, unit_weight_unit
         FROM local_ingredients
         WHERE archived != 1 OR archived IS NULL
       `,
       )
-      .get() as {
-      itemCount: number;
-      totalValue: number;
-      lowStockCount: number;
-    };
+      .all() as InventoryValuationRow[];
+
+    const summaryRow = summaryIngredients.reduce(
+      (acc, item) => {
+        const { totalQtyInBase } = getInventoryQuantitiesInBase(item);
+        const threshold = Number(item.min_threshold ?? 0);
+
+        acc.itemCount += 1;
+        acc.totalValue += calculateInventoryItemValue(item);
+        if (threshold > 0 && totalQtyInBase < threshold) {
+          acc.lowStockCount += 1;
+        }
+        return acc;
+      },
+      { itemCount: 0, totalValue: 0, lowStockCount: 0 },
+    );
 
     // Get monthly data from daily_inventory_stats (real data, not mock!)
     const monthlyData = database
@@ -1220,28 +1447,39 @@ export function registerDatabaseIPC(): void {
 
     // Format for chart (reverse to show oldest first)
     const months = monthlyData.reverse().map((row) => ({
-      name: new Date(row.date).toLocaleDateString("vi-VN", { month: "short" }),
+      month: new Date(row.date).toLocaleDateString("vi-VN", { month: "short" }),
       warehouse: row.warehouse,
       bar: row.bar,
     }));
 
     // If no historical data yet, use current values
     if (months.length === 0) {
-      const currentWarehouse = database
+      const currentIngredients = database
         .prepare(
-          "SELECT SUM(warehouse_qty * unit_cost) as val FROM local_ingredients",
+          `SELECT base_unit, stock_check_unit, warehouse_qty, bar_qty,
+                  unit_cost, density, unit_weight, unit_weight_unit
+           FROM local_ingredients
+           WHERE archived != 1 OR archived IS NULL`,
         )
-        .get() as { val: number };
-      const currentBar = database
-        .prepare(
-          "SELECT SUM(bar_qty * unit_cost) as val FROM local_ingredients",
-        )
-        .get() as { val: number };
+        .all() as InventoryValuationRow[];
+
+      const currentValues = currentIngredients.reduce(
+        (acc, item) => {
+          const { warehouseQtyInBase, barQtyInBase } =
+            getInventoryQuantitiesInBase(item);
+          const unitCost = Number(item.unit_cost ?? 0);
+
+          acc.warehouse += warehouseQtyInBase * unitCost;
+          acc.bar += barQtyInBase * unitCost;
+          return acc;
+        },
+        { warehouse: 0, bar: 0 },
+      );
 
       months.push({
-        name: new Date().toLocaleDateString("vi-VN", { month: "short" }),
-        warehouse: currentWarehouse?.val || 0,
-        bar: currentBar?.val || 0,
+        month: new Date().toLocaleDateString("vi-VN", { month: "short" }),
+        warehouse: currentValues.warehouse,
+        bar: currentValues.bar,
       });
     }
 
@@ -1264,61 +1502,17 @@ export function registerDatabaseIPC(): void {
   });
 
   // ==================== WEEK 2: STAFF MANAGEMENT ====================
-  // FIXED: Fetch from Supabase Cloud (staff profiles created via invite-join Edge Function)
   ipcMain.handle("db:getStaffProfiles", async () => {
     try {
-      if (!authClient) {
-        console.error("[Database] No Supabase client for staff profiles");
-        return [];
-      }
-
-      // Get current user from auth
-      const {
-        data: { user },
-        error: authError,
-      } = await authClient.auth.getUser();
-      if (authError || !user) {
-        console.error("[Database] No authenticated user:", authError?.message);
-        return [];
-      }
-
-      // Get current user's business_id
-      const { data: currentProfile, error: profileError } = await authClient
-        .from("profiles")
-        .select("business_id")
-        .eq("id", user.id)
-        .single();
-
-      if (profileError) {
-        console.error("[Database] Profile query error:", profileError);
-        return [];
-      }
-
-      if (!currentProfile?.business_id) {
-        console.error("[Database] No business_id found for current user");
-        return [];
-      }
-
-      // Fetch all staff profiles for this business from Cloud
-      const { data: staffProfiles, error } = await authClient
-        .from("profiles")
-        .select(
-          "id, business_id, role, status, full_name, phone_number, created_at",
-        )
-        .eq("business_id", currentProfile.business_id)
-        .neq("role", "OWNER") // Exclude owner, get STAFF only
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        console.error("[Database] Fetch staff profiles error:", error);
-        return [];
-      }
-
-      console.log(
-        "[Database] Fetched staff profiles from Cloud:",
-        staffProfiles?.length,
-      );
-      return staffProfiles || [];
+      const staff = await apiFetch<any[]>("/profiles/staff");
+      // Normalise camelCase → snake_case for renderer compatibility
+      return (staff || []).map((p: any) => ({
+        ...p,
+        full_name: p.fullName,
+        phone_number: p.phoneNumber,
+        business_id: p.businessId,
+        created_at: p.createdAt,
+      }));
     } catch (err: any) {
       console.error("[Database] getStaffProfiles error:", err);
       return [];
@@ -1407,9 +1601,9 @@ export function registerDatabaseIPC(): void {
         database
           .prepare(
             `
-          INSERT OR REPLACE INTO local_recipes 
-          (id, business_id, name, price, category, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, 1, COALESCE((SELECT created_at FROM local_recipes WHERE id = ?), datetime('now')), datetime('now'))
+          INSERT OR REPLACE INTO local_recipes
+          (id, business_id, name, price, category, is_active, is_dirty, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 1, 1, COALESCE((SELECT created_at FROM local_recipes WHERE id = ?), datetime('now')), datetime('now'))
         `,
           )
           .run(
@@ -1461,8 +1655,8 @@ export function registerDatabaseIPC(): void {
 
         // Insert new ingredients
         const insertIngStmt = database.prepare(`
-          INSERT INTO local_recipe_ingredients (id, recipe_id, ingredient_id, quantity, unit)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO local_recipe_ingredients (id, recipe_id, ingredient_id, quantity, unit, is_dirty)
+          VALUES (?, ?, ?, ?, ?, 1)
         `);
 
         for (const ing of recipe.ingredients || []) {
@@ -1487,7 +1681,7 @@ export function registerDatabaseIPC(): void {
   ipcMain.handle("db:deleteRecipe", (_event, recipeId: string) => {
     const database = getDatabase();
     database
-      .prepare("UPDATE local_recipes SET is_active = 0 WHERE id = ?")
+      .prepare("UPDATE local_recipes SET is_active = 0, is_dirty = 1 WHERE id = ?")
       .run(recipeId);
 
     // Also queue for sync (Use UPSERT with is_active=false for soft delete)
@@ -1511,23 +1705,61 @@ export function registerDatabaseIPC(): void {
   // Delete ingredient (soft delete using archived flag)
   ipcMain.handle("db:deleteIngredient", (_event, ingredientId: string) => {
     const database = getDatabase();
-    database
-      .prepare("UPDATE local_ingredients SET archived = 1 WHERE id = ?")
-      .run(ingredientId);
+    const usedAsComponent = database
+      .prepare(
+        `SELECT parent.name
+         FROM local_ingredient_components comp
+         JOIN local_ingredients parent ON parent.id = comp.parent_id
+         WHERE comp.child_id = ?
+           AND (parent.archived != 1 OR parent.archived IS NULL)
+         LIMIT 1`,
+      )
+      .get(ingredientId) as { name: string } | undefined;
 
-    // Also queue for sync (Use UPSERT with archived=true for soft delete consistency)
-    const queueStmt = database.prepare(
-      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)",
-    );
-    queueStmt.run(
-      "UPSERT",
-      "ingredients",
-      JSON.stringify({
-        id: ingredientId,
-        archived: true,
-        updated_at: new Date().toISOString(),
-      }),
-    );
+    if (usedAsComponent) {
+      return {
+        success: false,
+        error: `Không thể xóa: nguyên liệu này đang là thành phần của bán thành phẩm "${usedAsComponent.name}"`,
+      };
+    }
+
+    const usedInRecipe = database
+      .prepare(
+        `SELECT r.name
+         FROM local_recipe_ingredients ri
+         JOIN local_recipes r ON r.id = ri.recipe_id
+         WHERE ri.ingredient_id = ?
+           AND (r.is_active != 0 OR r.is_active IS NULL)
+         LIMIT 1`,
+      )
+      .get(ingredientId) as { name: string } | undefined;
+
+    if (usedInRecipe) {
+      return {
+        success: false,
+        error: `Không thể xóa: nguyên liệu này đang được dùng trong công thức "${usedInRecipe.name}"`,
+      };
+    }
+
+    const transaction = database.transaction(() => {
+      database
+        .prepare("UPDATE local_ingredients SET archived = 1 WHERE id = ?")
+        .run(ingredientId);
+
+      const queueStmt = database.prepare(
+        "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)",
+      );
+      queueStmt.run(
+        "DELETE",
+        "ingredients",
+        JSON.stringify({
+          id: ingredientId,
+          updated_at: new Date().toISOString(),
+        }),
+      );
+    });
+
+    transaction();
 
     console.log("[Database] Ingredient archived:", ingredientId);
     return { success: true };
@@ -1536,23 +1768,25 @@ export function registerDatabaseIPC(): void {
   // Restore ingredient
   ipcMain.handle("db:restoreIngredient", (_event, ingredientId: string) => {
     const database = getDatabase();
-    database
-      .prepare("UPDATE local_ingredients SET archived = 0 WHERE id = ?")
-      .run(ingredientId);
+    const transaction = database.transaction(() => {
+      database
+        .prepare("UPDATE local_ingredients SET archived = 0 WHERE id = ?")
+        .run(ingredientId);
 
-    // Queue sync
-    const queueStmt = database.prepare(
-      "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)",
-    );
-    queueStmt.run(
-      "UPSERT",
-      "ingredients",
-      JSON.stringify({
-        id: ingredientId,
-        archived: false,
-        updated_at: new Date().toISOString(),
-      }),
-    );
+      const queueStmt = database.prepare(
+        "INSERT INTO local_sync_queue (action, table_name, payload) VALUES (?, ?, ?)",
+      );
+      queueStmt.run(
+        "RESTORE",
+        "ingredients",
+        JSON.stringify({
+          id: ingredientId,
+          updated_at: new Date().toISOString(),
+        }),
+      );
+    });
+
+    transaction();
 
     console.log("[Database] Ingredient restored:", ingredientId);
     return { success: true };
@@ -1562,7 +1796,7 @@ export function registerDatabaseIPC(): void {
   ipcMain.handle("db:restoreRecipe", (_event, recipeId: string) => {
     const database = getDatabase();
     database
-      .prepare("UPDATE local_recipes SET is_active = 1 WHERE id = ?")
+      .prepare("UPDATE local_recipes SET is_active = 1, is_dirty = 1 WHERE id = ?")
       .run(recipeId);
 
     // Queue sync
@@ -1581,6 +1815,23 @@ export function registerDatabaseIPC(): void {
 
     console.log("[Database] Recipe restored:", recipeId);
     return { success: true };
+  });
+
+  // Reports — proxy to backend API
+  ipcMain.handle("reports:get", async (_event, endpoint: string) => {
+    try {
+      return await apiFetch(endpoint);
+    } catch (err) {
+      if (
+        err instanceof ApiFetchError &&
+        err.status === 403 &&
+        endpoint.startsWith("/inventory/transfers")
+      ) {
+        console.warn(`[Reports] Feature locked, skipped: ${endpoint}`);
+        return [];
+      }
+      throw err;
+    }
   });
 
   console.log("[Database] IPC handlers registered");

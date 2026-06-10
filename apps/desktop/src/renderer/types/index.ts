@@ -7,15 +7,38 @@ export interface User {
   created_at?: string;
 }
 
+export interface StockLevel {
+  id: string;
+  ingredient_id: string;
+  area_id: string;
+  quantity: number;
+  last_counted_at?: string | null;
+}
+
+export interface StorageArea {
+  id: string;
+  business_id: string;
+  name: string;
+  type: "STORAGE" | "SERVICE";
+  is_default: number;
+  is_active: number;
+}
+
 export interface Ingredient {
   id: string;
   name: string;
   base_unit: string;
+  stock_check_unit?: string | null;
   warehouse_qty: number;
   bar_qty: number;
   unit_cost: number;
+  density?: number | null;
+  unit_weight?: number | null;
+  unit_weight_unit?: string | null;
   min_threshold?: number;
-  type?: "raw_material" | "supply" | "semi_product";
+  type?: "raw_material" | "supply" | "semi_product" | "resale_item";
+  shelf_life_days?: number | null;
+  stock_levels?: StockLevel[];
 }
 
 export interface PendingLog {
@@ -28,6 +51,7 @@ export interface SyncStatus {
   pending: number;
   lastSync: string | null;
   syncing: boolean;
+  lastError: string | null;
 }
 
 export interface ToastMessage {

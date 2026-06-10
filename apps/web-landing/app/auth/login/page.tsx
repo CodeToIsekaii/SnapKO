@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
+import { apiFetch, loginMobile } from "@/lib/backendClient";
 import { FaGoogle } from "react-icons/fa";
 
 /**
@@ -45,25 +46,30 @@ export default function LoginPage() {
       }
 
       if (data.session) {
-        console.log("AUTH: Session found, checking profile...");
-        // Check role and redirect
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("role")
-          .eq("id", data.session.user.id)
-          .single();
+        console.log("AUTH: Session found, exchanging for backend tokens...");
 
-        if (profileError) {
-          console.error("AUTH: Profile error:", profileError);
+        // Exchange Supabase token for BE-SnapKO JWTs
+        try {
+          await loginMobile(data.session.access_token);
+        } catch (exchangeErr) {
+          console.error("AUTH: login-mobile exchange failed:", exchangeErr);
+          throw new Error("Không thể kết nối tới máy chủ, vui lòng thử lại");
         }
 
-        console.log("AUTH: Profile data:", profile);
+        // Fetch profile from backend
+        let role: string | null = null;
+        try {
+          const profile = await apiFetch<{ role: string }>("/profiles/me");
+          role = profile?.role ?? null;
+        } catch (profileErr) {
+          console.error("AUTH: Backend profile fetch failed:", profileErr);
+        }
 
-        if (profile?.role === "ADMIN") {
-          console.log("AUTH: Redirecting to /admin");
+        console.log("AUTH: Profile role:", role);
+
+        if (role === "ADMIN") {
           router.push("/admin");
         } else {
-          console.log("AUTH: Redirecting to /dashboard");
           router.push("/dashboard");
         }
       }

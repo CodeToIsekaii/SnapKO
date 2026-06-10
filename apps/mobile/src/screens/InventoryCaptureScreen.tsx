@@ -3,7 +3,7 @@
  * Features: Camera, Compress <1MB, AI parse, Confidence highlighting, Autocomplete dropdown
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -22,23 +22,44 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker, {
+  type DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
-import { File } from "expo-file-system";
+import { Directory, File, Paths } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import * as Crypto from "expo-crypto";
-import { supabase } from "../lib/supabase";
-import { Env } from "../env";
-import { calculateNetVolume, convertToIngredientBase } from "@snapko/shared";
+import {
+  calculateNetVolume,
+  canConvert,
+  convertToIngredientBase,
+  getUnitGroup,
+  isCrossFamilyConversion,
+} from "@snapko/shared";
 import { getDB } from "../db";
 // processSyncQueue removed - use syncPendingLogs only to avoid duplicate sync
 import { syncPendingLogs } from "../sync/syncEngine";
+import {
+  parseInvoiceMultiWithAI,
+  parseSalesMultiWithAI,
+  parseHandwritingMultiWithAI,
+  QuotaExceededError,
+  type ParsedHandwritingItem,
+  type AiQualityMode,
+} from "../services/aiService";
+import { QuotaModal } from "../features/ads/QuotaModal";
 import {
   VarianceModal,
   SurplusBottomSheet,
   VarianceReason,
 } from "../components";
 import { InventoryService } from "../features/inventory/services/inventory.service";
+import {
+  incrementStockLevel,
+  resolveLocalAreaByLocation,
+  upsertStockLevel,
+} from "../db/stockLevelHelper";
 import { useInventoryModel } from "../contexts/InventoryModelContext";
 import { useTodayIncoming } from "../hooks/useTodayIncoming";
 import { IncomingLogCard } from "../components/IncomingLogCard";
@@ -46,22 +67,114 @@ import { StorageArea, CheckMode } from "../components/AreaSelectorModal";
 import { DocumentCameraModal } from "../components/DocumentCameraModal";
 import { SalesCameraModal } from "../components/SalesCameraModal";
 import { calculateAllTheoreticalBarStock } from "../features/inventory/services/theoreticalStock";
+import {
+  checkSalesPrerequisite,
+  type SalesGuardScope,
+} from "../features/inventory/services/salesPrerequisite.service";
+import {
+  getProRebaselineState,
+  markProRebaselineBarDone,
+  markProRebaselineWarehouseDone,
+  type ProRebaselineState,
+} from "../utils/proRebaseline";
 
-const CONFIDENCE_THRESHOLD = 85;
+const CONFIDENCE_THRESHOLD = 0.85; // Backend returns 0-1 decimal
+const CAPTURE_IMAGES_DIR = "pending_images";
+
+function getCaptureImagesDirectory(): Directory {
+  return new Directory(Paths.document, CAPTURE_IMAGES_DIR);
+}
+
+function ensureCaptureImagesDirectory(): Directory {
+  const dir = getCaptureImagesDirectory();
+  if (!dir.exists) {
+    dir.create();
+  }
+  return dir;
+}
+
+function formatImageError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+const IMAGE_READABLE_ERROR =
+  "Không đọc được ảnh này. Bạn thử chụp lại hoặc chọn ảnh khác nhé.";
+
+function isPendingCaptureUri(uri: string): boolean {
+  return uri.includes(`/${CAPTURE_IMAGES_DIR}/`);
+}
+
+async function copyImageIntoAppStorage(
+  uri: string,
+  prefix: string,
+): Promise<string> {
+  const dir = ensureCaptureImagesDirectory();
+  const fileName = `${prefix}_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2)}.jpg`;
+  const source = new File(uri);
+  const dest = new File(dir, fileName);
+  source.copy(dest);
+  return dest.uri;
+}
+
+async function persistImageForCapture(
+  uri: string,
+  prefix: string,
+): Promise<string> {
+  const savedUri = await copyImageIntoAppStorage(uri, prefix);
+  const savedFile = new File(savedUri);
+  if (!savedFile.exists) {
+    throw new Error("Ảnh đã copy nhưng file đích không tồn tại.");
+  }
+  return savedUri;
+}
+
+function assertReadableImageUri(uri: string): void {
+  const file = new File(uri);
+  if (!file.exists) {
+    throw new Error(`Ảnh không còn tồn tại: ${uri}`);
+  }
+}
+
+function deleteLocalImageBestEffort(uri: string | null | undefined): void {
+  if (!uri) return;
+  try {
+    const file = new File(uri);
+    if (file.exists) file.delete();
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
 
 // Types
 interface AiRawItem {
   ingredient_name: string;
+  raw_name?: string;
   stock_qty: number;
   import_qty: number;
   unit?: string;
   confidence: number;
   needs_review?: boolean;
+  raw_text?: string;
+  original_name?: string;
+  source_page?: number;
+  review_reason?: string;
   unit_cost?: number | null; // For IMPORT mode - extracted from invoice
   // New fields from backend (Fuzzy Matching)
   ingredient_id?: string;
   linkedIngredientId?: string;
+  recipe_id?: string;
+  matched_recipe_name?: string | null;
   stt?: string | number;
+  // SALES extras (for revenue cross-check + order preservation)
+  row_index?: number;
+  total_revenue?: number | null;
+  expected_revenue?: number | null;
+  revenue_deviation?: number | null;
+  recipe_price?: number | null;
+  internal_inconsistent?: boolean;
+  menu_price_differs?: boolean;
 }
 
 interface AiMappedItem {
@@ -72,7 +185,24 @@ interface AiMappedItem {
   unitCost: number | null;
   linkedIngredientId: string | null;
   linkedIngredientName: string | null;
+  recipeId?: string | null;
   isNewIngredient: boolean;
+  // SALES extras
+  rowIndex?: number;
+  totalRevenue?: number | null;
+  expectedRevenue?: number | null;
+  revenueDeviation?: number | null;
+  recipePrice?: number | null;
+  internalInconsistent?: boolean;
+  menuPriceDiffers?: boolean;
+  stt?: string | number;
+  rawText?: string;
+  originalName?: string;
+  sourcePage?: number;
+  reviewReason?: string;
+  expiryDate?: string | null;
+  expirySource?: "AUTO_SHELF_LIFE" | "MANUAL" | null;
+  shelfLifeDaysSnapshot?: number | null;
 }
 
 interface LocalIngredient {
@@ -80,19 +210,25 @@ interface LocalIngredient {
   name: string;
   aliases: string;
   base_unit: string;
+  stock_check_unit?: string | null;
   unit_cost: number;
   density: number;
   tare_weight: number;
+  unit_weight?: number | null;
+  unit_weight_unit?: string | null;
   warehouse_qty: number;
   bar_qty: number;
   type?: string; // raw_material | supply | semi_product | resale_item
+  shelf_life_days?: number | null;
 }
 
 // Recipe interface for SALES mode linking
 interface LocalRecipe {
   id: string;
   name: string;
+  aliases: string;
   category: string | null;
+  price?: number | null;
 }
 
 interface InventoryCaptureScreenProps {
@@ -110,11 +246,11 @@ function getMatchScore(
   ingName: string,
   aliases: string[],
 ): number {
-  const normalized = aiName.toLowerCase().trim();
-  const name = ingName.toLowerCase();
+  const normalized = normalizeLookup(aiName);
+  const name = normalizeLookup(ingName);
 
   if (name === normalized) return 100;
-  if (aliases.some((a) => a.toLowerCase() === normalized)) return 95;
+  if (aliases.some((a) => normalizeLookup(a) === normalized)) return 95;
 
   // If DB ingredient name is fully contained in AI name, high confidence
   // e.g., "Chunky Vải" in "Mứt Andros Chunky Vải" = 85
@@ -128,6 +264,104 @@ function getMatchScore(
   }
 
   return 0;
+}
+
+function normalizeLookup(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u0111\u0110]/g, "d")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function parseAliases(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((alias): alias is string => typeof alias === "string");
+  }
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((alias): alias is string => typeof alias === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseYyyyMmDd(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function formatDateToYyyyMmDd(date: Date): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatExpiryDisplay(value: string | null | undefined): string {
+  const date = parseYyyyMmDd(value);
+  if (!date) return "Chọn ngày hết hạn";
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function formatStockReviewReason(reason: string | null | undefined): string {
+  switch (reason) {
+    case "UNLINKED_INGREDIENT":
+      return "chưa liên kết nguyên liệu";
+    case "EMPTY_OR_UNREADABLE_QUANTITY":
+      return "chưa đọc được số tồn";
+    case "AI_MARKED_FOR_REVIEW":
+      return "AI đánh dấu cần kiểm tra";
+    default:
+      return reason || "cần kiểm tra";
+  }
+}
+
+function normalizeUnitForConversion(unit: string): string {
+  const normalized = unit.normalize("NFC").trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    gram: "g",
+    grams: "g",
+    gr: "g",
+    kilogram: "kg",
+    kilograms: "kg",
+    liter: "l",
+    liters: "l",
+    litre: "l",
+    litres: "l",
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+function roundInventoryQuantity(value: number): number {
+  return Math.round((value + Number.EPSILON) * 1_000_000) / 1_000_000;
 }
 
 export default function InventoryCaptureScreen({
@@ -148,6 +382,41 @@ export default function InventoryCaptureScreen({
   const [loadingStep, setLoadingStep] = useState<string>(""); // Multi-step loading
   const [items, setItems] = useState<AiMappedItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [quotaExceeded, setQuotaExceeded] = useState<{
+    canWatchAd: boolean;
+    adRewardScans: number;
+    maxAdRewardsPerDay: number;
+  } | null>(null);
+  const [canRetryHighAccuracy, setCanRetryHighAccuracy] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const saveInFlightRef = useRef(false);
+  const stockUnitLearningItemsRef = useRef<AiMappedItem[]>([]);
+  const [salesQtyMismatch, setSalesQtyMismatch] = useState<{ expected: number; got: number; diff: number } | null>(null);
+  const [salesRevenueMismatch, setSalesRevenueMismatch] = useState<{ expected: number; got: number; diff: number } | null>(null);
+  const [salesOrderSuspicious, setSalesOrderSuspicious] = useState<boolean>(false);
+  const [salesRawOcrText, setSalesRawOcrText] = useState<string | null>(null);
+  const [salesReportTotalRevenue, setSalesReportTotalRevenue] = useState<number | null>(null);
+  const [stockRawOcrText, setStockRawOcrText] = useState<string | null>(null);
+  const [stockRawDebugText, setStockRawDebugText] = useState<string | null>(null);
+  const [stockWarnings, setStockWarnings] = useState<string[]>([]);
+  const [stockMissingRows, setStockMissingRows] = useState<number[]>([]);
+  const [stockDuplicateRows, setStockDuplicateRows] = useState<number[]>([]);
+  const [stockUsedRawOcrParser, setStockUsedRawOcrParser] = useState(false);
+  const [showRawOcrModal, setShowRawOcrModal] = useState<boolean>(false);
+
+  const clearSalesCrossCheck = () => {
+    setSalesQtyMismatch(null);
+    setSalesRevenueMismatch(null);
+    setSalesOrderSuspicious(false);
+    setSalesRawOcrText(null);
+    setSalesReportTotalRevenue(null);
+    setStockRawOcrText(null);
+    setStockRawDebugText(null);
+    setStockWarnings([]);
+    setStockMissingRows([]);
+    setStockDuplicateRows([]);
+    setStockUsedRawOcrParser(false);
+  };
   const [snapMode, setSnapMode] = useState<"STOCK" | "IMPORT" | "SALES">(
     initialMode.toUpperCase() as any,
   );
@@ -179,6 +448,10 @@ export default function InventoryCaptureScreen({
   // Dropdown state
   const [activeDropdown, setActiveDropdown] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [expiryPickerTargetIndex, setExpiryPickerTargetIndex] = useState<
+    number | null
+  >(null);
+  const [expiryPickerValue, setExpiryPickerValue] = useState<Date>(new Date());
 
   // Variance/Surplus modal state
   const [showVarianceModal, setShowVarianceModal] = useState(false);
@@ -201,6 +474,11 @@ export default function InventoryCaptureScreen({
     { name: string; surplus: number; unit: string }[]
   >([]);
   const [isFlagged, setIsFlagged] = useState(false); // Perfect Score Trap
+  const [proRebaseline, setProRebaseline] = useState<ProRebaselineState>({
+    required: false,
+    warehouseDone: false,
+    barDone: false,
+  });
   const [showDocumentCamera, setShowDocumentCamera] = useState(false); // Guide frame camera
   const [showSalesCamera, setShowSalesCamera] = useState(false); // Sales grid camera
 
@@ -212,6 +490,22 @@ export default function InventoryCaptureScreen({
       loadAreaId();
     }
   }, [isStandard, currentAreaType]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const db = await getDB();
+        const state = await getProRebaselineState(db);
+        if (mounted) setProRebaseline(state);
+      } catch (err) {
+        console.warn("[Capture] Failed to load rebaseline state:", err);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const loadAreaId = async () => {
     try {
@@ -232,7 +526,7 @@ export default function InventoryCaptureScreen({
     try {
       const db = await getDB();
       const rows = await db.getAllAsync<LocalIngredient>(
-        "SELECT id, name, aliases, base_unit, unit_cost, density, tare_weight, warehouse_qty, bar_qty, type FROM local_ingredients WHERE archived = 0",
+        "SELECT id, name, aliases, base_unit, stock_check_unit, unit_cost, density, tare_weight, unit_weight, unit_weight_unit, warehouse_qty, bar_qty, type, shelf_life_days FROM local_ingredients WHERE archived = 0",
       );
       setIngredients(rows);
     } catch (err) {
@@ -244,7 +538,7 @@ export default function InventoryCaptureScreen({
     try {
       const db = await getDB();
       const rows = await db.getAllAsync<LocalRecipe>(
-        "SELECT id, name, category FROM local_recipes WHERE is_active = 1",
+        "SELECT id, name, aliases, category, price FROM local_recipes WHERE is_active = 1",
       );
       setRecipes(rows);
       console.log(`[Capture] Loaded ${rows.length} recipes`);
@@ -254,41 +548,118 @@ export default function InventoryCaptureScreen({
   };
 
   // Compress image to <1MB and save locally
-  // ImageManipulator already saves to cache, we just use that URI
+  // Input URI is already persisted into app storage when selected/captured.
   const compressAndSaveImage = async (
     uri: string,
   ): Promise<{ base64: string; mimeType: string; savedPath: string }> => {
-    // Resize to 1024px width, compress to 50% quality for multi-image support (~150KB)
-    const manipulated = await ImageManipulator.manipulateAsync(
-      uri,
-      [{ resize: { width: 1024 } }],
-      { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG },
-    );
+    const sourceUri = uri;
 
-    // Read as base64 for AI using new File API
-    const file = new File(manipulated.uri);
-    const base64 = await file.base64();
+    try {
+      const targetWidth = snapMode === "STOCK" ? 1600 : 1024;
+      const jpegQuality = snapMode === "STOCK" ? 0.75 : 0.5;
 
-    // Use manipulated URI as local path (already saved by ImageManipulator)
-    const savedPath = manipulated.uri;
+      const manipulated = await ImageManipulator.manipulateAsync(
+        sourceUri,
+        [{ resize: { width: targetWidth } }],
+        { compress: jpegQuality, format: ImageManipulator.SaveFormat.JPEG },
+      );
+      const savedPath = await copyImageIntoAppStorage(
+        manipulated.uri,
+        "capture",
+      );
+      const file = new File(savedPath);
+      const base64 = await file.base64();
 
-    console.log(`[Capture] Saved compressed image: ${savedPath}`);
-    return { base64, mimeType: "image/jpeg", savedPath };
+      console.log(`[Capture] Saved compressed image: ${savedPath}`);
+      return { base64, mimeType: "image/jpeg", savedPath };
+    } catch (manipulatorError) {
+      console.warn(
+        "[Capture] ImageManipulator failed, falling back to original file:",
+        formatImageError(manipulatorError),
+      );
+
+      try {
+        const file = new File(sourceUri);
+        const base64 = await file.base64();
+        return { base64, mimeType: "image/jpeg", savedPath: sourceUri };
+      } catch (readError) {
+        console.error("[Capture] Could not read image file:", readError);
+        throw new Error(IMAGE_READABLE_ERROR);
+      }
+    }
   };
 
-  /**
-   * Preprocess receipt image placeholder
-   * NOTE: expo-image-manipulator does NOT support grayscale/contrast filters!
-   * It only supports: crop, resize, rotate, flip
-   * For now, just pass through the original image
-   */
-  const preprocessReceipt = async (uri: string): Promise<string> => {
-    // expo-image-manipulator doesn't support color filters
-    // Just return original for now - Vision OCR handles it fine
-    console.log(
-      "[Capture] Skipping preprocess (not supported), using original",
-    );
-    return uri;
+  const appendPersistedImages = async (
+    sourceUris: string[],
+    prefix: string,
+  ): Promise<void> => {
+    const persistedUris: string[] = [];
+    const failedErrors: string[] = [];
+
+    for (const sourceUri of sourceUris) {
+      try {
+        const persistedUri = await persistImageForCapture(sourceUri, prefix);
+        persistedUris.push(persistedUri);
+      } catch (persistError) {
+        failedErrors.push(formatImageError(persistError));
+        console.error(
+          "[Capture] Could not persist selected image:",
+          formatImageError(persistError),
+        );
+      }
+    }
+
+    if (persistedUris.length > 0) {
+      setImageUris((prev) => [...prev, ...persistedUris]);
+      setItems([]);
+      clearSalesCrossCheck();
+      setError(null);
+      setCanRetryHighAccuracy(false);
+      setQuotaExceeded(null);
+    }
+
+    if (failedErrors.length > 0) {
+      setError(IMAGE_READABLE_ERROR);
+      Alert.alert("Không đọc được ảnh", IMAGE_READABLE_ERROR);
+    }
+  };
+
+  const ensurePersistedImageUrisForParse = async (): Promise<string[]> => {
+    const persistedUris: string[] = [];
+    const brokenUris: string[] = [];
+
+    for (const uri of imageUris) {
+      try {
+        assertReadableImageUri(uri);
+        const persistedUri = isPendingCaptureUri(uri)
+          ? uri
+          : await persistImageForCapture(uri, "capture_recovered");
+        persistedUris.push(persistedUri);
+      } catch (err) {
+        brokenUris.push(uri);
+        console.error(
+          "[Capture] Image URI is not readable before parse:",
+          uri,
+          formatImageError(err),
+        );
+      }
+    }
+
+    if (brokenUris.length > 0 || persistedUris.some((uri, index) => uri !== imageUris[index])) {
+      setImageUris(persistedUris);
+      setLocalImagePaths((prev) =>
+        prev.filter((path) => persistedUris.includes(path)),
+      );
+      for (const uri of brokenUris) {
+        deleteLocalImageBestEffort(uri);
+      }
+    }
+
+    if (brokenUris.length > 0 || persistedUris.length === 0) {
+      throw new Error(IMAGE_READABLE_ERROR);
+    }
+
+    return persistedUris;
   };
 
   /**
@@ -303,15 +674,18 @@ export default function InventoryCaptureScreen({
       const { width, height } = info;
       const ratio = height / width;
 
-      // Adaptive Slicing: More slices for longer receipts
-      // Ideally ~10-15 rows per slice for best accuracy
+      // STOCK sheets are dense A4-style documents; force slicing even when
+      // aspect ratio looks "normal" so OCR sees fewer rows per image.
       let numSlices = 1;
-      if (ratio > 5)
+      if (snapMode === "STOCK") {
+        numSlices = ratio > 3.5 ? 5 : 3;
+      } else if (ratio > 5) {
         numSlices = 6; // Very long receipt
-      else if (ratio > 3.5)
+      } else if (ratio > 3.5) {
         numSlices = 4; // Long receipt
-      else if (ratio > 1.8) numSlices = 2; // Medium receipt
-      // else: 1 slice (short receipt)
+      } else if (ratio > 1.8) {
+        numSlices = 2; // Medium receipt
+      }
 
       console.log(
         `[Capture] Adaptive Slicing: Ratio=${ratio.toFixed(2)} -> ${numSlices} slices`,
@@ -350,10 +724,10 @@ export default function InventoryCaptureScreen({
                 height: Math.min(sliceHeight, height - originY), // Don't exceed bounds
               },
             },
-            { resize: { width: 1024 } }, // Resize for efficiency
+            { resize: { width: snapMode === "STOCK" ? 1600 : 1024 } },
           ],
           {
-            compress: 0.6,
+            compress: snapMode === "STOCK" ? 0.75 : 0.6,
             format: ImageManipulator.SaveFormat.JPEG,
           },
         );
@@ -408,18 +782,14 @@ export default function InventoryCaptureScreen({
     });
 
     if (!result.canceled && result.assets[0]) {
-      setImageUris((prev) => [...prev, result.assets[0].uri]);
-      setItems([]);
-      setError(null);
+      await appendPersistedImages([result.assets[0].uri], "capture_camera");
     }
   };
 
   // Handle capture from DocumentCameraModal
-  const handleDocumentCapture = (uri: string) => {
+  const handleDocumentCapture = async (uri: string) => {
     setShowDocumentCamera(false);
-    setImageUris((prev) => [...prev, uri]);
-    setItems([]);
-    setError(null);
+    await appendPersistedImages([uri], "capture_document");
   };
 
   // Pick from gallery - append to images array
@@ -442,9 +812,7 @@ export default function InventoryCaptureScreen({
       // Double check limit in case native picker ignored selectionLimit
       const allowedNewUris = newUris.slice(0, remaining);
 
-      setImageUris((prev) => [...prev, ...allowedNewUris]);
-      setItems([]);
-      setError(null);
+      await appendPersistedImages(allowedNewUris, "capture_library");
 
       if (newUris.length > remaining) {
         Alert.alert("Thông báo", `Chỉ lấy được ${remaining} ảnh do giới hạn.`);
@@ -454,13 +822,120 @@ export default function InventoryCaptureScreen({
 
   // Remove image at index
   const removeImage = (index: number) => {
+    const imageUri = imageUris[index];
+    const localPath = localImagePaths[index];
     setImageUris((prev) => prev.filter((_, i) => i !== index));
     setLocalImagePaths((prev) => prev.filter((_, i) => i !== index));
+    deleteLocalImageBestEffort(imageUri);
+    if (localPath !== imageUri) {
+      deleteLocalImageBestEffort(localPath);
+    }
+  };
+
+  const resolveShelfLifeDays = (
+    ingredientId: string | null | undefined,
+  ): number | null => {
+    if (!ingredientId) return null;
+    const ingredient = ingredients.find((ing) => ing.id === ingredientId);
+    if (!ingredient) return null;
+    const shelfLifeDays = Number(ingredient.shelf_life_days ?? 0);
+    if (!Number.isFinite(shelfLifeDays) || shelfLifeDays <= 0) return null;
+    return Math.round(shelfLifeDays);
+  };
+
+  const buildAutoExpiryDate = (baseDate: Date, shelfLifeDays: number): string => {
+    const expiry = new Date(baseDate.getTime() + shelfLifeDays * 86400_000);
+    const yyyy = expiry.getFullYear();
+    const mm = String(expiry.getMonth() + 1).padStart(2, "0");
+    const dd = String(expiry.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const applyImportExpiryRules = (
+    item: AiMappedItem,
+    ingredientId: string | null | undefined,
+    baseDate: Date = new Date(),
+  ): AiMappedItem => {
+    if (snapMode !== "IMPORT") {
+      return {
+        ...item,
+        expiryDate: null,
+        expirySource: null,
+        shelfLifeDaysSnapshot: null,
+      };
+    }
+
+    const shelfLifeDays = resolveShelfLifeDays(ingredientId);
+    if (shelfLifeDays && shelfLifeDays > 0) {
+      return {
+        ...item,
+        expiryDate: buildAutoExpiryDate(baseDate, shelfLifeDays),
+        expirySource: "AUTO_SHELF_LIFE",
+        shelfLifeDaysSnapshot: shelfLifeDays,
+      };
+    }
+
+    return {
+      ...item,
+      expiryDate: item.expiryDate ?? null,
+      expirySource: "MANUAL",
+      shelfLifeDaysSnapshot: null,
+    };
   };
 
   // Auto-map AI items to ingredients or recipes (based on snapMode)
   const autoMapItems = (rawItems: AiRawItem[]): AiMappedItem[] => {
-    const mapped = rawItems.map((raw) => {
+    const captureExtras = (raw: AiRawItem) => ({
+      stt: raw.stt,
+      rawText: raw.raw_text,
+      originalName: raw.original_name,
+      sourcePage: raw.source_page,
+      reviewReason: raw.review_reason,
+    });
+    const salesExtras = (raw: AiRawItem) => ({
+      rowIndex: raw.row_index,
+      totalRevenue: raw.total_revenue ?? null,
+      expectedRevenue: raw.expected_revenue ?? null,
+      revenueDeviation: raw.revenue_deviation ?? null,
+      recipePrice: raw.recipe_price ?? null,
+      internalInconsistent: !!raw.internal_inconsistent,
+      menuPriceDiffers: !!raw.menu_price_differs,
+    });
+    const mapped: AiMappedItem[] = rawItems.map((raw): AiMappedItem => {
+      if (snapMode === "SALES" && raw.recipe_id) {
+        const matchedRecipe = recipes.find((recipe) => recipe.id === raw.recipe_id);
+
+        if (matchedRecipe) {
+          return {
+            rawName: raw.ingredient_name,
+            quantity: raw.stock_qty,
+            unit: raw.unit || "phần",
+            confidence: raw.confidence,
+            unitCost: raw.unit_cost ?? matchedRecipe.price ?? null,
+            linkedIngredientId: matchedRecipe.id,
+            linkedIngredientName: matchedRecipe.name,
+            recipeId: matchedRecipe.id,
+            isNewIngredient: false,
+            ...captureExtras(raw),
+            ...salesExtras(raw),
+          };
+        }
+
+        return {
+          rawName: raw.ingredient_name,
+          quantity: raw.stock_qty,
+          unit: raw.unit || "phần",
+          confidence: raw.confidence,
+          unitCost: raw.unit_cost ?? null,
+          linkedIngredientId: null,
+          linkedIngredientName: raw.matched_recipe_name || raw.ingredient_name,
+          recipeId: raw.recipe_id ?? null,
+          isNewIngredient: false,
+          ...captureExtras(raw),
+          ...salesExtras(raw),
+        };
+      }
+
       // 0. Use Backend Mapping if available (High Priority)
       if (raw.linkedIngredientId || raw.ingredient_id) {
         const backendId = raw.linkedIngredientId || raw.ingredient_id;
@@ -468,34 +943,64 @@ export default function InventoryCaptureScreen({
         const matchedIng = ingredients.find((ing) => ing.id === backendId);
 
         if (matchedIng) {
-          // Convert AI quantity to ingredient's base_unit if units differ
+          // STOCK review should display the staff-preferred unit, while save
+          // still normalizes back to the ingredient base_unit.
           let finalQty = raw.stock_qty;
-          const aiUnit = raw.unit || matchedIng.base_unit;
+          let finalUnit =
+            snapMode === "STOCK"
+              ? getStockWorkingUnit(matchedIng)
+              : matchedIng.base_unit;
+          const aiUnit = raw.unit || finalUnit;
 
-          if (aiUnit && aiUnit !== matchedIng.base_unit) {
+          if (aiUnit && aiUnit !== finalUnit) {
+            const sourceUnit = normalizeUnitForConversion(aiUnit);
+            const targetUnit = normalizeUnitForConversion(finalUnit);
+            const sourceGroup = getUnitGroup(sourceUnit);
+            const targetGroup = getUnitGroup(targetUnit);
+            const canUseCountWeight =
+              (sourceGroup === "COUNT" &&
+                (targetGroup === "WEIGHT" || targetGroup === "VOLUME")) ||
+              (targetGroup === "COUNT" &&
+                (sourceGroup === "WEIGHT" || sourceGroup === "VOLUME"));
+            const canAutoConvert =
+              canConvert(sourceUnit, targetUnit) ||
+              isCrossFamilyConversion(sourceUnit, targetUnit) ||
+              canUseCountWeight;
+
+            if (!canAutoConvert) {
+              finalUnit = aiUnit;
+            } else {
             const converted = convertToIngredientBase(
               raw.stock_qty,
-              aiUnit,
-              matchedIng.base_unit,
+              sourceUnit,
+              targetUnit,
               matchedIng.density,
+              matchedIng.unit_weight,
+              matchedIng.unit_weight_unit,
             );
             if (typeof converted === "number") {
               finalQty = converted;
               console.log(
-                `[AutoMap] Converted ${raw.stock_qty} ${aiUnit} → ${finalQty} ${matchedIng.base_unit} for "${matchedIng.name}"`,
+                `[AutoMap] Converted ${raw.stock_qty} ${aiUnit} → ${finalQty} ${finalUnit} for "${matchedIng.name}"`,
               );
+            } else {
+              finalUnit = aiUnit;
+            }
             }
           }
 
           return {
             rawName: raw.ingredient_name,
             quantity: finalQty,
-            unit: matchedIng.base_unit, // Always use base_unit after conversion
+            unit: finalUnit,
             confidence: raw.confidence,
             unitCost: raw.unit_cost ?? matchedIng.unit_cost,
             linkedIngredientId: matchedIng.id,
             linkedIngredientName: matchedIng.name,
+            recipeId: null,
             isNewIngredient: false,
+            ...captureExtras(raw),
+            ...salesExtras(raw),
           };
         }
       }
@@ -508,7 +1013,11 @@ export default function InventoryCaptureScreen({
 
         // First, try matching with recipes
         for (const rec of recipes) {
-          const score = getMatchScore(raw.ingredient_name, rec.name, []);
+          const score = getMatchScore(
+            raw.ingredient_name,
+            rec.name,
+            parseAliases(rec.aliases),
+          );
           if (score > bestScore) {
             bestScore = score;
             bestMatch = rec;
@@ -521,7 +1030,11 @@ export default function InventoryCaptureScreen({
           (ing) => ing.type === "resale_item",
         );
         for (const item of resaleItems) {
-          const score = getMatchScore(raw.ingredient_name, item.name, []);
+          const score = getMatchScore(
+            raw.ingredient_name,
+            item.name,
+            parseAliases(item.aliases),
+          );
           if (score > bestScore) {
             bestScore = score;
             bestMatch = item;
@@ -529,17 +1042,24 @@ export default function InventoryCaptureScreen({
           }
         }
 
-        // Auto-link if score >= 80
-        if (bestMatch && bestScore >= 80) {
+        // SALES stays conservative: exact normalized name or exact alias only
+        if (bestMatch && bestScore >= 95) {
+          const recipePrice = isResaleItem
+            ? null
+            : ((bestMatch as LocalRecipe).price ?? null);
+
           return {
             rawName: raw.ingredient_name,
             quantity: raw.stock_qty,
             unit: raw.unit || (isResaleItem ? "cái" : "phần"),
             confidence: raw.confidence,
-            unitCost: null, // Sales items don't have unit cost
+            unitCost: raw.unit_cost ?? recipePrice,
             linkedIngredientId: bestMatch.id,
             linkedIngredientName: bestMatch.name,
+            recipeId: isResaleItem ? null : bestMatch.id,
             isNewIngredient: false,
+            ...captureExtras(raw),
+            ...salesExtras(raw),
           };
         }
 
@@ -548,10 +1068,13 @@ export default function InventoryCaptureScreen({
           quantity: raw.stock_qty,
           unit: raw.unit || "phần",
           confidence: raw.confidence,
-          unitCost: null,
+          unitCost: raw.unit_cost ?? null,
           linkedIngredientId: null,
           linkedIngredientName: raw.ingredient_name, // Fallback to AI name
+          recipeId: null,
           isNewIngredient: false,
+          ...captureExtras(raw),
+          ...salesExtras(raw),
         };
       }
 
@@ -560,7 +1083,7 @@ export default function InventoryCaptureScreen({
       let bestScore = 0;
 
       for (const ing of ingredients) {
-        const aliases = ing.aliases ? JSON.parse(ing.aliases) : [];
+        const aliases = parseAliases(ing.aliases);
         const score = getMatchScore(raw.ingredient_name, ing.name, aliases);
         if (score > bestScore) {
           bestScore = score;
@@ -570,35 +1093,64 @@ export default function InventoryCaptureScreen({
 
       // Auto-link if score >= 80
       if (bestMatch && bestScore >= 80) {
-        // Convert AI quantity to ingredient's base_unit if units differ
+        // STOCK review should display the staff-preferred unit, while save
+        // still normalizes back to the ingredient base_unit.
         let finalQty = raw.stock_qty;
-        const aiUnit = raw.unit || bestMatch.base_unit;
+        let finalUnit =
+          snapMode === "STOCK"
+            ? getStockWorkingUnit(bestMatch)
+            : bestMatch.base_unit;
+        const aiUnit = raw.unit || finalUnit;
 
-        if (aiUnit && aiUnit !== bestMatch.base_unit) {
+        if (aiUnit && aiUnit !== finalUnit) {
+          const sourceUnit = normalizeUnitForConversion(aiUnit);
+          const targetUnit = normalizeUnitForConversion(finalUnit);
+          const sourceGroup = getUnitGroup(sourceUnit);
+          const targetGroup = getUnitGroup(targetUnit);
+          const canUseCountWeight =
+            (sourceGroup === "COUNT" &&
+              (targetGroup === "WEIGHT" || targetGroup === "VOLUME")) ||
+            (targetGroup === "COUNT" &&
+              (sourceGroup === "WEIGHT" || sourceGroup === "VOLUME"));
+          const canAutoConvert =
+            canConvert(sourceUnit, targetUnit) ||
+            isCrossFamilyConversion(sourceUnit, targetUnit) ||
+            canUseCountWeight;
+
+          if (!canAutoConvert) {
+            finalUnit = aiUnit;
+          } else {
           const converted = convertToIngredientBase(
             raw.stock_qty,
-            aiUnit,
-            bestMatch.base_unit,
+            sourceUnit,
+            targetUnit,
             bestMatch.density,
+            bestMatch.unit_weight,
+            bestMatch.unit_weight_unit,
           );
           if (typeof converted === "number") {
             finalQty = converted;
             console.log(
-              `[AutoMap] Converted ${raw.stock_qty} ${aiUnit} → ${finalQty} ${bestMatch.base_unit} for "${bestMatch.name}"`,
+              `[AutoMap] Converted ${raw.stock_qty} ${aiUnit} → ${finalQty} ${finalUnit} for "${bestMatch.name}"`,
             );
+          } else {
+            finalUnit = aiUnit;
+          }
           }
         }
 
         return {
           rawName: raw.ingredient_name,
           quantity: finalQty,
-          unit: bestMatch.base_unit, // Always use base_unit after conversion
+          unit: finalUnit,
           confidence: raw.confidence,
           // Priority: AI invoice price > DB unit_cost
           unitCost: raw.unit_cost ?? bestMatch.unit_cost,
           linkedIngredientId: bestMatch.id,
           linkedIngredientName: bestMatch.name,
+          recipeId: null,
           isNewIngredient: false,
+          ...captureExtras(raw),
         };
       }
 
@@ -611,19 +1163,54 @@ export default function InventoryCaptureScreen({
         linkedIngredientId: null,
         // IMPORTANT: Use raw.ingredient_name as fallback to prevent 'undefined' in logs
         linkedIngredientName: raw.ingredient_name,
+        recipeId: null,
         isNewIngredient: false,
+        ...captureExtras(raw),
       };
     });
 
+    if (snapMode === "SALES") {
+      return mapped.sort((a, b) => (a.rowIndex ?? 9999) - (b.rowIndex ?? 9999));
+    }
+
+    if (snapMode === "STOCK") {
+      return mapped.sort((a, b) => {
+        const aStt = a.stt != null ? Number(a.stt) : Number.NaN;
+        const bStt = b.stt != null ? Number(b.stt) : Number.NaN;
+        if (Number.isFinite(aStt) && Number.isFinite(bStt) && aStt !== bStt) {
+          return aStt - bStt;
+        }
+        if ((a.sourcePage ?? 0) !== (b.sourcePage ?? 0)) {
+          return (a.sourcePage ?? 0) - (b.sourcePage ?? 0);
+        }
+        return 0;
+      });
+    }
+
+    const normalizedMapped =
+      snapMode === "IMPORT"
+        ? mapped.map((item) =>
+            applyImportExpiryRules(item, item.linkedIngredientId),
+          )
+        : mapped;
+
     // DEDUP: Merge items that link to the same ingredient/recipe
     const dedupMap = new Map<string, AiMappedItem>();
-    for (const item of mapped) {
+    for (const item of normalizedMapped) {
       const key = item.linkedIngredientId || `unlinked_${item.rawName}`;
       if (dedupMap.has(key)) {
         // Merge: sum quantities, keep higher confidence
         const existing = dedupMap.get(key)!;
         existing.quantity += item.quantity;
         existing.confidence = Math.max(existing.confidence, item.confidence);
+        // Sum revenue too (for SALES cross-check)
+        if (item.totalRevenue != null) {
+          existing.totalRevenue = (existing.totalRevenue ?? 0) + item.totalRevenue;
+        }
+        // Keep earliest row_index (first appearance in receipt)
+        if (item.rowIndex != null && (existing.rowIndex == null || item.rowIndex < existing.rowIndex)) {
+          existing.rowIndex = item.rowIndex;
+        }
         // Append raw names if different
         if (!existing.rawName.includes(item.rawName)) {
           existing.rawName += ` / ${item.rawName}`;
@@ -633,182 +1220,164 @@ export default function InventoryCaptureScreen({
       }
     }
 
-    return Array.from(dedupMap.values());
+    const result = Array.from(dedupMap.values());
+    return result;
   };
 
   // Parse image with AI - Route to different functions based on snapMode
   // Multi-image support: sends array of images for sequential page parsing
-  const handleParseImage = async () => {
+  const handleParseImage = async (qualityMode: AiQualityMode = "standard") => {
     if (imageUris.length === 0) return;
 
     setParsing(true);
     setError(null);
+    setQuotaExceeded(null);
+    if (qualityMode === "standard") {
+      setCanRetryHighAccuracy(false);
+    }
 
     try {
+      const parseImageUris = await ensurePersistedImageUrisForParse();
+
       // Step 1: Compress all images
-      const imageCount = imageUris.length;
+      const imageCount = parseImageUris.length;
       setLoadingStep(`📷 Đang nén ${imageCount} ảnh...`);
 
       const compressedImages: string[] = [];
       const savedPaths: string[] = [];
 
-      for (let i = 0; i < imageUris.length; i++) {
+      for (let i = 0; i < parseImageUris.length; i++) {
         setLoadingStep(`📷 Đang nén ảnh ${i + 1}/${imageCount}...`);
-        const { base64, savedPath } = await compressAndSaveImage(imageUris[i]);
+        const { base64, savedPath } = await compressAndSaveImage(parseImageUris[i]);
         compressedImages.push(base64);
         savedPaths.push(savedPath);
       }
       setLocalImagePaths(savedPaths);
 
-      // Step 2: Determine endpoint and payload based on snapMode
-      let endpoint: string;
-      let payload: Record<string, unknown>;
-      let loadingMessage: string;
+      // Step 2: Call AI based on snapMode
+      let aiResult: {
+        success: boolean;
+        items: any[];
+        error?: string;
+        canRetryHighAccuracy?: boolean;
+        items_sold?: any[];
+        warnings?: string[];
+        raw_ocr_text?: string | null;
+        used_raw_ocr_parser?: boolean;
+        missing_row_numbers?: number[];
+        duplicate_row_numbers?: number[];
+      };
 
       switch (snapMode) {
         case "IMPORT":
-          endpoint = `${Env.BACKEND_URL}/ai/parse-invoice`;
-          // Support both single and multi-image: backend handles both
-          payload = {
-            images_base64: compressedImages,
-            image_base64: compressedImages[0], // Fallback for backward compat
-            business_id: businessId || "",
-          };
-          loadingMessage = `🤖 AI đang đọc ${imageCount} ảnh hóa đơn...`;
+          setLoadingStep(
+            qualityMode === "high_accuracy"
+              ? `🤖 AI model mạnh đang đọc ${imageCount} ảnh hóa đơn...`
+              : `🤖 AI đang đọc ${imageCount} ảnh hóa đơn...`,
+          );
+          aiResult = await parseInvoiceMultiWithAI(compressedImages, businessId || "", qualityMode);
           break;
         case "SALES":
-          // GOOGLE VISION MODE: DON'T SLICE - Vision OCR prefers full context images!
-          // Just preprocess (Contrast/Grayscale) and send full images
-          setLoadingStep("🖼️ Đang xử lý ảnh...");
-          const processedImages: string[] = [];
-          for (let i = 0; i < imageUris.length; i++) {
-            setLoadingStep(`Processing image ${i + 1}/${imageCount}...`);
-
-            // Preprocess (Contrast/Grayscale) for better OCR on thermal paper
-            const cleanImage = await preprocessReceipt(imageUris[i]);
-
-            // Compress and get base64 (no slicing!)
-            const { base64 } = await compressAndSaveImage(cleanImage);
-            processedImages.push(base64);
-          }
-          console.log(
-            `[Capture] SALES: Sending ${processedImages.length} full images (no slicing)`,
+          setLoadingStep(
+            qualityMode === "high_accuracy"
+              ? `🤖 AI model mạnh đang đọc ${compressedImages.length} ảnh...`
+              : `🤖 Vision OCR đang đọc ${compressedImages.length} ảnh...`,
           );
-
-          endpoint = `${Env.BACKEND_URL}/ai/parse-sales`;
-          payload = {
-            images_base64: processedImages,
-            image_base64: processedImages[0],
-            business_id: businessId || "",
+          const salesRes = await parseSalesMultiWithAI(compressedImages, businessId || "", qualityMode);
+          setSalesQtyMismatch(salesRes.qty_mismatch ?? null);
+          setSalesRevenueMismatch(salesRes.revenue_mismatch ?? null);
+          setSalesOrderSuspicious(!!salesRes.order_suspicious);
+          setSalesRawOcrText(salesRes.raw_ocr_text ?? null);
+          setSalesReportTotalRevenue(salesRes.total_revenue ?? null);
+          aiResult = {
+            success: salesRes.success,
+            items: salesRes.items_sold, // Map items_sold to items for common processing
+            error: salesRes.error,
+            canRetryHighAccuracy: salesRes.canRetryHighAccuracy,
           };
-          loadingMessage = `🤖 Vision OCR đang đọc ${processedImages.length} ảnh...`;
           break;
         case "STOCK":
         default:
-          // DIVIDE & CONQUER: Slice each image into 3 parts for better OCR accuracy
-          setLoadingStep("✂️ Đang cắt ảnh thành từng phần...");
-          const allSlices: string[] = [];
-          for (let i = 0; i < imageUris.length; i++) {
-            setLoadingStep(`✂️ Đang cắt ảnh ${i + 1}/${imageCount}...`);
-            const slices = await sliceImage(imageUris[i]);
-            allSlices.push(...slices);
-          }
-          console.log(
-            `[Capture] Sliced ${imageCount} images into ${allSlices.length} parts`,
+          setLoadingStep(
+            qualityMode === "high_accuracy"
+              ? `🤖 AI model mạnh đang đọc ${compressedImages.length} ảnh kiểm nguyên tờ...`
+              : `🤖 AI đang đọc ${compressedImages.length} ảnh kiểm nguyên tờ...`,
           );
-
-          endpoint = `${Env.BACKEND_URL}/ai/parse-handwriting`;
-          payload = {
-            images_base64: allSlices, // Send all slices
-            image_base64: allSlices[0],
-            business_id: businessId || "",
-            inventory_model: isStandard ? "STANDARD" : "SIMPLE",
-            area_type: currentAreaType === "BAR" ? "SERVICE" : "STORAGE",
-          };
-          loadingMessage = `🤖 AI đang đọc ${allSlices.length} phần ảnh kiểm ${
-            currentAreaType === "BAR" ? "Quầy Bar" : "Kho Tổng"
-          }...`;
+          const stockRes = await parseHandwritingMultiWithAI(
+            compressedImages,
+            businessId || "",
+            isStandard ? "STANDARD" : "SIMPLE",
+            currentAreaType === "BAR" ? "SERVICE" : "STORAGE",
+            qualityMode,
+          );
+          setStockRawOcrText(stockRes.raw_ocr_text ?? null);
+          setStockRawDebugText(
+            JSON.stringify(
+              {
+                source: stockRes.raw_ocr_text ? "raw_ocr_text" : "gemini_json",
+                used_raw_ocr_parser: !!stockRes.used_raw_ocr_parser,
+                warnings: stockRes.warnings ?? [],
+                missing_row_numbers: stockRes.missing_row_numbers ?? [],
+                duplicate_row_numbers: stockRes.duplicate_row_numbers ?? [],
+                items: stockRes.items ?? [],
+              },
+              null,
+              2,
+            ),
+          );
+          setStockWarnings(
+            (stockRes.warnings ?? []).filter(
+              (warning) =>
+                !warning.startsWith("Missing STT rows:") &&
+                !warning.startsWith("Duplicate STT rows"),
+            ),
+          );
+          setStockMissingRows(stockRes.missing_row_numbers ?? []);
+          setStockDuplicateRows(stockRes.duplicate_row_numbers ?? []);
+          setStockUsedRawOcrParser(!!stockRes.used_raw_ocr_parser);
+          aiResult = stockRes;
           break;
       }
+      setCanRetryHighAccuracy(qualityMode === "standard" && !!aiResult.canRetryHighAccuracy);
 
-      // Step 3: Call AI with timeout
-      setLoadingStep("☁️ Đang gửi lên AI...");
-      console.log(`[Capture] Calling ${snapMode} parse API...`);
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 seconds for multi-image AI processing
-
-      // Get session for NestJS Auth
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      // Step 4: AI Processing
-      setLoadingStep(loadingMessage);
-      const data = await response.json();
-
-      console.log("[Capture] AI Response status:", response.status);
-      console.log(
-        "[Capture] AI Response data:",
-        JSON.stringify(data).slice(0, 500),
-      );
-      // DEBUG: Log first item's unit_price specifically
-      if (data.items && data.items[0]) {
-        console.log("[Capture] First item raw:", JSON.stringify(data.items[0]));
-        console.log(
-          "[Capture] First item unit_price:",
-          data.items[0].unit_price,
-        );
+      if (!aiResult.success) {
+        throw new Error(aiResult.error || "AI parse failed");
       }
 
-      if (!response.ok) {
-        console.error("[Capture] API Error:", data.error);
-        throw new Error(data.error || "AI parse failed");
-      }
+      const data = { items: aiResult.items };
 
-      // Step 5: Transform response to common format based on snapMode
+      // Step 3: Transform response to common format based on snapMode
       setLoadingStep("📊 Đang chuẩn hóa dữ liệu...");
       let rawItems: AiRawItem[] = [];
 
       if (snapMode === "STOCK") {
         // ai-parse-handwriting returns { items: StockItem[] }
         rawItems = (data.items || []).map((item: any) => ({
-          ingredient_name: item.ingredient_name || item.name || "",
-          stock_qty: item.stock_qty || item.quantity || 0,
-          import_qty: item.import_qty || 0,
+          ingredient_name: item.original_name || item.ingredient_name || item.name || "",
+          stock_qty: item.stock_qty ?? item.quantity ?? 0,
+          import_qty: item.import_qty ?? 0,
           unit: item.unit || "",
-          confidence: item.confidence || 80,
+          confidence: item.confidence ?? 0.8,
           needs_review: item.needs_review || false,
+          ingredient_id: item.ingredient_id,
+          linkedIngredientId: item.linkedIngredientId,
+          stt: item.stt,
+          raw_text: item.raw_text,
+          original_name: item.original_name,
+          source_page: item.source_page,
+          review_reason: item.review_reason,
         }));
       } else if (snapMode === "IMPORT") {
         // ai-parse-invoice returns { items: InvoiceItem[] }
         rawItems = (data.items || []).map((item: any) => {
           // Calculate post-tax unit price: total_price / quantity
-          // This is more accurate than unit_price which is often pre-tax
           const quantity = item.quantity || item.qty || 1;
           const totalPrice = item.total_price || item.totalPrice || 0;
           const unitPriceFromTotal =
             quantity > 0 ? Math.round(totalPrice / quantity) : null;
 
-          // Fallback to AI's unit_price if total_price not available
           const finalUnitCost =
             unitPriceFromTotal || item.unit_price || item.unitPrice || null;
-
-          console.log(
-            `[Capture] ${item.ingredient_name}: total=${totalPrice}, qty=${quantity}, calculated=${unitPriceFromTotal}, final=${finalUnitCost}`,
-          );
 
           return {
             ingredient_name:
@@ -818,22 +1387,45 @@ export default function InventoryCaptureScreen({
             unit: item.unit || "",
             confidence: item.confidence || 80,
             needs_review: false,
-            unit_cost: finalUnitCost, // Post-tax unit price!
+            unit_cost: finalUnitCost,
           };
         });
       } else if (snapMode === "SALES") {
-        // ai-parse-sales returns { items_sold: SalesItem[] } or { menu_items: SalesItem[] }
-        const salesItems =
-          data.items_sold || data.menu_items || data.items || [];
-        rawItems = salesItems.map((item: any) => ({
-          ingredient_name:
-            item.menu_item_name || item.name || item.menu_item || "",
-          stock_qty: item.quantity_sold || item.quantity || 0,
-          import_qty: 0,
-          unit: item.unit || "phần",
-          confidence: item.confidence || 80,
-          needs_review: false,
-        }));
+        // aiResult.items already contains items_sold
+        rawItems = (data.items || []).map((item: any) => {
+          const quantity = item.quantity_sold || item.quantity || 0;
+          const lineRevenue = item.total_revenue ?? item.totalRevenue ?? null;
+          const unitPriceFromTotal =
+            lineRevenue !== null && quantity > 0
+              ? Math.round(Number(lineRevenue) / quantity)
+              : null;
+
+          return {
+            ingredient_name:
+              item.raw_name || item.menu_item_name || item.name || item.menu_item || "",
+            raw_name:
+              item.raw_name || item.menu_item_name || item.name || item.menu_item || "",
+            stock_qty: quantity,
+            import_qty: 0,
+            unit: item.unit || "phần",
+            confidence: item.confidence || 80,
+            needs_review: false,
+            recipe_id: item.recipe_id || undefined,
+            matched_recipe_name: item.matched_recipe_name ?? null,
+            unit_cost:
+              item.unit_price ??
+              item.unitPrice ??
+              unitPriceFromTotal,
+            // Cross-check fields from backend
+            row_index: item.row_index,
+            total_revenue: lineRevenue,
+            expected_revenue: item.expected_revenue ?? null,
+            revenue_deviation: item.revenue_deviation ?? null,
+            recipe_price: item.recipe_price ?? null,
+            internal_inconsistent: !!item.internal_inconsistent,
+            menu_price_differs: !!item.menu_price_differs,
+          };
+        });
       }
 
       if (rawItems.length > 0) {
@@ -848,7 +1440,7 @@ export default function InventoryCaptureScreen({
         console.log("[Capture] mapped[0].unitCost:", mapped[0]?.unitCost);
 
         // AI CROSS-CHECK: Check for duplicate transfers (Per .script Section 2.3.C)
-        if (snapMode === "STOCK" && areaType === "BAR") {
+        if (snapMode === "STOCK" && currentAreaType === "BAR") {
           try {
             const db = await getDB();
             const today = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in local timezone
@@ -935,7 +1527,13 @@ export default function InventoryCaptureScreen({
       }
     } catch (err: any) {
       console.error("[Capture] Parse error:", err);
-      if (err.name === "AbortError") {
+      if (err instanceof QuotaExceededError) {
+        setQuotaExceeded({
+          canWatchAd: err.canWatchAd,
+          adRewardScans: err.adRewardScans,
+          maxAdRewardsPerDay: err.maxAdRewardsPerDay,
+        });
+      } else if (err.name === "AbortError") {
         setError("Quá thời gian chờ (30s). Kiểm tra kết nối mạng và thử lại.");
       } else {
         setError(err.message || "Có lỗi xảy ra");
@@ -962,7 +1560,13 @@ export default function InventoryCaptureScreen({
 
       if (!searchQuery) return allSalesItems.slice(0, 15);
       return allSalesItems
-        .filter((item) => item.name.toLowerCase().includes(query))
+        .filter(
+          (item) =>
+            item.name.toLowerCase().includes(query) ||
+            parseAliases((item as LocalRecipe | LocalIngredient).aliases).some((alias) =>
+              alias.toLowerCase().includes(query),
+            ),
+        )
         .slice(0, 15);
     }
 
@@ -977,26 +1581,273 @@ export default function InventoryCaptureScreen({
       .slice(0, 10);
   };
 
+  const getStockWorkingUnit = (ingredient: LocalIngredient): string =>
+    ingredient.stock_check_unit || ingredient.base_unit;
+
+  const findLinkedIngredient = (item: AiMappedItem): LocalIngredient | null => {
+    if (snapMode === "SALES" || item.recipeId || !item.linkedIngredientId) {
+      return null;
+    }
+    return (
+      ingredients.find((ing) => ing.id === item.linkedIngredientId) ?? null
+    );
+  };
+
+  const convertLinkedItemToUnit = (
+    item: AiMappedItem,
+    ingredient: LocalIngredient,
+    targetDisplayUnit: string,
+    strict = true,
+  ): AiMappedItem => {
+    const sourceUnit = normalizeUnitForConversion(
+      item.unit || targetDisplayUnit,
+    );
+    const targetUnit = normalizeUnitForConversion(targetDisplayUnit);
+    let quantity = item.quantity;
+
+    if (sourceUnit !== targetUnit) {
+      const sourceGroup = getUnitGroup(sourceUnit);
+      const targetGroup = getUnitGroup(targetUnit);
+      const canUseCountWeight =
+        (sourceGroup === "COUNT" &&
+          (targetGroup === "WEIGHT" || targetGroup === "VOLUME")) ||
+        (targetGroup === "COUNT" &&
+          (sourceGroup === "WEIGHT" || sourceGroup === "VOLUME"));
+      const canNormalize =
+        canConvert(sourceUnit, targetUnit) ||
+        isCrossFamilyConversion(sourceUnit, targetUnit) ||
+        canUseCountWeight;
+
+      if (!canNormalize) {
+        if (!strict) return item;
+        throw new Error(
+          `Không thể quy đổi "${item.unit}" sang "${targetDisplayUnit}" cho "${ingredient.name}". Vui lòng sửa đơn vị trên dòng này hoặc đổi đơn vị chuẩn trong Desktop.`,
+        );
+      }
+
+      const converted = convertToIngredientBase(
+        item.quantity,
+        sourceUnit,
+        targetUnit,
+        ingredient.density,
+        ingredient.unit_weight,
+        ingredient.unit_weight_unit,
+      );
+
+      if (converted === "NEED_DENSITY") {
+        if (!strict) return item;
+        throw new Error(
+          `Thiếu density cho "${ingredient.name}" để quy đổi "${item.unit}" sang "${targetDisplayUnit}". Cập nhật density trên Desktop rồi sync lại.`,
+        );
+      }
+      if (converted === "NEED_UNIT_WEIGHT") {
+        if (!strict) return item;
+        throw new Error(
+          `Thiếu khối lượng / 1 ${ingredient.base_unit} cho "${ingredient.name}" để quy đổi "${item.unit}" sang "${targetDisplayUnit}". Cập nhật trên Desktop rồi sync lại.`,
+        );
+      }
+
+      quantity = roundInventoryQuantity(converted);
+    }
+
+    return {
+      ...item,
+      quantity,
+      unit: targetDisplayUnit,
+      unitCost: item.unitCost ?? ingredient.unit_cost,
+      linkedIngredientName: item.linkedIngredientName ?? ingredient.name,
+    };
+  };
+
+  const applyLinkedDisplayUnit = (
+    item: AiMappedItem,
+    strict = false,
+  ): AiMappedItem => {
+    const ingredient = findLinkedIngredient(item);
+    if (!ingredient?.base_unit) return item;
+    const targetUnit =
+      snapMode === "STOCK" ? getStockWorkingUnit(ingredient) : ingredient.base_unit;
+    return convertLinkedItemToUnit(item, ingredient, targetUnit, strict);
+  };
+
+  const normalizeLinkedInventoryItem = (
+    item: AiMappedItem,
+    strict = true,
+  ): AiMappedItem => {
+    const ingredient = findLinkedIngredient(item);
+    if (!ingredient?.base_unit) return item;
+    return convertLinkedItemToUnit(item, ingredient, ingredient.base_unit, strict);
+  };
+
+  const learnStockCheckUnits = async (
+    db: Awaited<ReturnType<typeof getDB>>,
+    itemsToLearn: AiMappedItem[],
+  ) => {
+    if (snapMode !== "STOCK") return;
+    const { addToSyncQueue } = await import("../sync/syncEngine");
+
+    for (const item of itemsToLearn) {
+      if (!item.linkedIngredientId || !item.unit.trim() || item.isNewIngredient) {
+        continue;
+      }
+
+      const ing = ingredients.find((i) => i.id === item.linkedIngredientId);
+      if (!ing?.base_unit) continue;
+
+      const displayUnit = item.unit.trim();
+      const nextStockCheckUnit =
+        normalizeUnitForConversion(displayUnit) ===
+        normalizeUnitForConversion(ing.base_unit)
+          ? null
+          : displayUnit;
+      const currentStockCheckUnit = ing.stock_check_unit || null;
+
+      if (currentStockCheckUnit === nextStockCheckUnit) {
+        continue;
+      }
+
+      await db.runAsync(
+        `UPDATE local_ingredients SET stock_check_unit = ? WHERE id = ?`,
+        [nextStockCheckUnit, ing.id],
+      );
+      await addToSyncQueue("ingredients", "UPSERT", {
+        id: ing.id,
+        stock_check_unit: nextStockCheckUnit,
+      });
+      setIngredients((prev) =>
+        prev.map((prevIng) =>
+          prevIng.id === ing.id
+            ? { ...prevIng, stock_check_unit: nextStockCheckUnit }
+            : prevIng,
+        ),
+      );
+    }
+  };
+
+  const ensureLocalAreaForLocation = async (
+    db: Awaited<ReturnType<typeof getDB>>,
+    location: "WAREHOUSE" | "BAR",
+  ): Promise<string | null> => {
+    const existingAreaId = await resolveLocalAreaByLocation(db, location);
+    if (existingAreaId) return existingAreaId;
+
+    const profile = await db.getFirstAsync<{ business_id: string | null }>(
+      "SELECT business_id FROM local_profiles LIMIT 1",
+    );
+    const localBusinessId = profile?.business_id ?? businessId;
+    if (!localBusinessId) {
+      console.warn("[Capture SAVE] Missing business_id, skipped local stock update");
+      return null;
+    }
+
+    const type = location === "BAR" ? "SERVICE" : "STORAGE";
+    const areaId = `local_${type.toLowerCase()}_${localBusinessId}`;
+    const name = type === "SERVICE" ? "Quầy Bar" : "Kho Tổng";
+    await db.runAsync(
+      `INSERT OR IGNORE INTO local_storage_areas
+        (id, business_id, name, type, is_default, is_active, synced)
+       VALUES (?, ?, ?, ?, 1, 1, 0)`,
+      [areaId, localBusinessId, name, type],
+    );
+    return areaId;
+  };
+
+  const applyLocalInventoryMutations = async (
+    db: Awaited<ReturnType<typeof getDB>>,
+    mode: "STOCK" | "IMPORT" | "SALES",
+    location: "WAREHOUSE" | "BAR",
+    itemsForSave: AiMappedItem[],
+    countedAt: string,
+  ): Promise<void> => {
+    if (mode === "SALES") return;
+
+    const areaId = await ensureLocalAreaForLocation(db, location);
+    if (!areaId) return;
+
+    if (mode === "STOCK") {
+      for (const item of itemsForSave) {
+        if (!item.linkedIngredientId || !Number.isFinite(item.quantity)) {
+          continue;
+        }
+        await upsertStockLevel(
+          db,
+          item.linkedIngredientId,
+          areaId,
+          item.quantity,
+          countedAt,
+        );
+      }
+      return;
+    }
+
+    for (const item of itemsForSave) {
+      if (!item.linkedIngredientId || !Number.isFinite(item.quantity)) {
+        continue;
+      }
+
+      const incomingCost = Number(item.unitCost ?? 0);
+      if (incomingCost > 0) {
+        const current = await db.getFirstAsync<{
+          warehouse_qty: number | null;
+          bar_qty: number | null;
+          unit_cost: number | null;
+        }>(
+          "SELECT warehouse_qty, bar_qty, unit_cost FROM local_ingredients WHERE id = ?",
+          [item.linkedIngredientId],
+        );
+
+        if (current) {
+          const oldQty =
+            Number(current.warehouse_qty ?? 0) + Number(current.bar_qty ?? 0);
+          const oldCost = Number(current.unit_cost ?? 0);
+          const nextTotalQty = oldQty + item.quantity;
+          const nextCost =
+            oldQty > 0 && nextTotalQty > 0
+              ? (oldQty * oldCost + item.quantity * incomingCost) / nextTotalQty
+              : incomingCost;
+
+          await db.runAsync(
+            "UPDATE local_ingredients SET unit_cost = ? WHERE id = ?",
+            [Math.round(nextCost * 100) / 100, item.linkedIngredientId],
+          );
+        }
+      }
+
+      await incrementStockLevel(db, item.linkedIngredientId, areaId, item.quantity);
+    }
+  };
+
   // Link item to ingredient or recipe (based on snapMode)
   const linkIngredient = (
     itemIndex: number,
     item: LocalIngredient | LocalRecipe,
   ) => {
     // Check if it's a recipe (for SALES mode) or ingredient
-    const isRecipe = snapMode === "SALES";
+    const isRecipe = !("base_unit" in item);
+    const linkedUnitCost =
+      snapMode === "SALES"
+        ? (prevItemUnitCost: number | null) =>
+            prevItemUnitCost ?? (isRecipe ? ((item as LocalRecipe).price ?? null) : null)
+        : (prevItemUnitCost: number | null) =>
+            prevItemUnitCost ?? (item as LocalIngredient).unit_cost;
 
     setItems((prev) =>
       prev.map((prevItem, i) =>
         i === itemIndex
-          ? {
-              ...prevItem,
-              linkedIngredientId: item.id,
-              linkedIngredientName: item.name,
-              unitCost: isRecipe
-                ? null
-                : (prevItem.unitCost ?? (item as LocalIngredient).unit_cost),
-              isNewIngredient: false,
-            }
+          ? applyImportExpiryRules(
+              applyLinkedDisplayUnit(
+                {
+                  ...prevItem,
+                  linkedIngredientId: item.id,
+                  linkedIngredientName: item.name,
+                  recipeId: isRecipe ? item.id : null,
+                  unitCost: linkedUnitCost(prevItem.unitCost),
+                  isNewIngredient: false,
+                },
+                false,
+              ),
+              item.id,
+            )
           : prevItem,
       ),
     );
@@ -1013,7 +1864,11 @@ export default function InventoryCaptureScreen({
               ...item,
               linkedIngredientId: null,
               linkedIngredientName: null,
+              recipeId: null,
               isNewIngredient: true,
+              expiryDate: null,
+              expirySource: null,
+              shelfLifeDaysSnapshot: null,
             }
           : item,
       ),
@@ -1028,8 +1883,54 @@ export default function InventoryCaptureScreen({
     );
   };
 
+  const applyManualExpiryForIndex = (itemIndex: number, date: Date) => {
+    updateItem(itemIndex, "expiryDate", formatDateToYyyyMmDd(date));
+    updateItem(itemIndex, "expirySource", "MANUAL");
+    updateItem(itemIndex, "shelfLifeDaysSnapshot", null);
+  };
+
+  const openExpiryPickerForItem = (
+    itemIndex: number,
+    currentValue: string | null | undefined,
+  ) => {
+    const parsed = parseYyyyMmDd(currentValue);
+    setExpiryPickerValue(parsed ?? new Date());
+    setExpiryPickerTargetIndex(itemIndex);
+  };
+
+  const handleExpiryPickerChange = (
+    event: DateTimePickerEvent,
+    selectedDate?: Date,
+  ) => {
+    if (Platform.OS === "android") {
+      if (event.type === "dismissed") {
+        setExpiryPickerTargetIndex(null);
+        return;
+      }
+      if (event.type === "set" && selectedDate && expiryPickerTargetIndex != null) {
+        applyManualExpiryForIndex(expiryPickerTargetIndex, selectedDate);
+      }
+      setExpiryPickerTargetIndex(null);
+      return;
+    }
+
+    if (selectedDate) {
+      setExpiryPickerValue(selectedDate);
+      if (expiryPickerTargetIndex != null) {
+        applyManualExpiryForIndex(expiryPickerTargetIndex, selectedDate);
+      }
+    }
+  };
+
   // Remove item
   const removeItem = (index: number) => {
+    if (expiryPickerTargetIndex != null) {
+      if (expiryPickerTargetIndex === index) {
+        setExpiryPickerTargetIndex(null);
+      } else if (expiryPickerTargetIndex > index) {
+        setExpiryPickerTargetIndex(expiryPickerTargetIndex - 1);
+      }
+    }
     setItems((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -1044,10 +1945,11 @@ export default function InventoryCaptureScreen({
     if (quantity === null || quantity === undefined || quantity === 0) {
       return { borderColor: "#E63946", borderWidth: 5, text: "#E63946" }; // Thick Red
     }
-    if (conf >= 90) {
+    // conf is 0-1 decimal from backend (e.g. 0.98 = 98%)
+    if (conf >= 0.90) {
       return { borderColor: "#6B8E23", borderWidth: 3, text: "#6B8E23" }; // Olive Green
     }
-    if (conf >= 85) {
+    if (conf >= 0.85) {
       return { borderColor: "#FFC857", borderWidth: 4, text: "#FFC857" }; // Mustard Yellow
     }
     return { borderColor: "#E63946", borderWidth: 4, text: "#E63946" }; // Tomato Red
@@ -1081,9 +1983,100 @@ export default function InventoryCaptureScreen({
     }
     return false;
   });
+  const hasMissingImportExpiry =
+    snapMode === "IMPORT" &&
+    items.some((item) => {
+      if (!item.linkedIngredientId) return false;
+      const shelfLifeDays = resolveShelfLifeDays(item.linkedIngredientId);
+      if (shelfLifeDays && shelfLifeDays > 0) return false;
+      return !item.expiryDate;
+    });
 
   // Can save?
-  const canSave = items.length > 0 && unmappedCount === 0 && !hasInvalidWeights;
+  const canSave =
+    items.length > 0 &&
+    unmappedCount === 0 &&
+    !hasInvalidWeights &&
+    !hasMissingImportExpiry;
+  const hasSalesTotalMismatch =
+    snapMode === "SALES" && Boolean(salesQtyMismatch || salesRevenueMismatch);
+  const rawOcrTextForModal =
+    snapMode === "STOCK" ? stockRawOcrText || stockRawDebugText : salesRawOcrText;
+  const hasStockDiagnostics =
+    snapMode === "STOCK" &&
+    items.length > 0 &&
+    (stockWarnings.length > 0 ||
+      stockMissingRows.length > 0 ||
+      stockDuplicateRows.length > 0 ||
+      Boolean(stockRawOcrText) ||
+      Boolean(stockRawDebugText));
+  const isProRebaselineWarehouseCheck =
+    snapMode === "STOCK" &&
+    proRebaseline.required &&
+    currentAreaType === "WAREHOUSE" &&
+    !proRebaseline.warehouseDone;
+  const isProRebaselineBarCheck =
+    snapMode === "STOCK" &&
+    proRebaseline.required &&
+    currentAreaType === "BAR" &&
+    proRebaseline.warehouseDone &&
+    !proRebaseline.barDone;
+  const isProRebaselineCheck =
+    isProRebaselineWarehouseCheck || isProRebaselineBarCheck;
+
+  const getStockSalesGuardScope = (): SalesGuardScope | null => {
+    if (isProRebaselineCheck) {
+      return null;
+    }
+    if (currentCheckMode === "SPOT") {
+      return null;
+    }
+    if (isStandard) {
+      return currentAreaType === "BAR" ? "BAR" : null;
+    }
+    return null;
+  };
+
+  const ensureSalesBeforeStock = async (
+    scope: SalesGuardScope,
+    onGoToSales: () => void,
+  ): Promise<boolean> => {
+    try {
+      const db = await getDB();
+      const result = await checkSalesPrerequisite(db, scope);
+      if (result.hasSales) return true;
+
+      Alert.alert(
+        "⚠️ Cần chụp Bán hàng trước",
+        "Cần chụp Bán hàng sau lần kiểm kho gần nhất để tính chênh lệch chính xác.",
+        [
+          { text: "Đi tới Bán hàng", style: "default", onPress: onGoToSales },
+          { text: "Hủy", style: "cancel" },
+        ],
+      );
+      return false;
+    } catch (err) {
+      console.error("[Capture] checkSalesPrerequisite error:", err);
+      Alert.alert(
+        "Lỗi",
+        "Không thể kiểm tra điều kiện Bán hàng. Vui lòng thử lại.",
+      );
+      return false;
+    }
+  };
+
+  const confirmSalesMismatchBeforeSave = (): Promise<boolean> =>
+    new Promise((resolve) => {
+      Alert.alert(
+        "Cần kiểm tra với phiếu giấy",
+        "Tổng số phần hoặc doanh thu đang lệch với Z-report. Hãy đối chiếu tờ giấy đang cầm trước khi lưu.",
+        [
+          { text: "Quay lại kiểm tra", style: "cancel", onPress: () => resolve(false) },
+          { text: "Đã kiểm tra, vẫn lưu", style: "destructive", onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
+    });
 
   // Header Logic - use internal state for check mode and area
   const isFullCount = currentCheckMode === "FULL";
@@ -1255,13 +2248,33 @@ export default function InventoryCaptureScreen({
           </Text>
         </Pressable>
         <Pressable
-          onPress={() => {
+          onPress={async () => {
             // When switching from SALES/IMPORT to STOCK:
-            // - Switch to BAR area (expected workflow: sales at bar -> check bar stock)
-            // - Set mode to default for BAR (no mode selection needed for BAR)
+            // - Renew rebaseline: force Warehouse full count first, then Bar baseline.
+            // - STANDARD normal flow: require SALES before BAR stock check.
             if (snapMode !== "STOCK") {
-              setCurrentAreaType("BAR"); // Switch to BAR for end-of-shift check
-              setCurrentCheckMode(undefined); // BAR doesn't use FULL/SPOT modes
+              if (isStandard) {
+                if (proRebaseline.required) {
+                  if (!proRebaseline.warehouseDone) {
+                    setCurrentAreaType("WAREHOUSE");
+                    setCurrentCheckMode("FULL");
+                  } else {
+                    setCurrentAreaType("BAR");
+                    setCurrentCheckMode(undefined);
+                  }
+                  setSnapMode("STOCK");
+                  return;
+                }
+
+                const canEnterStock = await ensureSalesBeforeStock(
+                  "BAR",
+                  () => setSnapMode("SALES"),
+                );
+                if (!canEnterStock) return;
+
+                setCurrentAreaType("BAR"); // Switch to BAR for end-of-shift check
+                setCurrentCheckMode(undefined); // BAR doesn't use FULL/SPOT modes
+              }
             }
             setSnapMode("STOCK");
           }}
@@ -1483,7 +2496,7 @@ export default function InventoryCaptureScreen({
         {/* Parse button - show when images are added */}
         {imageUris.length > 0 && items.length === 0 && (
           <Pressable
-            onPress={handleParseImage}
+            onPress={() => handleParseImage()}
             disabled={parsing}
             style={{
               backgroundColor: parsing ? "#1A1A1A" : "#6B8E23",
@@ -1528,6 +2541,26 @@ export default function InventoryCaptureScreen({
           </View>
         )}
 
+        {canRetryHighAccuracy && imageUris.length > 0 && (
+          <Pressable
+            onPress={() => handleParseImage("high_accuracy")}
+            disabled={parsing}
+            style={{
+              backgroundColor: "#1A1A1A",
+              padding: 14,
+              borderRadius: 10,
+              alignItems: "center",
+              marginBottom: 16,
+              borderWidth: 1,
+              borderColor: "#E07A2F",
+            }}
+          >
+            <Text style={{ color: "#E07A2F", fontWeight: "700" }}>
+              Quét lại chính xác hơn (+1 lượt)
+            </Text>
+          </Pressable>
+        )}
+
         {/* Warnings */}
         {lowConfCount > 0 && (
           <View
@@ -1558,11 +2591,270 @@ export default function InventoryCaptureScreen({
           </View>
         )}
 
+        {hasStockDiagnostics && (
+          <View
+            style={{
+              backgroundColor:
+                stockMissingRows.length > 0 || stockDuplicateRows.length > 0
+                  ? "rgba(239,68,68,0.12)"
+                  : "#1A1A1A",
+              padding: 14,
+              borderRadius: 10,
+              marginBottom: 12,
+              borderWidth: 1,
+              borderColor:
+                stockMissingRows.length > 0 || stockDuplicateRows.length > 0
+                  ? "#EF4444"
+                  : "#2A2A2A",
+            }}
+          >
+            <Text
+              style={{
+                color:
+                  stockMissingRows.length > 0 || stockDuplicateRows.length > 0
+                    ? "#EF4444"
+                    : "#6B8E23",
+                fontWeight: "700",
+                fontSize: 14,
+                marginBottom: 8,
+              }}
+            >
+              Kiểm tra OCR kiểm kho
+            </Text>
+            <Text style={{ color: "#B8B3A8", fontSize: 12, lineHeight: 17 }}>
+              {stockUsedRawOcrParser
+                ? "Đang dùng parser raw OCR khóa theo dòng/STT."
+                : "Đang dùng Gemini fallback vì raw OCR chưa đủ cấu trúc."}
+            </Text>
+            {stockMissingRows.length > 0 && (
+              <Text style={{ color: "#EF4444", fontSize: 12, marginTop: 6 }}>
+                Thiếu STT: {stockMissingRows.join(", ")}
+              </Text>
+            )}
+            {stockDuplicateRows.length > 0 && (
+              <Text style={{ color: "#FBBF24", fontSize: 12, marginTop: 6 }}>
+                Trùng STT do ảnh overlap: {stockDuplicateRows.join(", ")}
+              </Text>
+            )}
+            {stockWarnings.map((warning, idx) => (
+              <Text
+                key={`${warning}-${idx}`}
+                style={{ color: "#FBBF24", fontSize: 12, marginTop: 6 }}
+              >
+                {warning}
+              </Text>
+            ))}
+            {(stockRawOcrText || stockRawDebugText) && (
+              <TouchableOpacity
+                activeOpacity={0.6}
+                onPress={() => setShowRawOcrModal(true)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={{
+                  marginTop: 10,
+                  paddingVertical: 12,
+                  borderTopWidth: 1,
+                  borderTopColor: "#2A2A2A",
+                  backgroundColor: "rgba(96,165,250,0.08)",
+                  borderRadius: 6,
+                }}
+              >
+                <Text
+                  style={{
+                    color: "#60A5FA",
+                    fontSize: 13,
+                    fontWeight: "600",
+                    textAlign: "center",
+                  }}
+                >
+                  {stockRawOcrText
+                    ? "Xem text gốc AI đọc được"
+                    : "Xem raw JSON Gemini đã đọc"}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {/* SALES: Banner tổng quan đối chiếu Z-report */}
+        {snapMode === "SALES" && items.length > 0 && (() => {
+          const totalQty = items.reduce((sum, i) => sum + (i.quantity || 0), 0);
+          const totalRevenue = items.reduce(
+            (sum, i) => sum + (i.totalRevenue ?? 0),
+            0,
+          );
+          const flaggedCount = items.filter(
+            (i) => (i.revenueDeviation ?? 0) > 0.02,
+          ).length;
+          const criticalItemCount = items.filter(
+            (i) =>
+              i.internalInconsistent ||
+              ((i.revenueDeviation ?? 0) > 0.10 && !i.menuPriceDiffers),
+          ).length;
+          const fmt = (n: number) =>
+            new Intl.NumberFormat("vi-VN").format(Math.round(n)) + "đ";
+          return (
+            <View
+              style={{
+                backgroundColor: hasSalesTotalMismatch
+                  ? "rgba(239,68,68,0.14)"
+                  : "#1A1A1A",
+                padding: 14,
+                borderRadius: 10,
+                marginBottom: 12,
+                borderWidth: 1,
+                borderColor: hasSalesTotalMismatch ? "#EF4444" : "#2A2A2A",
+              }}
+            >
+              <Text
+                style={{
+                  color: hasSalesTotalMismatch ? "#EF4444" : "#E07A2F",
+                  fontWeight: "700",
+                  fontSize: 14,
+                  marginBottom: 10,
+                }}
+              >
+                📊 Đối chiếu với Z-report
+              </Text>
+
+              {/* Số phần */}
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  marginBottom: 6,
+                }}
+              >
+                <Text style={{ color: "#B8B3A8", fontSize: 13 }}>Số phần:</Text>
+                <Text
+                  style={{
+                    color: salesQtyMismatch ? "#EF4444" : "#10B981",
+                    fontWeight: "700",
+                    fontSize: 13,
+                  }}
+                >
+                  {salesQtyMismatch
+                    ? `${salesQtyMismatch.got} / ${salesQtyMismatch.expected} ❌`
+                    : `${totalQty} ✅`}
+                </Text>
+              </View>
+
+              {/* Doanh thu */}
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  marginBottom: 6,
+                }}
+              >
+                <Text style={{ color: "#B8B3A8", fontSize: 13 }}>
+                  Doanh thu:
+                </Text>
+                <Text
+                  style={{
+                    color: salesRevenueMismatch ? "#EF4444" : "#10B981",
+                    fontWeight: "700",
+                    fontSize: 13,
+                  }}
+                >
+                  {salesRevenueMismatch
+                    ? `${fmt(salesRevenueMismatch.got)} / ${fmt(salesRevenueMismatch.expected)} ❌`
+                    : salesReportTotalRevenue
+                      ? `${fmt(totalRevenue)} ✅`
+                      : fmt(totalRevenue)}
+                </Text>
+              </View>
+
+              {/* Cảnh báo */}
+              {hasSalesTotalMismatch && (
+                <Text
+                  style={{
+                    color: "#EF4444",
+                    fontSize: 12,
+                    marginTop: 6,
+                    lineHeight: 16,
+                    fontWeight: "700",
+                  }}
+                >
+                  Cần kiểm tra với phiếu giấy trước khi lưu
+                </Text>
+              )}
+              {salesOrderSuspicious && (
+                <Text
+                  style={{
+                    color: "#FBBF24",
+                    fontSize: 12,
+                    marginTop: 6,
+                    lineHeight: 16,
+                  }}
+                >
+                  ⚠ Thứ tự có thể bị đảo — đối chiếu với ảnh gốc
+                </Text>
+              )}
+              {flaggedCount > 0 && (
+                <Text
+                  style={{
+                    color: "#FBBF24",
+                    fontSize: 12,
+                    marginTop: 6,
+                    lineHeight: 16,
+                  }}
+                >
+                  ⚠ {flaggedCount} món có giá lệch — kiểm tra ô đỏ/vàng
+                </Text>
+              )}
+              {criticalItemCount > 0 && (
+                <Text
+                  style={{
+                    color: "#EF4444",
+                    fontSize: 12,
+                    marginTop: 6,
+                    lineHeight: 16,
+                  }}
+                >
+                  {criticalItemCount} món có số liệu nghi ngờ — đối chiếu lại
+                </Text>
+              )}
+
+              {/* View raw OCR button */}
+              {salesRawOcrText && (
+                <TouchableOpacity
+                  activeOpacity={0.6}
+                  onPress={() => setShowRawOcrModal(true)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={{
+                    marginTop: 10,
+                    paddingVertical: 12,
+                    borderTopWidth: 1,
+                    borderTopColor: "#2A2A2A",
+                    backgroundColor: "rgba(96,165,250,0.08)",
+                    borderRadius: 6,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#60A5FA",
+                      fontSize: 13,
+                      fontWeight: "600",
+                      textAlign: "center",
+                    }}
+                  >
+                    📄 Xem text gốc AI đọc được
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        })()}
+
         {/* Items list */}
         {items.map((item, index) => {
           const style = getConfidenceStyle(item.confidence, item.quantity);
           const needsMapping =
             !item.linkedIngredientId && !item.isNewIngredient;
+          const salesCritical =
+            snapMode === "SALES" &&
+            (item.internalInconsistent ||
+              ((item.revenueDeviation ?? 0) > 0.10 && !item.menuPriceDiffers));
 
           return (
             <View
@@ -1573,8 +2865,10 @@ export default function InventoryCaptureScreen({
                 padding: 16,
                 marginBottom: 12,
                 // Side-border pattern for AI confidence
-                borderLeftWidth: style.borderWidth,
-                borderLeftColor: needsMapping ? "#E63946" : style.borderColor,
+                borderLeftWidth: salesCritical ? 5 : style.borderWidth,
+                borderLeftColor: needsMapping || salesCritical ? "#E63946" : style.borderColor,
+                borderWidth: salesCritical ? 1 : 0,
+                borderColor: salesCritical ? "rgba(239,68,68,0.45)" : "transparent",
               }}
             >
               {/* Header row */}
@@ -1586,7 +2880,11 @@ export default function InventoryCaptureScreen({
                 }}
               >
                 <Text style={{ color: "#94A3B8", fontSize: 12 }}>
-                  {item.rawName}
+                  {snapMode === "SALES" && item.rowIndex
+                    ? `#${item.rowIndex} · ${item.rawName}`
+                    : snapMode === "STOCK" && item.stt
+                      ? `STT ${item.stt} · ${item.rawName}`
+                    : item.rawName}
                 </Text>
                 <View
                   style={{
@@ -1599,10 +2897,166 @@ export default function InventoryCaptureScreen({
                   <Text
                     style={{ color: "white", fontSize: 11, fontWeight: "600" }}
                   >
-                    {item.confidence}%
+                    {Math.round(item.confidence * 100)}%
                   </Text>
                 </View>
               </View>
+
+              {/* SALES: Doanh thu dòng + verification badges */}
+              {snapMode === "SALES" && (() => {
+                const fmt = (n: number | null | undefined) =>
+                  n == null
+                    ? "—"
+                    : new Intl.NumberFormat("vi-VN").format(Math.round(n)) + "đ";
+                const aiUnitFromTotal =
+                  item.totalRevenue != null && item.quantity > 0
+                    ? item.totalRevenue / item.quantity
+                    : null;
+                const showAnything =
+                  item.totalRevenue != null ||
+                  item.internalInconsistent ||
+                  item.menuPriceDiffers ||
+                  item.recipePrice != null;
+                if (!showAnything) return null;
+
+                return (
+                  <View
+                    style={{
+                      marginBottom: 10,
+                      paddingHorizontal: 10,
+                      paddingVertical: 8,
+                      backgroundColor: "#121212",
+                      borderRadius: 6,
+                      gap: 4,
+                    }}
+                  >
+                    {/* Row 1: AI revenue */}
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                    >
+                      <Text style={{ color: "#94A3B8", fontSize: 12 }}>
+                        💰 AI đọc:
+                      </Text>
+                      <Text
+                        style={{
+                          color: item.totalRevenue == null ? "#EF4444" : "#F5F3EF",
+                          fontSize: 13,
+                          fontWeight: "600",
+                        }}
+                      >
+                        {item.totalRevenue == null
+                          ? "không đọc được"
+                          : fmt(item.totalRevenue)}
+                      </Text>
+                    </View>
+
+                    {/* Row 2: qty × ai unit_price (computed) */}
+                    {aiUnitFromTotal != null && (
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                      >
+                        <Text style={{ color: "#94A3B8", fontSize: 11 }}>
+                          📐 {item.quantity} × {fmt(aiUnitFromTotal)}/phần
+                        </Text>
+                        {item.internalInconsistent && (
+                          <View
+                            style={{
+                              paddingHorizontal: 6,
+                              paddingVertical: 2,
+                              borderRadius: 4,
+                              backgroundColor: "#EF4444",
+                            }}
+                          >
+                            <Text
+                              style={{ color: "white", fontSize: 10, fontWeight: "700" }}
+                            >
+                              ❌ AI tự mâu thuẫn
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    )}
+
+                    {/* Row 3: menu price comparison */}
+                    {item.recipePrice != null && item.recipePrice > 0 && (
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                      >
+                        <Text style={{ color: "#94A3B8", fontSize: 11 }}>
+                          🏷 Giá menu: {fmt(item.recipePrice)}/phần
+                        </Text>
+                        {item.menuPriceDiffers ? (
+                          <View
+                            style={{
+                              paddingHorizontal: 6,
+                              paddingVertical: 2,
+                              borderRadius: 4,
+                              backgroundColor: "#F97316",
+                            }}
+                          >
+                            <Text
+                              style={{ color: "white", fontSize: 10, fontWeight: "700" }}
+                            >
+                              ⚠ giá khác menu
+                            </Text>
+                          </View>
+                        ) : item.revenueDeviation != null &&
+                          item.revenueDeviation > 0.02 &&
+                          !item.internalInconsistent ? (
+                          <View
+                            style={{
+                              paddingHorizontal: 6,
+                              paddingVertical: 2,
+                              borderRadius: 4,
+                              backgroundColor:
+                                item.revenueDeviation > 0.10 ? "#EF4444" : "#FBBF24",
+                            }}
+                          >
+                            <Text
+                              style={{ color: "white", fontSize: 10, fontWeight: "700" }}
+                            >
+                              lệch {Math.round(item.revenueDeviation * 100)}%
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    )}
+
+                    {/* No recipe price → can't cross-check */}
+                    {item.recipePrice == null && item.totalRevenue != null && (
+                      <Text style={{ color: "#6B7280", fontSize: 10 }}>
+                        ⓘ Chưa có giá menu để đối chiếu
+                      </Text>
+                    )}
+                  </View>
+                );
+              })()}
+
+              {snapMode === "STOCK" && item.reviewReason && (
+                <Text
+                  style={{
+                    color: "#EF4444",
+                    fontSize: 12,
+                    lineHeight: 16,
+                    marginBottom: 10,
+                    fontWeight: "600",
+                  }}
+                >
+                  Cần kiểm tra: {formatStockReviewReason(item.reviewReason)}
+                </Text>
+              )}
 
               {/* Ingredient Link (Autocomplete) */}
               <Pressable
@@ -1847,6 +3301,97 @@ export default function InventoryCaptureScreen({
                 </View>
               )}
 
+              {snapMode === "IMPORT" && (
+                <View style={{ marginBottom: 8 }}>
+                  {(() => {
+                    const shelfLifeDays = resolveShelfLifeDays(
+                      item.linkedIngredientId,
+                    );
+                    const isAutoExpiry = !!shelfLifeDays;
+                    const expiryDisplay = formatExpiryDisplay(item.expiryDate);
+                    const isPickerOpen = expiryPickerTargetIndex === index;
+                    return (
+                      <>
+                        <Text style={{ color: "#94A3B8", fontSize: 12, marginBottom: 4 }}>
+                          Hạn sử dụng
+                        </Text>
+                        {isAutoExpiry ? (
+                          <View
+                            style={{
+                              backgroundColor: "#1F2937",
+                              borderRadius: 8,
+                              padding: 10,
+                              borderWidth: 1,
+                              borderColor: "#334155",
+                            }}
+                          >
+                            <Text style={{ color: "#94A3B8", fontSize: 14 }}>
+                              {expiryDisplay}
+                            </Text>
+                          </View>
+                        ) : (
+                          <Pressable
+                            onPress={() =>
+                              openExpiryPickerForItem(index, item.expiryDate ?? null)
+                            }
+                            style={{
+                              backgroundColor: "#121212",
+                              borderRadius: 8,
+                              padding: 10,
+                              borderWidth: 1,
+                              borderColor: "#2A2A2A",
+                              flexDirection: "row",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                            }}
+                          >
+                            <Text
+                              style={{
+                                color: item.expiryDate ? "white" : "#64748B",
+                                fontSize: 14,
+                              }}
+                            >
+                              {expiryDisplay}
+                            </Text>
+                            <Ionicons name="calendar-outline" size={16} color="#94A3B8" />
+                          </Pressable>
+                        )}
+                        {!isAutoExpiry && isPickerOpen && (
+                          <>
+                            <DateTimePicker
+                              value={expiryPickerValue}
+                              mode="date"
+                              display={Platform.OS === "ios" ? "spinner" : "default"}
+                              minimumDate={new Date(2000, 0, 1)}
+                              onChange={handleExpiryPickerChange}
+                            />
+                            {Platform.OS === "ios" && (
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  justifyContent: "flex-end",
+                                  gap: 8,
+                                  marginTop: 6,
+                                }}
+                              >
+                                <Pressable onPress={() => setExpiryPickerTargetIndex(null)}>
+                                  <Text style={{ color: "#94A3B8", fontSize: 13 }}>Đóng</Text>
+                                </Pressable>
+                              </View>
+                            )}
+                          </>
+                        )}
+                        <Text style={{ color: "#64748B", fontSize: 11, marginTop: 4 }}>
+                          {isAutoExpiry
+                            ? `Tự tính từ shelf_life_days = ${shelfLifeDays} ngày`
+                            : "Chọn ngày hết hạn vì nguyên liệu chưa cấu hình shelf_life_days"}
+                        </Text>
+                      </>
+                    );
+                  })()}
+                </View>
+              )}
+
               {/* Remove */}
               <Pressable
                 onPress={() => removeItem(index)}
@@ -1871,10 +3416,82 @@ export default function InventoryCaptureScreen({
         {items.length > 0 && (
           <Pressable
             onPress={async () => {
-              if (!canSave) return;
+              if (!canSave || saveInFlightRef.current) return;
 
-              // === VARIANCE GATEKEEPER (STOCK Mode Only) ===
-              if (snapMode === "STOCK") {
+              saveInFlightRef.current = true;
+              setIsSaving(true);
+              console.log("[Capture SAVE] pressed", {
+                snapMode,
+                checkMode: currentCheckMode,
+                areaType: currentAreaType,
+                itemCount: items.length,
+              });
+
+              try {
+                if (hasSalesTotalMismatch) {
+                  const confirmed = await confirmSalesMismatchBeforeSave();
+                  if (!confirmed) return;
+                }
+
+                if (snapMode === "STOCK" && proRebaseline.required) {
+                  if (
+                    currentAreaType === "WAREHOUSE" &&
+                    !proRebaseline.warehouseDone &&
+                    currentCheckMode !== "FULL"
+                  ) {
+                    Alert.alert(
+                      "Cần kiểm toàn bộ Kho tổng",
+                      "Lần khôi phục Kho Kép cần kiểm toàn bộ Kho tổng để đặt lại số chuẩn.",
+                    );
+                    return;
+                  }
+
+                  if (
+                    currentAreaType === "BAR" &&
+                    !proRebaseline.warehouseDone
+                  ) {
+                    Alert.alert(
+                      "Cần kiểm Kho tổng trước",
+                      "Sau khi mua lại PRO, hãy kiểm toàn bộ Kho tổng trước rồi mới kiểm Bar.",
+                    );
+                    return;
+                  }
+                }
+
+                if (
+                  snapMode === "STOCK" &&
+                  currentCheckMode !== "SPOT" &&
+                  !isProRebaselineCheck
+                ) {
+                  const guardScope = getStockSalesGuardScope();
+                  if (guardScope) {
+                    console.log("[Capture SAVE] checking sales prerequisite", {
+                      guardScope,
+                    });
+                    const canSaveStock = await ensureSalesBeforeStock(
+                      guardScope,
+                      () => setSnapMode("SALES"),
+                    );
+                    if (!canSaveStock) return;
+                  }
+                }
+
+                const itemsForSave =
+                  snapMode === "SALES"
+                    ? items
+                    : items.map((item) => normalizeLinkedInventoryItem(item));
+                const displayItemsForLearning = items;
+                stockUnitLearningItemsRef.current = displayItemsForLearning;
+                if (snapMode === "IMPORT") {
+                  setItems(itemsForSave);
+                }
+
+                // === VARIANCE GATEKEEPER (STOCK Mode Only) ===
+                if (
+                  snapMode === "STOCK" &&
+                  currentCheckMode !== "SPOT" &&
+                  !isProRebaselineCheck
+                ) {
                 const variances: {
                   name: string;
                   counted: number;
@@ -1939,7 +3556,7 @@ export default function InventoryCaptureScreen({
                   }
                 }
 
-                for (const item of items) {
+                for (const item of itemsForSave) {
                   if (!item.linkedIngredientId) continue;
                   // Use fresh data from DB, not stale state
                   const ing = freshIngMap.get(item.linkedIngredientId);
@@ -2015,7 +3632,7 @@ export default function InventoryCaptureScreen({
                 );
 
                 // Check for Perfect Score Trap (liquid/powder items at 100% match)
-                const liquidItems = items.filter((item) => {
+                const liquidItems = itemsForSave.filter((item) => {
                   const ing = ingredients.find(
                     (i) => i.id === item.linkedIngredientId,
                   );
@@ -2060,7 +3677,7 @@ export default function InventoryCaptureScreen({
                       name: v.name,
                       surplus: v.counted - v.expected,
                       unit:
-                        items.find(
+                        itemsForSave.find(
                           (i) =>
                             i.linkedIngredientId &&
                             ingredients.find(
@@ -2078,11 +3695,11 @@ export default function InventoryCaptureScreen({
                   await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                 }
 
-                // ✅ LEVEL 1: <2% - Silent (no haptic, auto-approve)
-              }
+                  // ✅ LEVEL 1: <2% - Silent (no haptic, auto-approve)
+                }
 
-              // === SAVE TO DB ===
-              try {
+                // === SAVE TO DB ===
+                try {
                 const db = await getDB();
 
                 // === STEP 1: AUTO-LEARN ALIASES ===
@@ -2090,7 +3707,7 @@ export default function InventoryCaptureScreen({
                 // we should save "sữa dalat" as alias for next time.
                 const { addToSyncQueue } = await import("../sync/syncEngine");
 
-                for (const item of items) {
+                for (const item of itemsForSave) {
                   // Only map if linked & not new
                   if (
                     item.linkedIngredientId &&
@@ -2107,37 +3724,66 @@ export default function InventoryCaptureScreen({
                       !linkedNameLower.includes(rawNameLower) &&
                       !rawNameLower.includes(linkedNameLower)
                     ) {
-                      // Find local ingredient to get current aliases
+                      const recipe =
+                        snapMode === "SALES"
+                          ? recipes.find((r) => r.id === item.linkedIngredientId)
+                          : null;
+
+                      if (recipe) {
+                        const currentAliases = parseAliases(recipe.aliases);
+
+                        if (
+                          !currentAliases.some(
+                            (alias) => alias.toLowerCase() === rawNameLower,
+                          )
+                        ) {
+                          currentAliases.push(rawNameLower);
+                          const newAliasesJson = JSON.stringify(currentAliases);
+
+                          await db.runAsync(
+                            `UPDATE local_recipes SET aliases = ? WHERE id = ?`,
+                            [newAliasesJson, recipe.id],
+                          );
+
+                          await addToSyncQueue("recipes", "UPSERT", {
+                            id: recipe.id,
+                            aliases: currentAliases,
+                          });
+
+                          setRecipes((prev) =>
+                            prev.map((rec) =>
+                              rec.id === recipe.id
+                                ? { ...rec, aliases: newAliasesJson }
+                                : rec,
+                            ),
+                          );
+
+                          console.log(
+                            `[AutoLearn] Added alias "${item.rawName}" for recipe "${recipe.name}"`,
+                          );
+                        }
+                        continue;
+                      }
+
                       const ing = ingredients.find(
                         (i) => i.id === item.linkedIngredientId,
                       );
                       if (ing) {
-                        let currentAliases: string[] = [];
-                        try {
-                          currentAliases =
-                            typeof ing.aliases === "string"
-                              ? JSON.parse(ing.aliases)
-                              : ing.aliases || [];
-                        } catch (e) {
-                          currentAliases = [];
-                        }
+                        const currentAliases = parseAliases(ing.aliases);
 
-                        // Add new alias if not exists
                         if (
                           !currentAliases.some(
                             (a) => a.toLowerCase() === rawNameLower,
                           )
                         ) {
-                          currentAliases.push(item.rawName.toLowerCase()); // Store lowercase for better matching
+                          currentAliases.push(rawNameLower);
                           const newAliasesJson = JSON.stringify(currentAliases);
 
-                          // 1. Update LOCAL DB
                           await db.runAsync(
                             `UPDATE local_ingredients SET aliases = ? WHERE id = ?`,
                             [newAliasesJson, ing.id],
                           );
 
-                          // 2. Queue Sync to Cloud
                           await addToSyncQueue("ingredients", "UPSERT", {
                             id: ing.id,
                             aliases: currentAliases,
@@ -2153,8 +3799,8 @@ export default function InventoryCaptureScreen({
                 }
 
                 // === STEP 2: SAVE LOGS (PER ITEM) ===
-                // We must save individual logs for each item effectively so SyncEngine can send
-                // quantity_change_base and ingredient_id to Supabase to trigger Stock Updates.
+                // We must save logs in the local queue so /sync/push can apply
+                // quantity_change_base and ingredient-level stock changes on the backend.
 
                 // 2.1 Ensure columns exist (Safe-guard for existing installs)
                 try {
@@ -2173,17 +3819,44 @@ export default function InventoryCaptureScreen({
                   );
                 } catch {}
 
-                const location = areaType === "BAR" ? "BAR" : "WAREHOUSE";
+                const location =
+                  currentAreaType === "BAR" ? "BAR" : "WAREHOUSE";
                 const now = new Date().toISOString();
+                const stockCheckType =
+                  currentAreaType === "BAR"
+                    ? "BAR"
+                    : currentCheckMode || "FULL";
 
                 // === SALES MODE: Create 1 batch log with all items ===
                 if (snapMode === "SALES") {
                   const logId = Crypto.randomUUID();
-                  const totalRevenue = items.reduce(
-                    (sum, i) => sum + (i.unitCost || 0) * i.quantity,
+                  const salesPayloadItems = itemsForSave.map((item) => {
+                    const recipeId = item.recipeId ?? null;
+                    const lineRevenue =
+                      item.totalRevenue ?? ((item.unitCost || 0) * item.quantity);
+
+                    return {
+                      recipe_id: recipeId,
+                      ingredient_id: recipeId ? null : item.linkedIngredientId,
+                      ingredient_name: item.linkedIngredientName || item.rawName,
+                      raw_name: item.rawName,
+                      quantity: item.quantity,
+                      unit: item.unit,
+                      unit_cost: item.unitCost || 0,
+                      row_index: item.rowIndex ?? null,
+                      total_revenue: lineRevenue,
+                      expected_revenue: item.expectedRevenue ?? null,
+                      revenue_deviation: item.revenueDeviation ?? null,
+                      recipe_price: item.recipePrice ?? null,
+                      internal_inconsistent: !!item.internalInconsistent,
+                      menu_price_differs: !!item.menuPriceDiffers,
+                    };
+                  });
+                  const totalRevenue = salesPayloadItems.reduce(
+                    (sum, item) => sum + (item.total_revenue || 0),
                     0,
                   );
-                  const totalItems = items.reduce(
+                  const totalItems = itemsForSave.reduce(
                     (sum, i) => sum + i.quantity,
                     0,
                   );
@@ -2199,14 +3872,7 @@ export default function InventoryCaptureScreen({
                       "SALES",
                       location,
                       JSON.stringify({
-                        items: items.map((item) => ({
-                          ingredient_id: item.linkedIngredientId,
-                          ingredient_name:
-                            item.linkedIngredientName || item.rawName,
-                          quantity: item.quantity,
-                          unit: item.unit,
-                          unit_cost: item.unitCost || 0,
-                        })),
+                        items: salesPayloadItems,
                         total_revenue: totalRevenue,
                         total_items: totalItems,
                       }),
@@ -2214,11 +3880,26 @@ export default function InventoryCaptureScreen({
                     ],
                   );
                   console.log(
-                    `[SALES] Created 1 batch log with ${items.length} items`,
+                    `[SALES] Created 1 batch log with ${itemsForSave.length} items`,
                   );
                 } else if (snapMode === "IMPORT") {
                   // === IMPORT MODE: Create per-item logs for stock updates ===
-                  for (const item of items) {
+                  for (const item of itemsForSave) {
+                    const shelfLifeDays = resolveShelfLifeDays(
+                      item.linkedIngredientId,
+                    );
+                    const computedExpiryDate = shelfLifeDays
+                      ? buildAutoExpiryDate(new Date(now), shelfLifeDays)
+                      : item.expiryDate ?? null;
+                    if (!shelfLifeDays && !computedExpiryDate) {
+                      throw new Error(
+                        `Thiếu ngày hết hạn cho "${item.linkedIngredientName || item.rawName}"`,
+                      );
+                    }
+
+                    const expirySource = shelfLifeDays
+                      ? "AUTO_SHELF_LIFE"
+                      : "MANUAL";
                     const logId = Crypto.randomUUID();
 
                     console.log(
@@ -2254,6 +3935,9 @@ export default function InventoryCaptureScreen({
                               quantity: item.quantity,
                               unit: item.unit,
                               unit_cost: item.unitCost || 0,
+                              expiry_date: computedExpiryDate,
+                              expiry_source: expirySource,
+                              shelf_life_days_snapshot: shelfLifeDays ?? null,
                             },
                           ],
                         }),
@@ -2263,11 +3947,11 @@ export default function InventoryCaptureScreen({
                   }
                 } else if (snapMode === "STOCK") {
                   // === STOCK MODE: Create SINGLE batch log with ALL items ===
-                  // sync-up will parse items[] and update each ingredient
+                  // /sync/push will parse items[] and update each ingredient
                   const logId = Crypto.randomUUID();
 
                   console.log(
-                    `[Capture SAVE] STOCK batch: ${items.length} items, checkMode=${currentCheckMode}, areaType=${currentAreaType}`,
+                    `[Capture SAVE] STOCK batch: ${itemsForSave.length} items, checkMode=${currentCheckMode}, areaType=${currentAreaType}`,
                   );
 
                   await db.runAsync(
@@ -2281,14 +3965,19 @@ export default function InventoryCaptureScreen({
                       snapMode,
                       location,
                       JSON.stringify({
-                        check_type: checkMode || "FULL",
-                        location: areaType || "WAREHOUSE",
-                        items: items.map((item) => ({
+                        check_type: stockCheckType,
+                        location: currentAreaType || "WAREHOUSE",
+                        items: itemsForSave.map((item) => ({
                           ingredient_id: item.linkedIngredientId,
                           linkedIngredientId: item.linkedIngredientId,
                           ingredient_name:
                             item.linkedIngredientName || item.rawName,
                           rawName: item.rawName,
+                          stt: item.stt ?? null,
+                          raw_text: item.rawText ?? null,
+                          original_name: item.originalName ?? item.rawName,
+                          source_page: item.sourcePage ?? null,
+                          review_reason: item.reviewReason ?? null,
                           quantity: item.quantity,
                           unit: item.unit,
                           unit_cost: item.unitCost || 0,
@@ -2299,13 +3988,21 @@ export default function InventoryCaptureScreen({
                   );
                 }
 
+                await applyLocalInventoryMutations(
+                  db,
+                  snapMode,
+                  location,
+                  itemsForSave,
+                  now,
+                );
+
                 // === STEP 3: SPECIAL HANDLING FOR FULL_COUNT ===
                 if (
                   snapMode === "STOCK" &&
-                  checkMode === "FULL" &&
-                  areaType === "WAREHOUSE"
+                  currentCheckMode === "FULL" &&
+                  currentAreaType === "WAREHOUSE"
                 ) {
-                  const countedIds = items
+                  const countedIds = itemsForSave
                     .map((i) => i.linkedIngredientId)
                     .filter((id): id is string => !!id);
 
@@ -2318,8 +4015,18 @@ export default function InventoryCaptureScreen({
                   // But for now, local DB is updated.
                 }
 
+                if (isProRebaselineCheck && snapMode === "STOCK") {
+                  if (currentAreaType === "WAREHOUSE") {
+                    await markProRebaselineWarehouseDone(db);
+                  } else if (currentAreaType === "BAR") {
+                    await markProRebaselineBarDone(db);
+                  }
+                }
+
+                await learnStockCheckUnits(db, displayItemsForLearning);
+
                 // Add success log
-                console.log(`[Capture] Saved ${items.length} logs for sync`);
+                console.log(`[Capture] Saved ${itemsForSave.length} logs for sync`);
 
                 // Success haptic
                 await Haptics.notificationAsync(
@@ -2350,12 +4057,19 @@ export default function InventoryCaptureScreen({
                 await Haptics.notificationAsync(
                   Haptics.NotificationFeedbackType.Error,
                 );
-                Alert.alert("Lỗi", "Không thể lưu dữ liệu");
+                Alert.alert(
+                  "Lỗi",
+                  err instanceof Error ? err.message : "Không thể lưu dữ liệu",
+                );
+              }
+              } finally {
+                saveInFlightRef.current = false;
+                setIsSaving(false);
               }
             }}
-            disabled={!canSave}
+            disabled={!canSave || isSaving}
             style={{
-              backgroundColor: canSave ? "#E07A2F" : "#334155",
+              backgroundColor: canSave && !isSaving ? "#E07A2F" : "#334155",
               padding: 16,
               borderRadius: 12,
               alignItems: "center",
@@ -2364,11 +4078,86 @@ export default function InventoryCaptureScreen({
             }}
           >
             <Text style={{ color: "white", fontWeight: "700", fontSize: 16 }}>
-              {canSave ? "✓ Xác nhận & Lưu" : "⚠️ Chọn nguyên liệu"}
+              {isSaving
+                ? "Đang lưu..."
+                : canSave
+                  ? "✓ Xác nhận & Lưu"
+                  : hasMissingImportExpiry
+                    ? "⚠️ Nhập ngày hết hạn"
+                    : "⚠️ Chọn nguyên liệu"}
             </Text>
           </Pressable>
         )}
       </ScrollView>
+
+      {/* Raw OCR Modal — show full text AI đã đọc để user verify */}
+      <Modal
+        visible={showRawOcrModal}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setShowRawOcrModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: "#121212" }}>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: 16,
+              borderBottomWidth: 1,
+              borderBottomColor: "#2A2A2A",
+            }}
+          >
+            <Text
+              style={{ color: "#F5F3EF", fontSize: 16, fontWeight: "700" }}
+            >
+              {snapMode === "STOCK" && !stockRawOcrText
+                ? "📄 Raw JSON Gemini đã đọc"
+                : "📄 Text gốc AI đọc được"}
+            </Text>
+            <Pressable
+              onPress={() => setShowRawOcrModal(false)}
+              style={{ padding: 4 }}
+            >
+              <Ionicons name="close" size={26} color="#F5F3EF" />
+            </Pressable>
+          </View>
+          <ScrollView style={{ flex: 1, padding: 16 }}>
+            <Text
+              style={{
+                color: "#B8B3A8",
+                fontSize: 12,
+                marginBottom: 8,
+                lineHeight: 18,
+              }}
+            >
+              Đối chiếu nội dung dưới đây với danh sách AI đã structure để
+              kiểm tra nhanh các sai lệch.
+            </Text>
+            <View
+              style={{
+                backgroundColor: "#1A1A1A",
+                padding: 12,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: "#2A2A2A",
+              }}
+            >
+              <Text
+                style={{
+                  color: "#F5F3EF",
+                  fontSize: 12,
+                  fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
+                  lineHeight: 18,
+                }}
+                selectable
+              >
+                {rawOcrTextForModal || "(Không có raw OCR text)"}
+              </Text>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
 
       {/* Variance Modal - >15% Loss */}
       <VarianceModal
@@ -2376,12 +4165,21 @@ export default function InventoryCaptureScreen({
         items={varianceItems}
         onSubmit={async (reason: VarianceReason, note?: string) => {
           setShowVarianceModal(false);
-          // Save as BATCH log - sync-up will parse items[] and update each ingredient
+          // Save as BATCH log - /sync/push will parse items[] and update each ingredient
           try {
             const db = await getDB();
             const logId = Crypto.randomUUID();
             const now = new Date().toISOString();
-            const location = areaType === "BAR" ? "BAR" : "WAREHOUSE";
+            const location = currentAreaType === "BAR" ? "BAR" : "WAREHOUSE";
+            const stockCheckType =
+              currentAreaType === "BAR" ? "BAR" : currentCheckMode || "FULL";
+            const itemsForSave = items.map((item) =>
+              normalizeLinkedInventoryItem(item),
+            );
+            const displayItemsForLearning =
+              stockUnitLearningItemsRef.current.length > 0
+                ? stockUnitLearningItemsRef.current
+                : items;
 
             // Create single batch log with all items
             await db.runAsync(
@@ -2395,16 +4193,21 @@ export default function InventoryCaptureScreen({
                 snapMode,
                 location,
                 JSON.stringify({
-                  check_type: checkMode || "FULL",
-                  location: areaType || "WAREHOUSE",
+                  check_type: stockCheckType,
+                  location: currentAreaType || "WAREHOUSE",
                   variance_reason: reason,
                   variance_note: note,
                   is_flagged: isFlagged,
-                  items: items.map((item) => ({
+                  items: itemsForSave.map((item) => ({
                     ingredient_id: item.linkedIngredientId,
                     linkedIngredientId: item.linkedIngredientId,
                     ingredient_name: item.linkedIngredientName || item.rawName,
                     rawName: item.rawName,
+                    stt: item.stt ?? null,
+                    raw_text: item.rawText ?? null,
+                    original_name: item.originalName ?? item.rawName,
+                    source_page: item.sourcePage ?? null,
+                    review_reason: item.reviewReason ?? null,
                     quantity: item.quantity,
                     unit: item.unit,
                     unit_cost: item.unitCost || 0,
@@ -2414,14 +4217,29 @@ export default function InventoryCaptureScreen({
               ],
             );
 
+            await applyLocalInventoryMutations(
+              db,
+              "STOCK",
+              location,
+              itemsForSave,
+              now,
+            );
+            await learnStockCheckUnits(db, displayItemsForLearning);
+
             await Haptics.notificationAsync(
               Haptics.NotificationFeedbackType.Success,
             );
             Alert.alert("Đã lưu", "Phiếu kiểm kê đã lưu với giải trình.");
+            syncPendingLogs(db).then(() => {
+              console.log("⚡ Auto-sync triggered after variance save");
+            });
             onBack();
           } catch (err) {
             console.error("Save failed:", err);
-            Alert.alert("Lỗi", "Không thể lưu dữ liệu");
+            Alert.alert(
+              "Lỗi",
+              err instanceof Error ? err.message : "Không thể lưu dữ liệu",
+            );
           }
         }}
         onCancel={() => setShowVarianceModal(false)}
@@ -2477,14 +4295,21 @@ export default function InventoryCaptureScreen({
       {/* Sales Camera with 3-section grid (SALES mode only) */}
       <SalesCameraModal
         visible={showSalesCamera}
-        onCapture={(uri) => {
+        onCapture={async (uri) => {
           setShowSalesCamera(false);
-          setImageUris((prev) => [...prev, uri]);
-          setItems([]);
-          setError(null);
+          await appendPersistedImages([uri], "capture_sales");
         }}
         onClose={() => setShowSalesCamera(false)}
         totalPhotos={imageUris.length}
+      />
+
+      <QuotaModal
+        visible={!!quotaExceeded}
+        canWatchAd={quotaExceeded?.canWatchAd ?? false}
+        adRewardScans={quotaExceeded?.adRewardScans ?? 0}
+        maxAdRewardsPerDay={quotaExceeded?.maxAdRewardsPerDay ?? 0}
+        onClose={() => setQuotaExceeded(null)}
+        onRewardGranted={() => setQuotaExceeded(null)}
       />
     </View>
   );

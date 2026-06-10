@@ -6,10 +6,14 @@ import {
   createClient,
   SupabaseClient,
   Session,
-  User,
 } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
 import { Env } from "../../../env";
+import {
+  api,
+  loginMobile,
+  logoutBackend,
+} from "../../../services/api";
 
 // Use centralized env.ts per .antigravityrules Section 2
 const SUPABASE_URL = Env.SUPABASE_URL;
@@ -131,11 +135,14 @@ export const AuthService = {
         return { success: false, error: error.message };
       }
 
-      if (!data.user) {
+      if (!data.user || !data.session) {
         return { success: false, error: "Login failed" };
       }
 
-      // Fetch profile
+      // Exchange Supabase token for backend tokens
+      await loginMobile(data.session.access_token);
+
+      // Fetch profile via backend
       const profile = await AuthService.getProfile(data.user.id);
 
       return {
@@ -167,22 +174,7 @@ export const AuthService = {
     }
 
     try {
-      // 1. Verify invite code via Edge Function
-      const { data: verifyData, error: verifyError } =
-        await supabase.functions.invoke("staff-verify-invite", {
-          body: { code: data.inviteCode },
-        });
-
-      if (verifyError || !verifyData?.valid) {
-        return {
-          success: false,
-          error: verifyData?.error || "Mã mời không hợp lệ hoặc đã hết hạn",
-        };
-      }
-
-      const businessId = verifyData.business_id;
-
-      // 2. Sign up
+      // 1. Sign up (Supabase owns credentials)
       const { data: authData, error: signupError } = await supabase.auth.signUp(
         {
           email: data.email,
@@ -204,22 +196,25 @@ export const AuthService = {
         };
       }
 
-      // 3. Create profile (PENDING status - owner must approve)
-      const { error: profileError } = await supabase.from("profiles").insert({
-        id: authData.user.id,
-        business_id: businessId,
-        full_name: data.fullName,
-        phone_number: data.phoneNumber,
-        role: "STAFF",
-        status: "PENDING",
-      });
-
-      if (profileError) {
+      const supabaseAccessToken = authData.session?.access_token;
+      if (!supabaseAccessToken) {
         return {
           success: false,
-          error: "Lỗi tạo hồ sơ: " + profileError.message,
+          error: "Vui lòng xác nhận email rồi đăng nhập để tham gia quán",
         };
       }
+
+      // 2. Exchange Supabase token for backend tokens (auto-creates Profile)
+      await loginMobile(supabaseAccessToken, {
+        fullName: data.fullName,
+        phoneNumber: data.phoneNumber,
+      });
+
+      // 3. Join business via invite code (backend attaches businessId + PENDING)
+      const joinRes = await api.post<{ id: string; businessId: string }>(
+        "/auth/join-staff",
+        { code: data.inviteCode }
+      );
 
       return {
         success: true,
@@ -227,7 +222,7 @@ export const AuthService = {
           id: authData.user.id,
           email: authData.user.email || "",
           role: "STAFF",
-          businessId,
+          businessId: joinRes.businessId,
         },
       };
     } catch (err: any) {
@@ -236,34 +231,39 @@ export const AuthService = {
   },
 
   /**
-   * Logout
+   * Logout — revoke backend refresh token + Supabase session
    */
   logout: async (): Promise<void> => {
-    if (!supabase) return;
+    try {
+      await logoutBackend();
+    } catch (err) {
+      console.error("[AuthService] Backend logout error:", err);
+    }
 
+    if (!supabase) return;
     try {
       await supabase.auth.signOut();
     } catch (err) {
-      console.error("[AuthService] Logout error:", err);
+      console.error("[AuthService] Supabase logout error:", err);
     }
   },
 
   /**
-   * Get user profile
+   * Get user profile (via BE-SnapKO /profiles/me — camelCase mapped to snake_case for back-compat)
    */
-  getProfile: async (userId: string): Promise<ProfileData | null> => {
-    if (!supabase) return null;
-
+  getProfile: async (_userId: string): Promise<ProfileData | null> => {
     try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", userId)
-        .single();
-
-      if (error || !data) return null;
-      return data as ProfileData;
-    } catch {
+      const profile = await api.get<any>("/profiles/me");
+      if (!profile) return null;
+      return {
+        id: profile.id,
+        business_id: profile.businessId,
+        full_name: profile.fullName,
+        role: profile.role,
+        status: profile.status,
+      };
+    } catch (err) {
+      console.error("[AuthService] getProfile error:", err);
       return null;
     }
   },

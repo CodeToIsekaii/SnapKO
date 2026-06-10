@@ -13,6 +13,7 @@ import { getPendingLends, markLendReturned, PendingLend } from "../db";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase"; // For realtime
 import { getDB } from "../db";
+import { incrementStockLevel, resolveLocalAreaByLocation } from "../db/stockLevelHelper";
 import * as Crypto from "expo-crypto";
 import * as Haptics from "expo-haptics";
 
@@ -93,23 +94,10 @@ export const PendingLendsWidget = ({
       // 1. Update status locally
       await markLendReturned(returningItem.id, returnLocation, now);
 
-      // 2. Add Stock back (Restock)
-      // Transaction logic: Credit inventory
-      if (returnLocation === "WAREHOUSE") {
-        await db.runAsync(
-          `UPDATE local_ingredients 
-           SET warehouse_qty = warehouse_qty + ? 
-           WHERE id = ?`,
-          [returningItem.quantity, returningItem.ingredient_id]
-        );
-      } else {
-        // Return to BAR -> Increase Bar Qty
-        await db.runAsync(
-          `UPDATE local_ingredients 
-           SET bar_qty = bar_qty + ? 
-           WHERE id = ?`,
-          [returningItem.quantity, returningItem.ingredient_id]
-        );
+      // 2. Add Stock back via stock_levels (syncLegacyQtyLocal keeps cache in sync)
+      const returnAreaId = await resolveLocalAreaByLocation(db, returnLocation);
+      if (returnAreaId) {
+        await incrementStockLevel(db, returningItem.ingredient_id, returnAreaId, returningItem.quantity);
       }
 
       // 3. Create Import Log (Reason: RETURN_FROM_LOAN)

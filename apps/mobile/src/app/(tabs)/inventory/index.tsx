@@ -16,6 +16,7 @@ import {
   TouchableOpacity,
   FlatList,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -25,6 +26,12 @@ import {
   StorageArea as AreaType,
   CheckMode,
 } from "../../../components";
+import { useInventoryModel } from "../../../contexts/InventoryModelContext";
+import { getDB } from "../../../db";
+import {
+  getProRebaselineState,
+  type ProRebaselineState,
+} from "../../../utils/proRebaseline";
 
 const COLORS = {
   background: "#121212",
@@ -57,6 +64,7 @@ interface StockItem {
 
 export default function InventoryScreen() {
   const router = useRouter();
+  const { isStandard } = useInventoryModel();
   const [selectedArea, setSelectedArea] = useState<StorageArea | null>(null);
   const [areas, setAreas] = useState<StorageArea[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
@@ -68,25 +76,34 @@ export default function InventoryScreen() {
   const [pendingCheckMode, setPendingCheckMode] = useState<CheckMode | null>(
     null
   );
+  const [proRebaseline, setProRebaseline] = useState<ProRebaselineState>({
+    required: false,
+    warehouseDone: false,
+    barDone: false,
+  });
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [isStandard]);
 
   const loadData = async () => {
     setIsLoading(true);
     try {
       // TODO: Load from local SQLite
       // Simulated data for now
-      const mockAreas: StorageArea[] = [
-        { id: "1", name: "Kho Tổng", type: "STORAGE" },
-        { id: "2", name: "Quầy Bar", type: "SERVICE" },
-      ];
+      const mockAreas: StorageArea[] = isStandard
+        ? [
+            { id: "1", name: "Kho Tổng", type: "STORAGE" },
+            { id: "2", name: "Quầy Bar", type: "SERVICE" },
+          ]
+        : [{ id: "1", name: "Kho Tổng", type: "STORAGE" }];
       setAreas(mockAreas);
       setSelectedArea(mockAreas[0]);
 
       // Simulated stock items
       setStockItems([]);
+      const db = await getDB();
+      setProRebaseline(await getProRebaselineState(db));
     } catch (error) {
       console.error("Error loading inventory:", error);
     } finally {
@@ -101,11 +118,33 @@ export default function InventoryScreen() {
 
   // Stock check flow: AreaSelector -> (FreezeAlert for Full) -> Camera
   const handleStockCheckPress = () => {
+    if (!isStandard) {
+      router.push({ pathname: "/camera/stock", params: { area: "WAREHOUSE" } });
+      return;
+    }
     setShowAreaSelector(true);
   };
 
   const handleAreaSelected = (area: AreaType, mode?: CheckMode) => {
     setShowAreaSelector(false);
+
+    if (proRebaseline.required) {
+      if (area === "BAR" && !proRebaseline.warehouseDone) {
+        Alert.alert(
+          "Cần kiểm Kho tổng trước",
+          "Sau khi mua lại PRO, hãy kiểm toàn bộ Kho tổng trước rồi mới kiểm Bar.",
+        );
+        return;
+      }
+
+      if (area === "WAREHOUSE" && mode !== "FULL") {
+        Alert.alert(
+          "Cần kiểm toàn bộ Kho tổng",
+          "Lần khôi phục Kho Kép cần kiểm toàn bộ Kho tổng để đặt lại số chuẩn.",
+        );
+        return;
+      }
+    }
 
     if (area === "BAR") {
       // Bar: Direct to camera in BAR mode
@@ -185,13 +224,21 @@ export default function InventoryScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Tồn kho</Text>
-        <TouchableOpacity
-          style={styles.snapButton}
-          onPress={handleStockCheckPress}
-        >
-          <Ionicons name="camera" size={20} color="#FFF" />
-          <Text style={styles.snapButtonText}>Kiểm kho</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <TouchableOpacity
+            style={[styles.snapButton, { backgroundColor: COLORS.warning }]}
+            onPress={() => router.push("/runway")}
+          >
+            <Ionicons name="warning" size={20} color="#FFF" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.snapButton}
+            onPress={handleStockCheckPress}
+          >
+            <Ionicons name="camera" size={20} color="#FFF" />
+            <Text style={styles.snapButtonText}>Kiểm kho</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Area Selector - Per .antigravityrules Section C.2 */}
@@ -255,11 +302,15 @@ export default function InventoryScreen() {
       />
 
       {/* Stock Check Flow Modals */}
-      <AreaSelectorModal
-        visible={showAreaSelector}
-        onClose={() => setShowAreaSelector(false)}
-        onSelect={handleAreaSelected}
-      />
+      {isStandard && (
+        <AreaSelectorModal
+          visible={showAreaSelector}
+          onClose={() => setShowAreaSelector(false)}
+          barDisabled={proRebaseline.required && !proRebaseline.warehouseDone}
+          warehouseSpotDisabled={proRebaseline.required}
+          onSelect={handleAreaSelected}
+        />
+      )}
       <FreezeAlertModal
         visible={showFreezeAlert}
         onConfirm={handleFreezeConfirm}

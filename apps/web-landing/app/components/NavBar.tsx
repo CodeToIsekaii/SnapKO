@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 import { User } from "@supabase/supabase-js";
-import { Check, Crown, User as UserIcon } from "lucide-react";
+import { Crown, User as UserIcon } from "lucide-react";
+import { apiFetch, getStoredRefreshToken } from "@/lib/backendClient";
 
 /**
  * Navigation Bar with Auth State
@@ -15,6 +16,8 @@ import { Check, Crown, User as UserIcon } from "lucide-react";
 interface SubscriptionStatus {
   isPro: boolean;
   expiresAt: Date | null;
+  scansUsed: number;
+  scansQuota: number;
 }
 
 export default function NavBar() {
@@ -23,6 +26,8 @@ export default function NavBar() {
   const [subscription, setSubscription] = useState<SubscriptionStatus>({
     isPro: false,
     expiresAt: null,
+    scansUsed: 0,
+    scansQuota: 0,
   });
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -36,34 +41,34 @@ export default function NavBar() {
           setUser(data.session.user);
           setIsLoading(false); // Don't block loading
 
-          // Fetch subscription status in background (non-blocking)
-          try {
-            console.log(
-              "Fetching subscription for user:",
-              data.session.user.id
-            );
-            const { data: profile, error: subError } = await supabase
-              .from("profiles")
-              .select("is_pro, subscription_expires_at")
-              .eq("id", data.session.user.id)
-              .maybeSingle();
+          // Fetch subscription status in background via BE-SnapKO /businesses/me
+          if (getStoredRefreshToken()) {
+            try {
+              const business = await apiFetch<{
+                tier?: string;
+                subscriptionExpiresAt?: string | null;
+                scansUsedThisMonth?: number;
+                monthlyScansQuota?: number;
+              }>("/businesses/me");
 
-            if (subError) {
-              console.error("Subscription query error:", subError);
-              throw subError;
-            }
-
-            if (profile && mounted) {
-              console.log("Profile fetched:", profile);
-              const expiresAt = profile.subscription_expires_at
-                ? new Date(profile.subscription_expires_at)
+              const expiresAt = business?.subscriptionExpiresAt
+                ? new Date(business.subscriptionExpiresAt)
                 : null;
               const isPro =
-                profile.is_pro && expiresAt && expiresAt > new Date();
-              setSubscription({ isPro: Boolean(isPro), expiresAt });
+                (business?.tier === "PRO" || business?.tier === "CHAIN") &&
+                expiresAt != null &&
+                expiresAt > new Date();
+              if (mounted) {
+                setSubscription({
+                  isPro: Boolean(isPro),
+                  expiresAt,
+                  scansUsed: business?.scansUsedThisMonth ?? 0,
+                  scansQuota: business?.monthlyScansQuota ?? 0,
+                });
+              }
+            } catch (e) {
+              console.error("Subscription query failed:", e);
             }
-          } catch (e) {
-            console.error("Subscription query failed:", e);
           }
         } else if (mounted) {
           setUser(null);
@@ -92,28 +97,36 @@ export default function NavBar() {
           setUser(session?.user ?? null);
           setIsLoading(false);
 
-          // Re-fetch subscription on auth change (non-blocking)
-          if (session?.user) {
+          // Re-fetch subscription on auth change via BE-SnapKO /businesses/me
+          if (session?.user && getStoredRefreshToken()) {
             try {
-              const { data: profile, error } = await supabase
-                .from("profiles")
-                .select("is_pro, subscription_expires_at")
-                .eq("id", session.user.id)
-                .maybeSingle();
+              const business = await apiFetch<{
+                tier?: string;
+                subscriptionExpiresAt?: string | null;
+                scansUsedThisMonth?: number;
+                monthlyScansQuota?: number;
+              }>("/businesses/me");
 
-              if (!error && profile && mounted) {
-                const expiresAt = profile.subscription_expires_at
-                  ? new Date(profile.subscription_expires_at)
-                  : null;
-                const isPro =
-                  profile.is_pro && expiresAt && expiresAt > new Date();
-                setSubscription({ isPro: Boolean(isPro), expiresAt });
+              const expiresAt = business?.subscriptionExpiresAt
+                ? new Date(business.subscriptionExpiresAt)
+                : null;
+              const isPro =
+                (business?.tier === "PRO" || business?.tier === "CHAIN") &&
+                expiresAt != null &&
+                expiresAt > new Date();
+              if (mounted) {
+                setSubscription({
+                  isPro: Boolean(isPro),
+                  expiresAt,
+                  scansUsed: business?.scansUsedThisMonth ?? 0,
+                  scansQuota: business?.monthlyScansQuota ?? 0,
+                });
               }
             } catch (e) {
               console.log("Subscription query failed in auth change:", e);
             }
           } else {
-            setSubscription({ isPro: false, expiresAt: null });
+            setSubscription({ isPro: false, expiresAt: null, scansUsed: 0, scansQuota: 0 });
           }
         }
       }
@@ -165,13 +178,13 @@ export default function NavBar() {
             <Link href="/" className="hover:text-[#1E1E1E]">
               Trang chủ
             </Link>
-            <Link href="#guide" className="hover:text-[#1E1E1E]">
+            <Link href="/#guide" className="hover:text-[#1E1E1E]">
               Hướng dẫn
             </Link>
-            <Link href="#features" className="hover:text-[#1E1E1E]">
+            <Link href="/#features" className="hover:text-[#1E1E1E]">
               Tính năng
             </Link>
-            <Link href="#pricing" className="hover:text-[#1E1E1E]">
+            <Link href="/pricing" className="hover:text-[#1E1E1E]">
               Bảng giá
             </Link>
           </div>
@@ -183,6 +196,16 @@ export default function NavBar() {
             <div className="w-8 h-8 bg-[#E0DCD5] rounded-full animate-pulse" />
           ) : user ? (
             <>
+              {/* Scan quota badge */}
+              {subscription.scansQuota > 0 && (
+                <span
+                  className="hidden md:inline-flex items-center px-2.5 py-1 bg-[#F5F3EF] text-[#6F6B63] text-xs font-medium rounded-full"
+                  title="Số lượt scan đã dùng trong tháng"
+                >
+                  📷 {subscription.scansUsed}/{subscription.scansQuota}
+                </span>
+              )}
+
               {/* Pro Badge or Trial Badge */}
               {subscription.isPro ? (
                 <Link

@@ -11,6 +11,9 @@ interface Plan {
   duration_days: number;
   target_tier: string;
   is_active: boolean;
+  monthly_scans_quota: number;
+  ad_reward_scans: number;
+  max_ad_rewards_per_day: number;
 }
 
 export default function PlansManager() {
@@ -58,6 +61,9 @@ export default function PlansManager() {
             target_tier: editingPlan.target_tier,
             is_active: editingPlan.is_active,
             description: (editingPlan as any).description,
+            monthly_scans_quota: editingPlan.monthly_scans_quota,
+            ad_reward_scans: editingPlan.ad_reward_scans,
+            max_ad_rewards_per_day: editingPlan.max_ad_rewards_per_day,
           },
         ]);
         if (error) throw error;
@@ -70,6 +76,10 @@ export default function PlansManager() {
             description: (editingPlan as any).description, // TS workaround
             is_active: editingPlan.is_active,
             duration_days: editingPlan.duration_days,
+            target_tier: editingPlan.target_tier,
+            monthly_scans_quota: editingPlan.monthly_scans_quota,
+            ad_reward_scans: editingPlan.ad_reward_scans,
+            max_ad_rewards_per_day: editingPlan.max_ad_rewards_per_day,
           })
           .eq("id", editingPlan.id);
         if (error) throw error;
@@ -111,6 +121,9 @@ export default function PlansManager() {
               duration_days: 30,
               target_tier: "PRO",
               is_active: true,
+              monthly_scans_quota: 20,
+              ad_reward_scans: 2,
+              max_ad_rewards_per_day: 5,
             });
             setIsNew(true);
           }}
@@ -137,6 +150,18 @@ export default function PlansManager() {
                 Duration
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                Tier
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                Scans / month
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                Ad reward
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                Max ads / day
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
                 Status
               </th>
               <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
@@ -161,6 +186,20 @@ export default function PlansManager() {
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
                   {plan.duration_days} days
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-700 font-mono">
+                  {plan.target_tier}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-700">
+                  {plan.monthly_scans_quota}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-700">
+                  +{plan.ad_reward_scans}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-700">
+                  {plan.max_ad_rewards_per_day === -1
+                    ? "Không giới hạn"
+                    : plan.max_ad_rewards_per_day}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <span
@@ -260,6 +299,80 @@ export default function PlansManager() {
                       setEditingPlan({
                         ...editingPlan,
                         duration_days: Number(e.target.value),
+                      })
+                    }
+                    className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700">
+                  Target Tier
+                </label>
+                <select
+                  value={editingPlan.target_tier}
+                  onChange={(e) =>
+                    setEditingPlan({
+                      ...editingPlan,
+                      target_tier: e.target.value,
+                    })
+                  }
+                  className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2"
+                >
+                  <option value="FREE">FREE</option>
+                  <option value="PRO">PRO</option>
+                  <option value="CHAIN">CHAIN</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700">
+                    Scans / month
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={editingPlan.monthly_scans_quota}
+                    onChange={(e) =>
+                      setEditingPlan({
+                        ...editingPlan,
+                        monthly_scans_quota: Number(e.target.value),
+                      })
+                    }
+                    className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700">
+                    Ad reward (+scans)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={editingPlan.ad_reward_scans}
+                    onChange={(e) =>
+                      setEditingPlan({
+                        ...editingPlan,
+                        ad_reward_scans: Number(e.target.value),
+                      })
+                    }
+                    className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700">
+                    Max ads / day (-1 = ∞)
+                  </label>
+                  <input
+                    type="number"
+                    min={-1}
+                    value={editingPlan.max_ad_rewards_per_day}
+                    onChange={(e) =>
+                      setEditingPlan({
+                        ...editingPlan,
+                        max_ad_rewards_per_day: Number(e.target.value),
                       })
                     }
                     className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2"

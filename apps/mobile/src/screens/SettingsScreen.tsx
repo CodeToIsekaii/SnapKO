@@ -25,6 +25,7 @@ import { supabase } from "../lib/supabase";
 import InviteCodeGeneratorModal from "../components/InviteCodeGeneratorModal";
 import { useAuth } from "../contexts/AuthContext";
 import { Env } from "../env";
+import { api } from "../services/api";
 
 const COLORS = {
   background: "#121212",
@@ -52,6 +53,20 @@ interface LocalProfile {
   inventory_model: string;
 }
 
+type InventoryModel = "SIMPLE" | "STANDARD" | "CHAIN";
+
+function normalizeInventoryModel(value?: string | null): InventoryModel {
+  if (value === "STANDARD" || value === "MODEL_B") return "STANDARD";
+  if (value === "CHAIN") return "CHAIN";
+  return "SIMPLE";
+}
+
+const MODEL_LABEL: Record<InventoryModel, string> = {
+  SIMPLE: "Kho Đơn",
+  STANDARD: "Kho Kép",
+  CHAIN: "Nhiều khu vực",
+};
+
 interface SettingsScreenProps {
   onBack?: () => void;
   onLogout?: () => void;
@@ -71,7 +86,7 @@ export default function SettingsScreen({
   // State
   const [profile, setProfile] = useState<LocalProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [model, setModel] = useState<"SIMPLE" | "STANDARD">("STANDARD");
+  const [model, setModel] = useState<InventoryModel>("SIMPLE");
   const [changingModel, setChangingModel] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -83,6 +98,16 @@ export default function SettingsScreen({
     (authState.status === "authenticated" &&
       authState.profile?.role === "OWNER") ||
     profile?.role === "OWNER";
+  const authProfile =
+    authState.status === "authenticated" ? authState.profile : null;
+  const effectiveTier = authProfile?.effectiveTier ?? authProfile?.tier ?? "FREE";
+  const entitlements = authProfile?.entitlements;
+  const canUseDualWarehouse =
+    entitlements?.canUseDualWarehouse ??
+    (effectiveTier === "PRO" || effectiveTier === "CHAIN");
+  const canUseCustomStorageAreas =
+    entitlements?.canUseCustomStorageAreas ?? effectiveTier === "CHAIN";
+  const canInviteStaff = entitlements?.canInviteStaff ?? true;
 
   // Load on mount
   React.useEffect(() => {
@@ -99,12 +124,8 @@ export default function SettingsScreen({
 
       if (localUser) {
         setProfile(localUser);
-        const modelValue = localUser.inventory_model;
-        if (modelValue === "MODEL_A" || modelValue === "SIMPLE") {
-          setModel("SIMPLE");
-        } else {
-          setModel("STANDARD");
-        }
+        const modelValue = authProfile?.effectiveInventoryModel || "SIMPLE";
+        setModel(normalizeInventoryModel(modelValue));
       }
 
       // Load retention settings
@@ -142,9 +163,24 @@ export default function SettingsScreen({
     }
   };
 
-  // Toggle inventory model (Owner only)
-  // IMPORTANT: Must update BOTH profiles table AND businesses table for cross-device sync
-  const handleToggleModel = async () => {
+  const showUpgradePrompt = (targetModel: InventoryModel) => {
+    Alert.alert(
+      "Tính năng bị khóa",
+      targetModel === "CHAIN"
+        ? "Mô hình nhiều khu vực cần gói CHAIN còn hiệu lực."
+        : "Kho Kép cần gói PRO hoặc CHAIN còn hiệu lực.",
+      [{ text: "OK" }],
+    );
+  };
+
+  const isModelLocked = (targetModel: InventoryModel) => {
+    if (targetModel === "STANDARD") return !canUseDualWarehouse;
+    if (targetModel === "CHAIN") return !canUseCustomStorageAreas;
+    return false;
+  };
+
+  // Business inventory_model is the source of truth; profile field is legacy-only.
+  const handleSelectModel = async (newModel: InventoryModel) => {
     if (!profile?.business_id) {
       Alert.alert(
         "Lỗi",
@@ -153,53 +189,44 @@ export default function SettingsScreen({
       return;
     }
 
+    if (isModelLocked(newModel)) {
+      showUpgradePrompt(newModel);
+      return;
+    }
+
     const oldModel = model;
-    const newModel = model === "SIMPLE" ? "STANDARD" : "SIMPLE";
 
     setModel(newModel);
     setChangingModel(true);
 
     try {
-      // 1. Update profiles table (legacy compatibility)
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({ inventory_model: newModel })
-        .eq("id", profile.id);
+      const business = await api.patch<{
+        inventoryModel?: string;
+        effectiveInventoryModel?: string;
+      }>("/businesses/me", { inventoryModel: newModel });
+      const effectiveModel = normalizeInventoryModel(
+        business?.effectiveInventoryModel || "SIMPLE",
+      );
 
-      if (profileError) throw profileError;
-
-      // 2. Update businesses table (CRITICAL for Desktop sync)
-      // Desktop reads inventory_model from businesses table first
-      const { error: businessError } = await supabase
-        .from("businesses")
-        .update({ inventory_model: newModel })
-        .eq("id", profile.business_id);
-
-      if (businessError) {
-        console.warn(
-          "[SettingsScreen] Failed to sync to businesses:",
-          businessError,
-        );
-        // Don't fail the whole operation, but log the warning
-      }
-
-      // 3. Update local SQLite
       const db = await getDB();
       await db.runAsync(
         "UPDATE local_profiles SET inventory_model = ? WHERE id = ?",
-        [newModel, profile.id],
+        [effectiveModel, profile.id],
       );
+      setModel(effectiveModel);
 
       Alert.alert(
         "Thành công",
-        `Đã đổi sang ${
-          newModel === "SIMPLE" ? "Kho Đơn" : "Kho Kép"
-        }.\n\nTất cả thiết bị sẽ tự đồng bộ sau vài giây.`,
+        `Đã đổi sang ${MODEL_LABEL[effectiveModel]}.\n\nTất cả thiết bị sẽ tự đồng bộ sau vài giây.`,
         [{ text: "OK" }],
       );
     } catch (err: any) {
-      console.error("[SettingsScreen] Toggle model error:", err);
-      Alert.alert("Lỗi", "Không thể cập nhật mô hình kho");
+      console.error("[SettingsScreen] Select model error:", err);
+      if (err?.status === 403) {
+        Alert.alert("Tính năng bị khóa", "Gói hiện tại không hỗ trợ mô hình này.");
+      } else {
+        Alert.alert("Lỗi", "Không thể cập nhật mô hình kho");
+      }
       setModel(oldModel);
     } finally {
       setChangingModel(false);
@@ -426,8 +453,12 @@ export default function SettingsScreen({
                 Tạo mã mời để nhân viên tham gia quản lý kho cùng bạn.
               </Text>
               <TouchableOpacity
-                style={styles.inviteButton}
-                onPress={() => setShowInviteModal(true)}
+                style={[styles.inviteButton, !canInviteStaff && styles.lockedButton]}
+                onPress={() =>
+                  canInviteStaff
+                    ? setShowInviteModal(true)
+                    : Alert.alert("Tính năng bị khóa", "Mời nhân viên cần gói PRO/CHAIN còn hiệu lực.")
+                }
               >
                 <Ionicons name="person-add" size={18} color="#FFF" />
                 <Text style={styles.inviteButtonText}>
@@ -488,106 +519,78 @@ export default function SettingsScreen({
                 Chọn mô hình phù hợp với quán của bạn.
               </Text>
               <View style={styles.modelSelector}>
-                <TouchableOpacity
-                  style={[
-                    styles.modelOption,
-                    model === "SIMPLE" && styles.modelOptionActive,
-                  ]}
-                  onPress={() =>
-                    model !== "SIMPLE" && !changingModel && handleToggleModel()
-                  }
-                  disabled={changingModel}
-                >
-                  <View style={{ marginBottom: 8 }}>
-                    <Ionicons
-                      name="home"
-                      size={32}
-                      color={
-                        model === "SIMPLE"
-                          ? COLORS.primary
-                          : COLORS.textSecondary
+                {([
+                  {
+                    id: "SIMPLE" as const,
+                    icon: "home" as const,
+                    title: "BASIC / KHO ĐƠN",
+                    desc: "1 kho duy nhất",
+                  },
+                  {
+                    id: "STANDARD" as const,
+                    icon: "wine" as const,
+                    title: "PRO / KHO KÉP",
+                    desc: "Kho Tổng + Quầy Bar",
+                  },
+                  {
+                    id: "CHAIN" as const,
+                    icon: "business" as const,
+                    title: "CHAIN / NHIỀU KHU",
+                    desc: "Nhiều khu vực tùy chỉnh",
+                  },
+                ]).map((option) => {
+                  const locked = isModelLocked(option.id);
+                  const active = model === option.id;
+                  return (
+                    <TouchableOpacity
+                      key={option.id}
+                      style={[
+                        styles.modelOption,
+                        active && styles.modelOptionActive,
+                        locked && !active && styles.modelOptionDisabled,
+                      ]}
+                      onPress={() =>
+                        !changingModel &&
+                        (locked
+                          ? showUpgradePrompt(option.id)
+                          : handleSelectModel(option.id))
                       }
-                    />
-                  </View>
-                  <Text
-                    style={[
-                      styles.modelName,
-                      model === "SIMPLE" && styles.modelNameActive,
-                    ]}
-                  >
-                    KHO ĐƠN
-                  </Text>
-                  <Text style={styles.modelDesc}>1 kho duy nhất</Text>
-                  {model === "SIMPLE" && (
-                    <View style={styles.modelCheck}>
-                      <Ionicons name="checkmark" size={14} color="#FFF" />
-                    </View>
-                  )}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.modelOption,
-                    model === "STANDARD" && styles.modelOptionActive,
-                  ]}
-                  onPress={() =>
-                    model !== "STANDARD" &&
-                    !changingModel &&
-                    handleToggleModel()
-                  }
-                  disabled={changingModel}
-                >
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 4,
-                      marginBottom: 8,
-                    }}
-                  >
-                    <Ionicons
-                      name="business"
-                      size={24}
-                      color={
-                        model === "STANDARD"
-                          ? COLORS.primary
-                          : COLORS.textSecondary
-                      }
-                    />
-                    <Ionicons
-                      name="arrow-forward"
-                      size={16}
-                      color={
-                        model === "STANDARD"
-                          ? COLORS.primary
-                          : COLORS.textSecondary
-                      }
-                    />
-                    <Ionicons
-                      name="wine"
-                      size={24}
-                      color={
-                        model === "STANDARD"
-                          ? COLORS.primary
-                          : COLORS.textSecondary
-                      }
-                    />
-                  </View>
-                  <Text
-                    style={[
-                      styles.modelName,
-                      model === "STANDARD" && styles.modelNameActive,
-                    ]}
-                  >
-                    KHO KÉP
-                  </Text>
-                  <Text style={styles.modelDesc}>Kho Tổng + Quầy Bar</Text>
-                  {model === "STANDARD" && (
-                    <View style={styles.modelCheck}>
-                      <Ionicons name="checkmark" size={14} color="#FFF" />
-                    </View>
-                  )}
-                </TouchableOpacity>
+                      disabled={changingModel}
+                    >
+                      <View style={{ marginBottom: 8 }}>
+                        <Ionicons
+                          name={option.icon}
+                          size={32}
+                          color={active ? COLORS.primary : COLORS.textSecondary}
+                        />
+                      </View>
+                      <Text
+                        style={[
+                          styles.modelName,
+                          active && styles.modelNameActive,
+                        ]}
+                      >
+                        {option.title}
+                      </Text>
+                      <Text style={styles.modelDesc}>{option.desc}</Text>
+                      {locked && !active && (
+                        <View style={styles.modelLock}>
+                          <Ionicons
+                            name="lock-closed"
+                            size={12}
+                            color={COLORS.warning}
+                          />
+                          <Text style={styles.modelLockText}>Khóa</Text>
+                        </View>
+                      )}
+                      {active && (
+                        <View style={styles.modelCheck}>
+                          <Ionicons name="checkmark" size={14} color="#FFF" />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
               {changingModel && (
                 <View style={styles.changingIndicator}>
@@ -821,8 +824,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
   },
+  lockedButton: {
+    opacity: 0.5,
+  },
   modelSelector: {
-    flexDirection: "row",
+    flexDirection: "column",
     gap: 12,
     padding: 16,
     paddingTop: 0,
@@ -841,6 +847,9 @@ const styles = StyleSheet.create({
     borderColor: COLORS.primary,
     backgroundColor: `${COLORS.primary}15`,
   },
+  modelOptionDisabled: {
+    opacity: 0.5,
+  },
 
   modelName: {
     fontSize: 13,
@@ -855,6 +864,17 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: COLORS.textMuted,
     textAlign: "center",
+  },
+  modelLock: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 8,
+  },
+  modelLockText: {
+    color: COLORS.warning,
+    fontSize: 11,
+    fontWeight: "600",
   },
   modelCheck: {
     position: "absolute",
