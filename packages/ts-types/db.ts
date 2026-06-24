@@ -6,7 +6,7 @@
 // ================== ENUMS ==================
 
 export type TierEnum = "FREE" | "PRO" | "CHAIN";
-export type ProfileRoleEnum = "OWNER" | "STAFF";
+export type ProfileRoleEnum = "OWNER" | "BRANCH_MANAGER" | "STAFF";
 export type ProfileStatusEnum = "PENDING" | "ACTIVE" | "INACTIVE" | "REJECTED";
 export type InventoryLocationEnum = "WAREHOUSE" | "BAR";
 export type InventoryTypeEnum =
@@ -16,7 +16,7 @@ export type InventoryTypeEnum =
   | "WASTE"
   | "LENT";
 export type PaymentStatusEnum = "PENDING" | "SUCCESS" | "FAILED";
-export type PaymentGatewayEnum = "SEPAY" | "CASSO" | "MANUAL";
+export type PaymentGatewayEnum = "SEPAY" | "CASSO" | "PAYOS" | "MANUAL";
 
 // ================== TABLES ==================
 
@@ -32,6 +32,13 @@ export interface Business {
   legal_entity_status: boolean;
   payment_short_code: string | null;
   subscription_expires_at: string | null;
+  chain_state?:
+    | "ACTIVE"
+    | "READ_ONLY_EXPIRED"
+    | "BRANCH_SELECTION_REQUIRED"
+    | "HUB_REBASELINE_REQUIRED"
+    | "MIGRATION_REQUIRED";
+  chain_outlet_limit?: number;
   created_at: string;
 }
 

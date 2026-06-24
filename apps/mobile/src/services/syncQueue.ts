@@ -57,8 +57,6 @@ export interface QueueActionOptions {
 
 class SyncQueueService {
   private isProcessing = false;
-  private maxRetries = 3;
-  private retryDelayMs = 5000;
 
   /**
    * Queue an action for sync - MAIN ENTRY POINT
@@ -216,9 +214,6 @@ class SyncQueueService {
     if (!file.exists) {
       throw new Error(`Image not found: ${localPath}`);
     }
-
-    // Read file as base64 using new File API
-    const base64 = await file.base64();
 
     // TODO: Upload to Supabase Storage
     // For now, return a placeholder

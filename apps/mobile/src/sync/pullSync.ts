@@ -6,6 +6,10 @@
 import { api } from "../services/api";
 import { getDB } from "../db";
 import { syncLegacyQtyLocal } from "../db/stockLevelHelper";
+import {
+  normalizeJsonArrayForSql,
+  normalizeNullableJsonForSql,
+} from "./sqliteJson";
 
 function isNetworkRequestFailure(err: unknown): boolean {
   return err instanceof Error && err.message.includes("Network request failed");
@@ -303,6 +307,9 @@ async function upsertRecipes(db: any, recipes: any[]): Promise<number> {
 async function upsertInventoryLogs(db: any, logs: any[]): Promise<number> {
   if (!logs?.length) return 0;
   for (const log of logs) {
+    const sourcePhotoUrls = log.sourcePhotoUrls ?? log.source_photo_urls ?? [];
+    const aiParsedJson = log.aiParsedJson ?? log.ai_parsed_json ?? null;
+
     await db.runAsync(
       `INSERT OR REPLACE INTO local_inventory_logs
         (id, ingredient_id, location, type, ai_parsed_quantity, ai_confidence_score,
@@ -320,8 +327,8 @@ async function upsertInventoryLogs(db: any, logs: any[]): Promise<number> {
         log.finalConfirmedQuantity ?? log.final_confirmed_quantity ?? null,
         log.quantityChangeBase ?? log.quantity_change_base ?? null,
         log.unitCostAtTime ?? log.unit_cost_at_time ?? null,
-        JSON.stringify(log.sourcePhotoUrls ?? log.source_photo_urls ?? []),
-        log.aiParsedJson ?? log.ai_parsed_json ?? null,
+        normalizeJsonArrayForSql(sourcePhotoUrls),
+        normalizeNullableJsonForSql(aiParsedJson),
         log.staffNote ?? log.staff_note ?? null,
         (log.isVerified ?? log.is_verified ?? false) ? 1 : 0,
         log.diffPercentage ?? log.diff_percentage ?? null,

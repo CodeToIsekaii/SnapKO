@@ -19,11 +19,11 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  TextInput,
-  Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { VarianceAlertModal } from "./VarianceAlertModal";
+import { BufferedTextInput } from "../../../components/BufferedTextInput";
+import { parseNumericField } from "../../../screens/inventoryCaptureValidation";
 
 // Colors per .UXUIrules
 const COLORS = {
@@ -139,11 +139,11 @@ export function StockReviewList({
           <View style={styles.quantityCol}>
             <Text style={styles.quantityLabel}>Thực tế</Text>
             <View style={styles.editableQuantity}>
-              <TextInput
+              <BufferedTextInput
                 style={styles.quantityInput}
                 value={item.actual_qty.toString()}
-                onChangeText={(text) => {
-                  const num = parseFloat(text) || 0;
+                onCommitText={(text) => {
+                  const num = parseNumericField(text);
                   onUpdateQuantity(index, num);
                 }}
                 keyboardType="decimal-pad"

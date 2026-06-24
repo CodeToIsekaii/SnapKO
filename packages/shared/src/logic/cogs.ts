@@ -18,7 +18,7 @@ import type {
  * @returns COGS in VND
  */
 export function calculateRecipeCOGS(
-  recipe: Recipe,
+  _recipe: Recipe,
   recipeIngredients: RecipeIngredient[],
   ingredients: Ingredient[]
 ): number {

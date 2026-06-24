@@ -9,8 +9,19 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import {
+  buildComparisonRows,
+  getMetricTone,
+  isMissingMonthlyComparisonEndpointError,
+  type ComparisonMetric,
+} from "../../shared/monthlyComparison";
 
-type ReportTab = "runway" | "top-sellers" | "shrinkage" | "expiring-lots";
+type ReportTab =
+  | "monthly-comparison"
+  | "runway"
+  | "top-sellers"
+  | "shrinkage"
+  | "expiring-lots";
 
 interface RunwayItem {
   ingredientId: string;
@@ -57,6 +68,31 @@ interface ExpiringLotItem {
   shouldAlert: boolean;
 }
 
+interface MonthlyComparisonData {
+  period: {
+    current: { startDate: string; endDate: string; label: string };
+    previous: { startDate: string; endDate: string; label: string };
+  };
+  metrics: {
+    revenue: ComparisonMetric;
+    soldQty: ComparisonMetric;
+    shrinkageVnd: ComparisonMetric;
+    inventoryValue: ComparisonMetric;
+  };
+  topSellers: {
+    current: TopSellerItem[];
+    previous: TopSellerItem[];
+  };
+  shrinkage: {
+    current: ShrinkageBreakdownItem[];
+    previous: ShrinkageBreakdownItem[];
+  };
+  inventorySnapshots: {
+    current: string | null;
+    previous: string | null;
+  };
+}
+
 const alertColor = (level: string) => {
   if (level === "critical") return "#DC2626";
   if (level === "warning") return "#FBBF24";
@@ -82,48 +118,80 @@ const formatDateTime = (isoString: string) => {
   }
 };
 
-export default function ReportsPage() {
-  const [tab, setTab] = useState<ReportTab>("runway");
+type ReportBranch = {
+  id: string;
+  name: string;
+  code: string | null;
+  type: "CENTRAL_WAREHOUSE" | "OUTLET";
+};
+
+interface ReportsPageProps {
+  role?: string;
+  branches?: ReportBranch[];
+}
+
+export default function ReportsPage({ role, branches = [] }: ReportsPageProps) {
+  const [tab, setTab] = useState<ReportTab>("monthly-comparison");
   const [days, setDays] = useState(7);
+  const managerBranch = role === "BRANCH_MANAGER" ? branches[0]?.id ?? "" : "";
+  const [branchId, setBranchId] = useState(managerBranch);
 
   const [runway, setRunway] = useState<RunwayItem[]>([]);
   const [topSellers, setTopSellers] = useState<TopSellerItem[]>([]);
   const [shrinkage, setShrinkage] = useState<ShrinkageData | null>(null);
   const [expiringLots, setExpiringLots] = useState<ExpiringLotItem[]>([]);
+  const [monthlyComparison, setMonthlyComparison] =
+    useState<MonthlyComparisonData | null>(null);
+  const [monthlyComparisonEndpointMissing, setMonthlyComparisonEndpointMissing] =
+    useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async (t: ReportTab, d: number) => {
     setLoading(true);
     setError(null);
+    setMonthlyComparisonEndpointMissing(false);
+    const branchQuery = branchId
+      ? `&branchId=${encodeURIComponent(branchId)}`
+      : "";
     try {
-      if (t === "runway") {
+      if (t === "monthly-comparison") {
         const data = await (window as any).electronAPI?.reportsGet(
-          `/reports/runway?days=${d}`
+          `/reports/monthly-comparison${branchId ? `?branchId=${encodeURIComponent(branchId)}` : ""}`
+        );
+        setMonthlyComparison(data?.data ?? null);
+      } else if (t === "runway") {
+        const data = await (window as any).electronAPI?.reportsGet(
+          `/reports/runway?days=${d}${branchQuery}`
         );
         setRunway(Array.isArray(data?.data) ? data.data : []);
       } else if (t === "top-sellers") {
         const data = await (window as any).electronAPI?.reportsGet(
-          `/reports/top-sellers?days=${d}`
+          `/reports/top-sellers?days=${d}${branchQuery}`
         );
         setTopSellers(Array.isArray(data?.data) ? data.data : []);
       } else if (t === "shrinkage") {
         const data = await (window as any).electronAPI?.reportsGet(
-          `/reports/shrinkage?days=${d}`
+          `/reports/shrinkage?days=${d}${branchQuery}`
         );
         setShrinkage(data?.data ?? null);
       } else {
         const data = await (window as any).electronAPI?.reportsGet(
-          `/reports/expiring-lots?days=2&forecastWindow=7`
+          `/reports/expiring-lots?days=2&forecastWindow=7${branchQuery}`
         );
         setExpiringLots(Array.isArray(data?.data) ? data.data : []);
       }
     } catch (e: any) {
+      if (t === "monthly-comparison" && isMissingMonthlyComparisonEndpointError(e)) {
+        setMonthlyComparison(null);
+        setMonthlyComparisonEndpointMissing(true);
+        return;
+      }
       setError(e?.message ?? "Không thể tải dữ liệu");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [branchId]);
 
   useEffect(() => {
     fetchData(tab, days);
@@ -151,13 +219,104 @@ export default function ReportsPage() {
     color: active ? COLORS.primary : COLORS.textSecondary,
   });
 
+  const formatNumber = (value: number) =>
+    new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 1 }).format(value);
+
+  const toneColor = (tone: "good" | "bad" | "neutral") => {
+    if (tone === "good") return COLORS.positive;
+    if (tone === "bad") return COLORS.error;
+    return COLORS.textMuted;
+  };
+
+  const formatDelta = (metric: ComparisonMetric) => {
+    if (metric.changePct == null) return "Chưa đủ dữ liệu";
+    if (metric.changePct === 0) return "Không đổi";
+    return `${metric.changePct > 0 ? "+" : ""}${metric.changePct.toFixed(1)}%`;
+  };
+
+  const renderMetricCard = (
+    title: string,
+    metric: ComparisonMetric,
+    formatter: (value: number) => string,
+  ) => {
+    const tone = getMetricTone(metric);
+    return (
+      <div
+        style={{
+          background: COLORS.surface,
+          border: `1px solid ${COLORS.border}`,
+          borderLeft: `4px solid ${toneColor(tone)}`,
+          borderRadius: 10,
+          padding: 16,
+          minWidth: 210,
+          flex: 1,
+        }}
+      >
+        <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 6 }}>
+          {title}
+        </div>
+        <div style={{ fontSize: 24, fontWeight: 700, color: COLORS.textPrimary }}>
+          {metric.current == null ? "--" : formatter(metric.current)}
+        </div>
+        <div style={{ fontSize: 12, color: COLORS.textSecondary, marginTop: 6 }}>
+          Trước: {metric.previous == null ? "--" : formatter(metric.previous)}
+        </div>
+        <div style={{ fontSize: 13, color: toneColor(tone), fontWeight: 700, marginTop: 8 }}>
+          {formatDelta(metric)}
+        </div>
+      </div>
+    );
+  };
+
+  const topSellerRows = monthlyComparison
+    ? buildComparisonRows(
+        monthlyComparison.topSellers.current,
+        monthlyComparison.topSellers.previous,
+        "totalRevenue",
+      )
+    : [];
+  const shrinkageRows = monthlyComparison
+    ? buildComparisonRows(
+        monthlyComparison.shrinkage.current,
+        monthlyComparison.shrinkage.previous,
+        "lossVnd",
+      )
+    : [];
+
   return (
     <div style={{ padding: 24, background: COLORS.background, minHeight: "100%" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <h2 style={{ fontSize: 22, fontWeight: 700, color: COLORS.textPrimary, margin: 0 }}>
           Báo cáo
         </h2>
-        {tab !== "expiring-lots" ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {role === "OWNER" && branches.length > 0 ? (
+          <select
+            value={branchId}
+            onChange={(event) => setBranchId(event.target.value)}
+            style={{
+              padding: "7px 10px",
+              borderRadius: 6,
+              border: `1px solid ${COLORS.border}`,
+              background: COLORS.surface,
+              color: COLORS.textPrimary,
+            }}
+          >
+            <option value="">Toàn chuỗi</option>
+            {branches
+              .filter((branch) => branch.type === "OUTLET")
+              .map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
+          </select>
+        ) : null}
+        {tab === "monthly-comparison" ? (
+          <div style={{ fontSize: 12, color: COLORS.textMuted }}>
+            Tháng này so với cùng kỳ tháng trước
+          </div>
+        ) : tab !== "expiring-lots" ? (
           <div style={{ display: "flex", gap: 6 }}>
             {[7, 14, 30].map((d) => (
               <button key={d} style={daysBtnStyle(days === d)} onClick={() => setDays(d)}>
@@ -170,10 +329,14 @@ export default function ReportsPage() {
             Ngưỡng cảnh báo: 2 ngày | Forecast: 7 ngày
           </div>
         )}
+        </div>
       </div>
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <button style={tabBtnStyle(tab === "monthly-comparison")} onClick={() => setTab("monthly-comparison")}>
+          📊 So sánh tháng
+        </button>
         <button style={tabBtnStyle(tab === "runway")} onClick={() => setTab("runway")}>
           ⚠️ Runway kho
         </button>
@@ -197,6 +360,132 @@ export default function ReportsPage() {
       {error && !loading && (
         <div style={{ color: COLORS.error, padding: 16, background: "#FFF5F5", borderRadius: 8 }}>
           {error}
+        </div>
+      )}
+
+      {!loading && !error && tab === "monthly-comparison" && (
+        <div>
+          {monthlyComparisonEndpointMissing ? (
+            <div
+              style={{
+                background: "#FFFBEB",
+                border: "1px solid #FDE68A",
+                borderRadius: 10,
+                padding: 18,
+                color: COLORS.textPrimary,
+                maxWidth: 720,
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                Backend đang chạy chưa có API so sánh tháng
+              </div>
+              <div style={{ color: COLORS.textSecondary, lineHeight: 1.5 }}>
+                Code backend đã có route mới, nhưng process trên localhost:3000
+                vẫn đang trả 404. Restart BE-SnapKO rồi bấm lại tab này để tải
+                báo cáo tháng.
+              </div>
+            </div>
+          ) : monthlyComparison ? (
+            <>
+              <p style={{ fontSize: 13, color: COLORS.textMuted, marginBottom: 12 }}>
+                {monthlyComparison.period.current.label} so với {monthlyComparison.period.previous.label}
+              </p>
+
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
+                {renderMetricCard("Doanh thu", monthlyComparison.metrics.revenue, formatVnd)}
+                {renderMetricCard("Số lượng bán", monthlyComparison.metrics.soldQty, (v) => formatNumber(v))}
+                {renderMetricCard("Hao hụt", monthlyComparison.metrics.shrinkageVnd, formatVnd)}
+                {renderMetricCard("Giá trị tồn kho", monthlyComparison.metrics.inventoryValue, formatVnd)}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                <div style={{ background: COLORS.surface, borderRadius: 10, padding: 16, border: `1px solid ${COLORS.border}` }}>
+                  <h3 style={{ margin: "0 0 12px", color: COLORS.textPrimary, fontSize: 16 }}>
+                    Top bán chạy kỳ này
+                  </h3>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        {["Món", "Kỳ này", "Kỳ trước", "Đổi"].map((h) => (
+                          <th key={h} style={{ padding: "8px 6px", textAlign: "left", color: COLORS.textSecondary, fontSize: 12, borderBottom: `1px solid ${COLORS.border}` }}>
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {topSellerRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} style={{ padding: 24, textAlign: "center", color: COLORS.textMuted }}>
+                            Không có dữ liệu bán hàng
+                          </td>
+                        </tr>
+                      ) : (
+                        topSellerRows.slice(0, 10).map((row) => (
+                          <tr key={row.name}>
+                            <td style={{ padding: "8px 6px", color: COLORS.textPrimary, fontWeight: 600 }}>{row.name}</td>
+                            <td style={{ padding: "8px 6px", color: COLORS.textSecondary }}>{formatVnd(row.currentValue)}</td>
+                            <td style={{ padding: "8px 6px", color: COLORS.textSecondary }}>{row.previousValue == null ? "--" : formatVnd(row.previousValue)}</td>
+                            <td style={{ padding: "8px 6px", color: row.changePct == null ? COLORS.textMuted : row.changePct >= 0 ? COLORS.positive : COLORS.error, fontWeight: 700 }}>
+                              {row.changePct == null ? "--" : `${row.changePct > 0 ? "+" : ""}${row.changePct.toFixed(1)}%`}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ background: COLORS.surface, borderRadius: 10, padding: 16, border: `1px solid ${COLORS.border}` }}>
+                  <h3 style={{ margin: "0 0 12px", color: COLORS.textPrimary, fontSize: 16 }}>
+                    Hao hụt kỳ này
+                  </h3>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        {["Nguyên liệu", "Kỳ này", "Kỳ trước", "Đổi"].map((h) => (
+                          <th key={h} style={{ padding: "8px 6px", textAlign: "left", color: COLORS.textSecondary, fontSize: 12, borderBottom: `1px solid ${COLORS.border}` }}>
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shrinkageRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} style={{ padding: 24, textAlign: "center", color: COLORS.textMuted }}>
+                            Không có dữ liệu hao hụt
+                          </td>
+                        </tr>
+                      ) : (
+                        shrinkageRows.slice(0, 10).map((row) => (
+                          <tr key={row.name}>
+                            <td style={{ padding: "8px 6px", color: COLORS.textPrimary, fontWeight: 600 }}>{row.name}</td>
+                            <td style={{ padding: "8px 6px", color: COLORS.error, fontWeight: 600 }}>{formatVnd(row.currentValue)}</td>
+                            <td style={{ padding: "8px 6px", color: COLORS.textSecondary }}>{row.previousValue == null ? "--" : formatVnd(row.previousValue)}</td>
+                            <td style={{ padding: "8px 6px", color: row.changePct == null ? COLORS.textMuted : row.changePct <= 0 ? COLORS.positive : COLORS.error, fontWeight: 700 }}>
+                              {row.changePct == null ? "--" : `${row.changePct > 0 ? "+" : ""}${row.changePct.toFixed(1)}%`}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {(monthlyComparison.inventorySnapshots.current == null ||
+                monthlyComparison.inventorySnapshots.previous == null) && (
+                <div style={{ marginTop: 12, color: COLORS.textMuted, fontSize: 12 }}>
+                  Giá trị tồn kho cần có snapshot kiểm kho trong cả hai kỳ để so sánh đầy đủ.
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ textAlign: "center", color: COLORS.textMuted, padding: 40 }}>
+              Không có dữ liệu so sánh tháng
+            </div>
+          )}
         </div>
       )}
 

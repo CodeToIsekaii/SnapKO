@@ -19,7 +19,6 @@ interface Props {
   visible: boolean;
   onCapture: (uri: string) => void;
   onClose: () => void;
-  currentPhotoIndex?: number; // 0-based index of current photo being taken
   totalPhotos?: number; // Total photos taken so far
 }
 
@@ -28,13 +27,11 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // Receipt frame - taller aspect ratio for receipts
 const FRAME_WIDTH = SCREEN_WIDTH * 0.92;
 const FRAME_HEIGHT = SCREEN_HEIGHT * 0.55;
-const SECTION_HEIGHT = FRAME_HEIGHT / 3;
 
 export function SalesCameraModal({
   visible,
   onCapture,
   onClose,
-  currentPhotoIndex = 0,
   totalPhotos = 0,
 }: Props) {
   const cameraRef = useRef<CameraView>(null);

@@ -497,6 +497,16 @@ function registerAuthIPC() {
         return { profile: null, error: "No profile returned" };
       }
 
+      const canUseBranches =
+        backendProfile.business?.effectiveInventoryModel === "CHAIN" &&
+        backendProfile.business?.effectiveTier === "CHAIN";
+      const accessibleBranches =
+        backendProfile.businessId &&
+        canUseBranches &&
+        ["OWNER", "BRANCH_MANAGER"].includes(backendProfile.role)
+          ? await apiFetch<any[]>("/branches").catch(() => [])
+          : [];
+
       const flattenedProfile = {
         id: backendProfile.id,
         business_id: backendProfile.businessId ?? null,
@@ -520,6 +530,17 @@ function registerAuthIPC() {
           backendProfile.business?.tier ||
           "FREE",
         subscription_status: backendProfile.business?.subscriptionStatus || null,
+        days_remaining: backendProfile.business?.daysRemaining ?? 0,
+        chain_state: backendProfile.business?.chainState || null,
+        operational_state:
+          backendProfile.business?.operationalState || "ACTIVE",
+        read_only: backendProfile.business?.readOnly === true,
+        branches: accessibleBranches.map((branch) => ({
+          id: branch.id,
+          name: branch.name,
+          code: branch.code ?? null,
+          type: branch.type,
+        })),
         entitlements: backendProfile.business?.entitlements || null,
         subscription_expires_at:
           backendProfile.business?.subscriptionExpiresAt || null,
@@ -728,7 +749,7 @@ app.whenReady().then(async () => {
   registerAuthIPC();
   registerSyncIPC();
   registerShellIPC();
-  registerExportIPC(mainWindow);
+  registerExportIPC();
   registerStaffIPC();
 
   // AI parse (Invoice/Sales/Stock/Recipe) via BE-SnapKO hybrid pipeline

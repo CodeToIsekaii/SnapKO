@@ -17,11 +17,8 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { File } from "expo-file-system";
-import * as SQLite from "expo-sqlite";
 import { getDB } from "../db";
 import * as Haptics from "expo-haptics";
-import { supabase } from "../lib/supabase";
-import { Env } from "../env";
 import { Ionicons } from "@expo/vector-icons";
 import { parseHandwritingMultiWithAI } from "../services/aiService";
 

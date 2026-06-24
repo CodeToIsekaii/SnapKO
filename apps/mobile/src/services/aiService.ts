@@ -7,6 +7,7 @@
 import * as ImageManipulator from "expo-image-manipulator";
 import { File } from "expo-file-system";
 import { api } from "./api";
+import { isExpectedNetworkError } from "../screens/inventoryCaptureError";
 
 // =============================================
 // SCAN QUOTA
@@ -48,6 +49,11 @@ function quotaErrorFromApiError(err: any): QuotaExceededError | null {
     maxAdRewardsPerDay: data?.maxAdRewardsPerDay ?? 0,
     scansRemaining: data?.remaining,
   });
+}
+
+function logUnexpectedAiError(label: string, error: unknown): void {
+  if (isExpectedNetworkError(error)) return;
+  console.error(label, error);
 }
 
 // =============================================
@@ -175,10 +181,15 @@ export type ParsedHandwritingItem = {
 type AiParseType = "IMPORT" | "SALES" | "STOCK_CHECK" | "RECIPE";
 export type AiQualityMode = "standard" | "high_accuracy";
 
-interface AiQuotaMetadata {
+export interface AiQuotaMetadata {
   used: number;
   quota: number;
   remaining: number;
+}
+
+export interface ConfirmAiResultResponse {
+  charged: boolean;
+  quota: AiQuotaMetadata;
 }
 
 interface AiParseRequest {
@@ -192,6 +203,8 @@ interface AiParseRequest {
 
 interface AiResponseMetadata {
   quota?: AiQuotaMetadata;
+  quotaPreview?: AiQuotaMetadata;
+  scanChargeToken?: string;
   qualityMode?: AiQualityMode;
   model?: string;
   canRetryHighAccuracy?: boolean;
@@ -251,7 +264,7 @@ class AIService {
       });
     } catch (error) {
       if (error instanceof QuotaExceededError) throw error;
-      console.error("[AIService] parseInvoice error:", error);
+      logUnexpectedAiError("[AIService] parseInvoice error:", error);
       return {
         success: false,
         items: [],
@@ -276,7 +289,7 @@ class AIService {
       });
     } catch (error) {
       if (error instanceof QuotaExceededError) throw error;
-      console.error("[AIService] parseSalesReport error:", error);
+      logUnexpectedAiError("[AIService] parseSalesReport error:", error);
       return {
         success: false,
         items_sold: [],
@@ -306,7 +319,7 @@ class AIService {
       });
     } catch (error) {
       if (error instanceof QuotaExceededError) throw error;
-      console.error("[AIService] parseStockSheet error:", error);
+      logUnexpectedAiError("[AIService] parseStockSheet error:", error);
       return {
         success: false,
         items: [],
@@ -370,14 +383,16 @@ class AIService {
         used_raw_ocr_parser: res.used_raw_ocr_parser,
         missing_row_numbers: res.missing_row_numbers,
         duplicate_row_numbers: res.duplicate_row_numbers,
-        quota: res.quota,
+        quota: res.quota ?? res.quotaPreview,
+        quotaPreview: res.quotaPreview,
+        scanChargeToken: res.scanChargeToken,
         qualityMode: res.qualityMode,
         model: res.model,
         canRetryHighAccuracy: res.canRetryHighAccuracy,
       };
     } catch (err: any) {
       if (err instanceof QuotaExceededError) throw err;
-      console.error("[AIService] parseHandwritingMulti error:", err);
+      logUnexpectedAiError("[AIService] parseHandwritingMulti error:", err);
       return { success: false, items: [], error: err.message };
     }
   }
@@ -395,7 +410,7 @@ class AIService {
       });
     } catch (err: any) {
       if (err instanceof QuotaExceededError) throw err;
-      console.error("[AIService] parseInvoiceMulti error:", err);
+      logUnexpectedAiError("[AIService] parseInvoiceMulti error:", err);
       return { success: false, items: [], confidence: 0, error: err.message };
     }
   }
@@ -413,7 +428,7 @@ class AIService {
       });
     } catch (err: any) {
       if (err instanceof QuotaExceededError) throw err;
-      console.error("[AIService] parseSalesMulti error:", err);
+      logUnexpectedAiError("[AIService] parseSalesMulti error:", err);
       return {
         success: false,
         items_sold: [],
@@ -422,6 +437,12 @@ class AIService {
         error: err.message,
       };
     }
+  }
+
+  async confirmAiResultCharge(token: string): Promise<ConfirmAiResultResponse> {
+    return api.post<ConfirmAiResultResponse>("/scans/confirm-ai-result", {
+      token,
+    });
   }
 
   /**
@@ -457,3 +478,4 @@ export const parseSalesWithAI = aiService.parseSalesReport.bind(aiService);
 export const parseSalesMultiWithAI = aiService.parseSalesMulti.bind(aiService);
 export const parseStockWithAI = aiService.parseStockSheet.bind(aiService);
 export const parseHandwritingMultiWithAI = aiService.parseHandwritingMulti.bind(aiService);
+export const confirmAiResultCharge = aiService.confirmAiResultCharge.bind(aiService);

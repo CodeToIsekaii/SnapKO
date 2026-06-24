@@ -6,14 +6,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { getDB } from "../db";
 import { syncBusinessConfig } from "../lib/supabase";
-
-export type InventoryModel = "SIMPLE" | "STANDARD" | "CHAIN";
-
-function normalizeInventoryModel(value?: string | null): InventoryModel {
-  if (value === "STANDARD" || value === "MODEL_B") return "STANDARD";
-  if (value === "CHAIN") return "CHAIN";
-  return "SIMPLE";
-}
+import {
+  normalizeInventoryModel,
+  usesDualAreaFlow,
+  type InventoryModel,
+} from "../contexts/inventoryModelState";
 
 interface InventoryModelState {
   model: InventoryModel;
@@ -40,9 +37,7 @@ export function useInventoryModel(): InventoryModelState {
 
       if (profile) {
         const localModel = normalizeInventoryModel(profile.inventory_model);
-        if (localModel === "SIMPLE") {
-          setModel("SIMPLE");
-        }
+        setModel(localModel);
         if (profile.business_id) {
           setBusinessId(profile.business_id);
         }
@@ -94,7 +89,7 @@ export function useInventoryModel(): InventoryModelState {
     businessId,
     isLoading,
     isSimple: model === "SIMPLE",
-    isStandard: model !== "SIMPLE",
+    isStandard: usesDualAreaFlow(model),
     isChain: model === "CHAIN",
     syncModel,
   };

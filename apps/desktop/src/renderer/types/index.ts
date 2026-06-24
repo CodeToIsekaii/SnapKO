@@ -32,6 +32,9 @@ export interface Ingredient {
   warehouse_qty: number;
   bar_qty: number;
   unit_cost: number;
+  last_purchase_price?: number | null;
+  last_purchase_qty?: number | null;
+  last_purchase_unit?: string | null;
   density?: number | null;
   unit_weight?: number | null;
   unit_weight_unit?: string | null;
@@ -75,7 +78,13 @@ export interface COGSReport {
     itemCount: number;
     lowStockCount: number;
   };
-  monthly: Array<{ month: string; warehouse: number; bar: number }>;
+  monthly: Array<{
+    month: string;
+    date?: string;
+    fullDate?: string;
+    warehouse: number;
+    bar: number;
+  }>;
   losses: Array<{ name: string; value: number; color: string }>;
 }
 

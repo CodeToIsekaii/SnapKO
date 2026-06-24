@@ -15,8 +15,6 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-// import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
 import type { LowStockItem } from "../hooks/useLowStock";
 
 // Colors per .UXUIrules
@@ -40,6 +38,7 @@ interface LowStockModalProps {
     supplies: LowStockItem[];
   };
   isLoading?: boolean;
+  onRestock: () => void;
 }
 
 export const LowStockModal = ({
@@ -47,9 +46,8 @@ export const LowStockModal = ({
   onClose,
   data,
   isLoading,
+  onRestock,
 }: LowStockModalProps) => {
-  // const insets = useSafeAreaInsets();
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState<"ingredients" | "supplies">(
     "ingredients"
   );
@@ -57,10 +55,9 @@ export const LowStockModal = ({
   const listData =
     activeTab === "ingredients" ? data.ingredients : data.supplies;
 
-  const handleRestock = (item: LowStockItem) => {
+  const handleRestock = () => {
     onClose();
-    // Navigate to inventory with the item selected for import
-    router.push("/(tabs)/inventory");
+    onRestock();
   };
 
   const renderItem = ({ item }: { item: LowStockItem }) => (
@@ -75,7 +72,7 @@ export const LowStockModal = ({
           (Min: {item.min_threshold})
         </Text>
       </View>
-      <Pressable style={styles.restockBtn} onPress={() => handleRestock(item)}>
+      <Pressable style={styles.restockBtn} onPress={handleRestock}>
         <Text style={styles.restockText}>Nhập</Text>
       </Pressable>
     </View>

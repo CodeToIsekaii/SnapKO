@@ -22,7 +22,6 @@ export default function AdminDashboard() {
     activePremium: 0,
     totalUsers: 0,
   });
-  const [chartData, setChartData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const supabase = getSupabaseBrowserClient();
 
@@ -48,38 +47,12 @@ export default function AdminDashboard() {
 
       if (historyError) throw historyError;
 
-      // 2. Calculate Revenue & Chart Data
+      // 2. Calculate Revenue
       let totalRevenue = 0;
-      const monthlyStats: Record<
-        string,
-        { name: string; PRO: number; PREMIUM: number }
-      > = {};
 
       history?.forEach((txn) => {
         totalRevenue += txn.amount_paid || 0;
-
-        const date = new Date(txn.created_at);
-        const monthKey = `${date.getFullYear()}-${String(
-          date.getMonth() + 1
-        ).padStart(2, "0")}`; // YYYY-MM
-        const monthName = `T${date.getMonth() + 1}`;
-
-        if (!monthlyStats[monthKey]) {
-          monthlyStats[monthKey] = { name: monthName, PRO: 0, PREMIUM: 0 };
-        }
-
-        // Categorize by plan_code
-        if (txn.plan_code?.includes("PREMIUM")) {
-          monthlyStats[monthKey].PREMIUM += txn.amount_paid || 0;
-        } else {
-          // Default to PRO for anything else
-          monthlyStats[monthKey].PRO += txn.amount_paid || 0;
-        }
       });
-
-      // Convert to array for Recharts
-      const chartDataArray = Object.values(monthlyStats);
-      setChartData(chartDataArray);
 
       // 3. Calculate Active Users (Pro vs Premium)
       // Strategy: Get all businesses with active subscription, then check their LATEST transaction

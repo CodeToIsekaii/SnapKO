@@ -16,9 +16,10 @@ import {
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  TextInput,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { BufferedTextInput } from "../../../components/BufferedTextInput";
+import { parseNumericField } from "../../../screens/inventoryCaptureValidation";
 
 // Colors per .UXUIrules
 const COLORS = {
@@ -147,10 +148,10 @@ export function ImportReviewList({
 
         {/* Item name */}
         {isEditing ? (
-          <TextInput
+          <BufferedTextInput
             style={styles.nameInput}
             value={item.ingredient_name}
-            onChangeText={(text) =>
+            onCommitText={(text) =>
               onUpdateItem(index, { ingredient_name: text })
             }
             placeholder="Tên nguyên liệu"
@@ -167,11 +168,11 @@ export function ImportReviewList({
             <Text style={styles.detailLabel}>Số lượng</Text>
             {isEditing ? (
               <View style={styles.editRow}>
-                <TextInput
+                <BufferedTextInput
                   style={styles.smallInput}
                   value={item.quantity.toString()}
-                  onChangeText={(text) => {
-                    const qty = parseFloat(text) || 0;
+                  onCommitText={(text) => {
+                    const qty = parseNumericField(text);
                     onUpdateItem(index, {
                       quantity: qty,
                       total_price: qty * item.unit_price,
@@ -179,10 +180,10 @@ export function ImportReviewList({
                   }}
                   keyboardType="decimal-pad"
                 />
-                <TextInput
+                <BufferedTextInput
                   style={[styles.smallInput, styles.unitInput]}
                   value={item.unit}
-                  onChangeText={(text) => onUpdateItem(index, { unit: text })}
+                  onCommitText={(text) => onUpdateItem(index, { unit: text })}
                   placeholder="Đơn vị"
                   placeholderTextColor={COLORS.textSecondary}
                 />
@@ -198,11 +199,11 @@ export function ImportReviewList({
           <View style={styles.detailCol}>
             <Text style={styles.detailLabel}>Đơn giá</Text>
             {isEditing ? (
-              <TextInput
+              <BufferedTextInput
                 style={styles.smallInput}
                 value={item.unit_price.toString()}
-                onChangeText={(text) => {
-                  const price = parseFloat(text) || 0;
+                onCommitText={(text) => {
+                  const price = parseNumericField(text);
                   onUpdateItem(index, {
                     unit_price: price,
                     total_price: item.quantity * price,

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { User } from "@supabase/supabase-js";
 import { motion } from "framer-motion";
 import {
+  Building2,
   CheckCircle2,
   ChevronRight,
   Clock,
@@ -14,6 +15,8 @@ import {
   Download,
   LogOut,
   Monitor,
+  MinusCircle,
+  PlusCircle,
   RefreshCw,
   ShieldCheck,
   Users,
@@ -49,6 +52,7 @@ type BackendProfile = {
     subscriptionStatus?: SubscriptionStatus;
     daysRemaining?: number;
     subscriptionExpiresAt: string | null;
+    chainOutletLimit?: number;
   } | null;
 };
 
@@ -66,6 +70,7 @@ type BusinessInfo = {
   subscription_status: SubscriptionStatus;
   days_remaining: number;
   subscription_expires_at: string | null;
+  chain_outlet_limit: number;
 };
 
 function friendlyError(error: unknown): string {
@@ -88,6 +93,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo | null>(null);
+  const [profileRole, setProfileRole] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -119,6 +125,7 @@ export default function DashboardPage() {
           router.push("/admin");
           return;
         }
+        setProfileRole(profile?.role ?? null);
 
         if (profile?.business && mounted) {
           setBusinessInfo({
@@ -129,6 +136,7 @@ export default function DashboardPage() {
             days_remaining: Math.max(0, profile.business.daysRemaining ?? 0),
             subscription_expires_at:
               profile.business.subscriptionExpiresAt ?? null,
+            chain_outlet_limit: profile.business.chainOutletLimit ?? 0,
           });
         }
       } catch (e) {
@@ -237,6 +245,8 @@ export default function DashboardPage() {
       : isPaidActive
         ? `Gói ${effectiveTier} đang hoạt động.`
         : "Đang dùng gói miễn phí.";
+  const chainOutletCount = businessInfo?.chain_outlet_limit ?? 0;
+  const canManageChain = profileRole === "OWNER" && effectiveTier === "CHAIN";
 
   if (isLoading) {
     return (
@@ -537,6 +547,67 @@ export default function DashboardPage() {
                 <ChevronRight className="h-5 w-5 text-[#C8C2B8]" />
               </div>
             </Link>
+
+            {canManageChain && (
+              <>
+                <Link
+                  href={`/chain/setup?planCode=CHAIN_MONTHLY&outletCount=${Math.min(
+                    10,
+                    chainOutletCount + 1,
+                  )}&purchaseMode=OUTLET_INCREASE`}
+                  className="group block rounded-lg border border-[#E0DCD5] bg-white p-4 transition-colors hover:border-[#6B8E23]"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-lime-50 text-[#6B8E23]">
+                      <PlusCircle className="h-5 w-5" />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-bold text-[#1E1E1E]">
+                        Thêm outlet giữa kỳ
+                      </h4>
+                      <p className="mt-0.5 text-xs text-[#6F6B63]">
+                        Đang dùng {chainOutletCount} outlet, hệ thống tính prorate.
+                      </p>
+                    </div>
+                    <ChevronRight className="h-5 w-5 text-[#C8C2B8]" />
+                  </div>
+                </Link>
+
+                {chainOutletCount > 2 && (
+                  <Link
+                    href={`/chain/setup?planCode=CHAIN_MONTHLY&outletCount=${
+                      chainOutletCount - 1
+                    }&purchaseMode=SUBSCRIPTION`}
+                    className="group block rounded-lg border border-[#E0DCD5] bg-white p-4 transition-colors hover:border-[#E07A2F]"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-orange-50 text-[#E07A2F]">
+                        <MinusCircle className="h-5 w-5" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="font-bold text-[#1E1E1E]">
+                          Giảm outlet kỳ sau
+                        </h4>
+                        <p className="mt-0.5 text-xs text-[#6F6B63]">
+                          Chọn outlet ngừng hoạt động khi kỳ hiện tại kết thúc.
+                        </p>
+                      </div>
+                      <ChevronRight className="h-5 w-5 text-[#C8C2B8]" />
+                    </div>
+                  </Link>
+                )}
+
+                <div className="rounded-lg border border-[#E0DCD5] bg-lime-50/60 p-4">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-[#1E1E1E]">
+                    <Building2 className="h-4 w-4 text-[#6B8E23]" />
+                    Kho Tổng miễn phí
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-[#6F6B63]">
+                    Kho Tổng được tạo tự động và không tính vào số outlet trả phí.
+                  </p>
+                </div>
+              </>
+            )}
 
             <Link
               href="/download"

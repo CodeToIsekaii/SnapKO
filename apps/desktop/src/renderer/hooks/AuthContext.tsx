@@ -2,7 +2,7 @@
 // Fixes: Multiple useAuth() calls creating separate state instances
 // Now all components share the same auth state via Context
 
-import React, {
+import {
   createContext,
   useContext,
   useState,
@@ -28,10 +28,32 @@ interface Profile {
   tier?: string | null;
   effective_tier?: string | null;
   subscription_status?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED" | null;
+  days_remaining?: number | null;
+  chain_state?:
+    | "ACTIVE"
+    | "READ_ONLY_EXPIRED"
+    | "BRANCH_SELECTION_REQUIRED"
+    | "HUB_REBASELINE_REQUIRED"
+    | "MIGRATION_REQUIRED"
+    | null;
+  operational_state?:
+    | "ACTIVE"
+    | "READ_ONLY_EXPIRED"
+    | "WAREHOUSE_REBASELINE_REQUIRED"
+    | null;
+  read_only?: boolean;
+  branches?: Array<{
+    id: string;
+    name: string;
+    code: string | null;
+    type: "CENTRAL_WAREHOUSE" | "OUTLET";
+  }>;
   entitlements?: {
     canUseDualWarehouse: boolean;
     canUseCustomStorageAreas: boolean;
     canInviteStaff: boolean;
+    canUseCloudSync: boolean;
+    canUseFraudProtection: boolean;
     canUseAdvancedReports: boolean;
   } | null;
   subscription_expires_at?: string | null;

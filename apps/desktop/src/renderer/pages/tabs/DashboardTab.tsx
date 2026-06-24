@@ -1,15 +1,18 @@
 // src/pages/tabs/DashboardTab.tsx - Dashboard/COGS Tab
 // SOLID: Presentational component - receives data via props
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { COGSReport, ActivityLog } from "../../types";
 import { COGSDashboard } from "../../components/COGSChart";
 import { ActivityLogTable } from "../../components/ActivityLogTable";
 import { COLORS } from "../../styles/theme";
+import { calculateInventoryValueChange } from "../../../shared/cogsMetrics";
 import { BarChart3, RefreshCw, Download } from "lucide-react";
 
 interface DashboardTabProps {
   cogsReport: COGSReport | null;
+  canUseDualWarehouse: boolean;
+  canUseAdvancedReports: boolean;
   loading: boolean;
   logs: ActivityLog[];
   onExport: () => Promise<any>;
@@ -18,11 +21,40 @@ interface DashboardTabProps {
 
 export function DashboardTab({
   cogsReport,
+  canUseDualWarehouse,
+  canUseAdvancedReports,
   loading,
   logs,
   onExport,
   onRefresh,
 }: DashboardTabProps) {
+  const [monthInventoryChange, setMonthInventoryChange] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!canUseAdvancedReports) {
+      setMonthInventoryChange(null);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await (window as any).electronAPI?.reportsGet(
+          "/reports/monthly-comparison",
+        );
+        if (!cancelled) {
+          setMonthInventoryChange(data?.data?.metrics?.inventoryValue?.changePct ?? null);
+        }
+      } catch {
+        if (!cancelled) setMonthInventoryChange(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseAdvancedReports]);
+
   const handleExport = async () => {
     const result = await onExport();
     if (result?.success) {
@@ -50,6 +82,22 @@ export function DashboardTab({
     );
   }
 
+  const barData = (cogsReport.monthly || []).map((m) => {
+    const warehouse = Number(m.warehouse || 0);
+    const bar = Number(m.bar || 0);
+
+    return {
+      name: (m as any).month ?? (m as any).name ?? "",
+      fullDate: (m as any).fullDate,
+      warehouse: canUseDualWarehouse ? warehouse : warehouse + bar,
+      bar: canUseDualWarehouse ? bar : 0,
+    };
+  });
+  const snapshotChange =
+    (cogsReport.monthly || []).length >= 2
+      ? calculateInventoryValueChange(cogsReport.monthly || [])
+      : null;
+
   return (
     <div>
       {/* Header Actions */}
@@ -76,17 +124,17 @@ export function DashboardTab({
 
       {/* COGS Dashboard Charts */}
       <COGSDashboard
-        barData={(cogsReport.monthly || []).map((m) => ({
-          name: (m as any).month ?? (m as any).name ?? "",
-          warehouse: m.warehouse,
-          bar: m.bar,
-        }))}
+        barData={barData}
         pieData={cogsReport.losses || []}
+        showBarSeries={canUseDualWarehouse}
         summary={{
           totalValue: cogsReport.summary?.totalValue || 0,
           itemCount: cogsReport.summary?.itemCount || 0,
           lowStockCount: cogsReport.summary?.lowStockCount || 0,
-          monthlyChange: 0,
+          monthlyChange: canUseAdvancedReports ? monthInventoryChange : snapshotChange,
+          monthlyChangeSubtitle: canUseAdvancedReports
+            ? "so cùng kỳ tháng trước"
+            : "so lần kiểm gần nhất",
         }}
       />
 

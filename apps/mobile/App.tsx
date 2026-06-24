@@ -10,7 +10,7 @@
 import "./global.css";
 import { StatusBar } from "expo-status-bar";
 import React, { useMemo, useEffect } from "react";
-import { ActivityIndicator, View, Text } from "react-native";
+import { ActivityIndicator, Alert, View, Text } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as SQLite from "expo-sqlite";
@@ -28,17 +28,16 @@ import {
   SettingsScreen,
   OwnerPendingListScreen,
   DashboardScreen,
-  RecipeListScreen,
-  RecipeEditScreen,
-  RecipeScanScreen,
-  IngredientsListScreen,
-  IngredientEditScreen,
   ProfileEditScreen,
   AdHocTransferScreen,
   QuickOutScreen,
   StaffManagementScreen,
+  PendingTransfersScreen,
 } from "./src/screens";
-import { InventoryModelProvider } from "./src/contexts/InventoryModelContext";
+import {
+  InventoryModelProvider,
+  useInventoryModel,
+} from "./src/contexts/InventoryModelContext";
 import type {
   StorageArea,
   CheckMode,
@@ -69,15 +68,11 @@ type Screen =
   | "CONFIRM_LOG"
   | "SETTINGS"
   | "OWNER_PENDING_LIST"
-  | "RECIPE_LIST"
-  | "RECIPE_EDIT"
-  | "RECIPE_SCAN"
-  | "INGREDIENTS_LIST"
-  | "INGREDIENT_EDIT"
   | "PROFILE_EDIT"
   | "TRANSFER"
   | "QUICK_OUT"
-  | "STAFF_MANAGEMENT";
+  | "STAFF_MANAGEMENT"
+  | "PENDING_TRANSFERS";
 
 function PushRegistrationWorker() {
   usePushNotifications();
@@ -110,16 +105,13 @@ function AppNavigator() {
     signOut,
     refreshProfile,
   } = useAuth();
+  const { model: syncedInventoryModel, syncModel } = useInventoryModel();
+  const refreshProfileRef = React.useRef(refreshProfile);
+  const lastProfileRefreshForModelRef = React.useRef<string | null>(null);
   const [currentScreen, setCurrentScreen] = React.useState<Screen>("LOGIN");
   const [dbReady, setDbReady] = React.useState(false);
   const [confirmLogParams, setConfirmLogParams] =
     React.useState<ConfirmLogParams | null>(null);
-  const [editingRecipeId, setEditingRecipeId] = React.useState<string | null>(
-    null
-  );
-  const [editingIngredientId, setEditingIngredientId] = React.useState<
-    string | null
-  >(null);
   const [inventoryParams, setInventoryParams] = React.useState<InventoryParams>(
     {
       mode: "stock",
@@ -144,6 +136,58 @@ function AppNavigator() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    refreshProfileRef.current = refreshProfile;
+  }, [refreshProfile]);
+
+  useEffect(() => {
+    if (!dbReady || authState.status !== "authenticated") return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        await syncModel();
+        if (!cancelled) {
+          await refreshProfileRef.current();
+        }
+      } catch (err) {
+        console.warn("[AppNavigator] Business config sync skipped:", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    dbReady,
+    syncModel,
+    authState.status,
+    authState.status === "authenticated" ? authState.profile.id : null,
+  ]);
+
+  useEffect(() => {
+    if (authState.status !== "authenticated") return;
+
+    const authInventoryModel =
+      authState.profile.effectiveInventoryModel || "SIMPLE";
+    if (syncedInventoryModel === authInventoryModel) return;
+
+    const refreshKey = `${authState.profile.id}:${syncedInventoryModel}`;
+    if (lastProfileRefreshForModelRef.current === refreshKey) return;
+    lastProfileRefreshForModelRef.current = refreshKey;
+
+    refreshProfileRef.current().catch((err) => {
+      console.warn("[AppNavigator] Profile refresh after config sync failed:", err);
+    });
+  }, [
+    syncedInventoryModel,
+    authState.status,
+    authState.status === "authenticated" ? authState.profile.id : null,
+    authState.status === "authenticated"
+      ? authState.profile.effectiveInventoryModel
+      : null,
+  ]);
 
   useEffect(() => {
     if (!dbReady || authState.status !== "authenticated") return;
@@ -251,6 +295,49 @@ function AppNavigator() {
   // ============ APP STACK (Authenticated) ============
   const { profile } = authState;
   const isOwner = profile.role === "OWNER";
+  const canManageStaff =
+    profile.role === "OWNER" || profile.role === "BRANCH_MANAGER";
+  const openInventory = (
+    mode?: string,
+    area?: StorageArea,
+    check?: CheckMode,
+  ) => {
+    if (profile.operationalState === "READ_ONLY_EXPIRED") {
+      Alert.alert(
+        "Chỉ đọc",
+        "Gói đã hết hạn. Vui lòng gia hạn trên web trước khi tiếp tục vận hành.",
+      );
+      return;
+    }
+    if (
+      profile.operationalState === "WAREHOUSE_REBASELINE_REQUIRED" &&
+      mode !== "stock"
+    ) {
+      Alert.alert(
+        "Cần kiểm lại Kho Tổng",
+        "Gia hạn trễ yêu cầu full-count Kho Tổng trước. Sau đó mới nhập Sales và kiểm Bar.",
+      );
+      return;
+    }
+    setInventoryParams({
+      mode: (mode as InventoryParams["mode"]) || "stock",
+      areaType: area,
+      checkMode: check,
+    });
+    setCurrentScreen("INVENTORY_CAPTURE");
+  };
+  const openActiveOperation = (screen: "TRANSFER" | "QUICK_OUT") => {
+    if (profile.operationalState !== "ACTIVE") {
+      Alert.alert(
+        "Chưa thể thao tác",
+        profile.operationalState === "WAREHOUSE_REBASELINE_REQUIRED"
+          ? "Cần full-count Kho Tổng trước khi thực hiện thao tác khác."
+          : "Gói đã hết hạn. Mobile hiện chỉ đọc.",
+      );
+      return;
+    }
+    setCurrentScreen(screen);
+  };
 
   switch (currentScreen) {
     case "SETTINGS":
@@ -262,7 +349,9 @@ function AppNavigator() {
           onLogout={signOut}
           onEditProfile={() => setCurrentScreen("PROFILE_EDIT")}
           onManageStaff={
-            isOwner ? () => setCurrentScreen("STAFF_MANAGEMENT") : undefined
+            canManageStaff
+              ? () => setCurrentScreen("STAFF_MANAGEMENT")
+              : undefined
           }
         />
       );
@@ -316,6 +405,11 @@ function AppNavigator() {
         />
       );
 
+    case "PENDING_TRANSFERS":
+      return (
+        <PendingTransfersScreen onBack={() => setCurrentScreen("DASHBOARD")} />
+      );
+
     case "CONFIRM_LOG":
       if (!confirmLogParams) {
         setCurrentScreen("INVENTORY_CAPTURE");
@@ -338,73 +432,6 @@ function AppNavigator() {
         />
       );
 
-    case "RECIPE_LIST":
-      return (
-        <RecipeListScreen
-          onBack={() => setCurrentScreen("DASHBOARD")}
-          onEditRecipe={(id) => {
-            setEditingRecipeId(id);
-            setCurrentScreen("RECIPE_EDIT");
-          }}
-          onAddRecipe={() => {
-            setEditingRecipeId(null);
-            setCurrentScreen("RECIPE_EDIT");
-          }}
-          onScanRecipe={() => setCurrentScreen("RECIPE_SCAN")}
-        />
-      );
-
-    case "RECIPE_EDIT":
-      return (
-        <RecipeEditScreen
-          recipeId={editingRecipeId ?? undefined}
-          onBack={() => setCurrentScreen("RECIPE_LIST")}
-          onSave={() => {
-            setEditingRecipeId(null);
-            setCurrentScreen("RECIPE_LIST");
-          }}
-        />
-      );
-
-    case "RECIPE_SCAN":
-      return (
-        <RecipeScanScreen
-          onBack={() => setCurrentScreen("RECIPE_LIST")}
-          onCreateRecipe={(recipeData) => {
-            // In production: Save recipe and navigate to edit
-            console.log("Creating recipe from AI:", recipeData);
-            setCurrentScreen("RECIPE_LIST");
-          }}
-        />
-      );
-
-    case "INGREDIENTS_LIST":
-      return (
-        <IngredientsListScreen
-          onBack={() => setCurrentScreen("DASHBOARD")}
-          onAddNew={() => {
-            setEditingIngredientId(null);
-            setCurrentScreen("INGREDIENT_EDIT");
-          }}
-          onEdit={(id) => {
-            setEditingIngredientId(id);
-            setCurrentScreen("INGREDIENT_EDIT");
-          }}
-        />
-      );
-
-    case "INGREDIENT_EDIT":
-      return (
-        <IngredientEditScreen
-          ingredientId={editingIngredientId ?? undefined}
-          onBack={() => setCurrentScreen("INGREDIENTS_LIST")}
-          onSave={() => {
-            setEditingIngredientId(null);
-            setCurrentScreen("INGREDIENTS_LIST");
-          }}
-        />
-      );
-
     case "QUICK_OUT":
       return (
         <QuickOutScreen
@@ -418,19 +445,13 @@ function AppNavigator() {
       return (
         <DashboardScreen
           onOpenSettings={() => setCurrentScreen("SETTINGS")}
-          onOpenInventory={(mode, area, check) => {
-            setInventoryParams({
-              mode: (mode as any) || "stock",
-              areaType: area,
-              checkMode: check,
-            });
-            setCurrentScreen("INVENTORY_CAPTURE");
-          }}
-          onOpenTransfer={() => setCurrentScreen("TRANSFER")}
+          onOpenInventory={openInventory}
+          onOpenTransfer={() => openActiveOperation("TRANSFER")}
+          onOpenPendingTransfers={() =>
+            setCurrentScreen("PENDING_TRANSFERS")
+          }
           onOpenPendingList={() => setCurrentScreen("OWNER_PENDING_LIST")}
-          onOpenRecipes={() => setCurrentScreen("RECIPE_LIST")}
-          onOpenIngredients={() => setCurrentScreen("INGREDIENTS_LIST")}
-          onOpenQuickOut={() => setCurrentScreen("QUICK_OUT")}
+          onOpenQuickOut={() => openActiveOperation("QUICK_OUT")}
         />
       );
   }

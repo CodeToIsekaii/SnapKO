@@ -102,6 +102,8 @@ export async function syncBusinessConfig(): Promise<{
     canUseDualWarehouse: boolean;
     canUseCustomStorageAreas: boolean;
     canInviteStaff: boolean;
+    canUseCloudSync: boolean;
+    canUseFraudProtection: boolean;
     canUseAdvancedReports: boolean;
   } | null;
   businessName: string | null;
@@ -125,6 +127,8 @@ export async function syncBusinessConfig(): Promise<{
           canUseDualWarehouse: boolean;
           canUseCustomStorageAreas: boolean;
           canInviteStaff: boolean;
+          canUseCloudSync: boolean;
+          canUseFraudProtection: boolean;
           canUseAdvancedReports: boolean;
         };
       };

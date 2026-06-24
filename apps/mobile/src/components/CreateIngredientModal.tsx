@@ -17,14 +17,12 @@ import {
   Alert,
   ActivityIndicator,
 } from "react-native";
-import * as SQLite from "expo-sqlite";
 import { getDB } from "../db";
 import { resolveLocalStorageAreaId, upsertStockLevel } from "../db/stockLevelHelper";
 import {
   createIngredientSchema,
   INGREDIENT_UNITS,
   parseAliases,
-  type CreateIngredientInput,
 } from "@snapko/shared";
 
 interface CreateIngredientModalProps {

@@ -11,7 +11,6 @@ import {
   QrCode,
   Download,
   ArrowLeft,
-  Check,
 } from "lucide-react";
 
 type OS = "win" | "mac" | "ios" | "android" | "unknown";

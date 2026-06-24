@@ -17,11 +17,8 @@ import {
   Zap,
   AlertTriangle,
   Check,
-  Apple,
   Monitor,
-  ChevronRight,
   ChevronDown,
-  Wifi,
   WifiOff,
 } from "lucide-react";
 import SmartDownloadButton from "./components/SmartDownloadButton";
@@ -585,7 +582,7 @@ export default function LandingPage() {
               icon={<Settings className="w-6 h-6 text-[#E07A2F]" />}
               iconBg="bg-[#E07A2F]/10"
               title="1. Thiết lập ban đầu"
-              description="Đăng ký & chọn gói PRO nếu cần quản lý nhân viên. Cấu hình Mô hình kho (Model A cho quán nhỏ hoặc B cho quán có kho riêng)."
+              description="Đăng ký tài khoản, mời nhân viên ở mọi gói và cấu hình mô hình kho phù hợp với cách quán vận hành."
               delay={0}
             />
             <StepCard
@@ -764,8 +761,9 @@ export default function LandingPage() {
             priceUnit="vĩnh viễn"
             features={[
               "Lưu trữ nội bộ (Local-first)",
-              "Không đồng bộ Cloud",
-              "1 Người dùng (Owner)",
+              "Cloud Sync đa thiết bị",
+              "Owner và nhân viên",
+              "Chống gian lận cơ bản",
               "AI: 20 lần scan/tháng",
               "Kho Model A (Cơ bản)",
             ]}
@@ -793,11 +791,11 @@ export default function LandingPage() {
           <PricingCard
             name="Gói C: PREMIUM"
             subtitle="Dành cho chuỗi F&B và doanh nghiệp"
-            price="499.000đ"
-            priceUnit="/tháng"
+            price="269.000đ"
+            priceUnit="/outlet/tháng"
             features={[
               "Tất cả tính năng PRO",
-              "AI: 500 lần scan/tháng",
+              "AI: 250 lần scan/outlet/tháng",
               "Kho Model C (Chuỗi nhiều chi nhánh)",
               "Hỗ trợ ưu tiên 24/7",
               "Dashboard Analytics nâng cao",

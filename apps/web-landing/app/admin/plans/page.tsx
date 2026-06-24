@@ -30,7 +30,7 @@ export default function PlansManager() {
 
   const fetchPlans = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("subscription_plans")
       .select("*")
       .order("price", { ascending: true });

@@ -7,7 +7,7 @@
  * which uses Expo Router for tab-based navigation.
  */
 
-import React, { useState, useCallback } from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -18,12 +18,17 @@ import {
   ActivityIndicator,
   Linking,
 } from "react-native";
-// import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { getDB } from "../db";
 import { supabase } from "../lib/supabase";
 import InviteCodeGeneratorModal from "../components/InviteCodeGeneratorModal";
 import { useAuth } from "../contexts/AuthContext";
+import { useInventoryModel } from "../contexts/InventoryModelContext";
+import {
+  normalizeInventoryModel,
+  shouldRefreshProfileAfterConfigSync,
+  type InventoryModel,
+} from "../contexts/inventoryModelState";
 import { Env } from "../env";
 import { api } from "../services/api";
 
@@ -53,14 +58,6 @@ interface LocalProfile {
   inventory_model: string;
 }
 
-type InventoryModel = "SIMPLE" | "STANDARD" | "CHAIN";
-
-function normalizeInventoryModel(value?: string | null): InventoryModel {
-  if (value === "STANDARD" || value === "MODEL_B") return "STANDARD";
-  if (value === "CHAIN") return "CHAIN";
-  return "SIMPLE";
-}
-
 const MODEL_LABEL: Record<InventoryModel, string> = {
   SIMPLE: "Kho Đơn",
   STANDARD: "Kho Kép",
@@ -78,10 +75,10 @@ export default function SettingsScreen({
   onBack,
   onLogout,
   onEditProfile,
-  onManageStaff,
+  onManageStaff: _onManageStaff,
 }: SettingsScreenProps) {
-  // const router = useRouter(); // REMOVE: App.tsx uses manual navigation
-  const { signOut, authState } = useAuth();
+  const { signOut, authState, refreshProfile } = useAuth();
+  const { syncModel } = useInventoryModel();
 
   // State
   const [profile, setProfile] = useState<LocalProfile | null>(null);
@@ -100,14 +97,11 @@ export default function SettingsScreen({
     profile?.role === "OWNER";
   const authProfile =
     authState.status === "authenticated" ? authState.profile : null;
-  const effectiveTier = authProfile?.effectiveTier ?? authProfile?.tier ?? "FREE";
   const entitlements = authProfile?.entitlements;
-  const canUseDualWarehouse =
-    entitlements?.canUseDualWarehouse ??
-    (effectiveTier === "PRO" || effectiveTier === "CHAIN");
+  const canUseDualWarehouse = entitlements?.canUseDualWarehouse ?? false;
   const canUseCustomStorageAreas =
-    entitlements?.canUseCustomStorageAreas ?? effectiveTier === "CHAIN";
-  const canInviteStaff = entitlements?.canInviteStaff ?? true;
+    entitlements?.canUseCustomStorageAreas ?? false;
+  const canInviteStaff = entitlements?.canInviteStaff ?? false;
 
   // Load on mount
   React.useEffect(() => {
@@ -214,6 +208,19 @@ export default function SettingsScreen({
         [effectiveModel, profile.id],
       );
       setModel(effectiveModel);
+      await syncModel().catch((syncErr) => {
+        console.warn("[SettingsScreen] Model context sync skipped:", syncErr);
+      });
+      if (
+        shouldRefreshProfileAfterConfigSync(
+          { success: true, inventoryModel: effectiveModel },
+          authState.status,
+        )
+      ) {
+        await refreshProfile().catch((refreshErr) => {
+          console.warn("[SettingsScreen] Profile refresh skipped:", refreshErr);
+        });
+      }
 
       Alert.alert(
         "Thành công",
@@ -420,7 +427,6 @@ export default function SettingsScreen({
                     onEditProfile();
                   } else {
                     // Fallback for Tab navigation (if used there)
-                    // router.push("/profile-edit" as any);
                     console.warn("onEditProfile not provided");
                   }
                 }}
@@ -457,7 +463,7 @@ export default function SettingsScreen({
                 onPress={() =>
                   canInviteStaff
                     ? setShowInviteModal(true)
-                    : Alert.alert("Tính năng bị khóa", "Mời nhân viên cần gói PRO/CHAIN còn hiệu lực.")
+                    : Alert.alert("Chưa đồng bộ quyền", "Vui lòng tải lại hồ sơ rồi thử lại.")
                 }
               >
                 <Ionicons name="person-add" size={18} color="#FFF" />

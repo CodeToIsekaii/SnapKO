@@ -5,13 +5,12 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, Animated } from "react-native";
+import { Text, Pressable, Animated } from "react-native";
 import {
   subscribeSyncStatus,
   SyncStatus,
   syncPendingLogs,
 } from "../sync/syncEngine";
-import * as SQLite from "expo-sqlite";
 import { getDB } from "../db";
 
 interface SyncStatusIndicatorProps {
@@ -56,8 +55,7 @@ export function SyncStatusIndicator({
 
   // Manual sync trigger
   const handleManualSync = async () => {
-    if (status.isSyncing || !status.isOnline || status.pendingCount === 0)
-      return;
+    if (status.isSyncing || !status.isOnline) return;
 
     try {
       const db = await getDB();

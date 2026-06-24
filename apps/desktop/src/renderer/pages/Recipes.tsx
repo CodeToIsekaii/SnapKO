@@ -3,17 +3,12 @@ import { COLORS } from "../styles/theme";
 import GuideModal from "../components/GuideModal";
 import {
   UNIT_TYPES,
-  getUnitGroup,
-  convertUnit,
   calculateIngredientCost,
 } from "@snapko/shared/logic";
 import {
   ScrollText,
   Rocket,
-  Timer,
   Bot,
-  Camera,
-  FileSpreadsheet,
   ClipboardList,
   X,
   Save,
@@ -21,8 +16,6 @@ import {
   Trash2,
   HelpCircle,
   Scroll,
-  Plus,
-  Image,
   Loader2,
   CheckCircle,
   AlertCircle,
@@ -154,11 +147,6 @@ export default function RecipesPage() {
                     /\s*(blend|note|tươi|đậm|nhạt)\s*/gi,
                     "",
                   );
-                  const cleanIngName = ingName.replace(
-                    /\s*(blend|note|tươi|đậm|nhạt)\s*/gi,
-                    "",
-                  );
-
                   return (
                     ingName.includes(cleanAiName) ||
                     cleanAiName.includes(ingName) ||

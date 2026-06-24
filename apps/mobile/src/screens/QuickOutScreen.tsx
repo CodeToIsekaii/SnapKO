@@ -25,6 +25,8 @@ import * as Haptics from "expo-haptics";
 import { getDB } from "../db";
 import { incrementStockLevel, resolveLocalAreaByLocation } from "../db/stockLevelHelper";
 import { useInventoryModel } from "../contexts/InventoryModelContext";
+import { BufferedTextInput } from "../components/BufferedTextInput";
+import { parseNumericField } from "./inventoryCaptureValidation";
 
 // Reason types for Quick Out per .script
 type OutReason = "DAMAGED" | "LOAN" | "MARKETING" | null;
@@ -76,7 +78,6 @@ export default function QuickOutScreen({
   const [selectedItems, setSelectedItems] = useState<Map<string, number>>(
     new Map()
   );
-  const [selectedReason, setSelectedReason] = useState<OutReason>(null);
   const [showReasonModal, setShowReasonModal] = useState(false);
   const [showLoanSourceModal, setShowLoanSourceModal] = useState(false);
   const { isStandard } = useInventoryModel();
@@ -104,8 +105,8 @@ export default function QuickOutScreen({
   );
 
   const handleUpdateQty = (id: string, qtyStr: string) => {
-    const qty = parseFloat(qtyStr);
-    if (isNaN(qty) || qty <= 0) {
+    const qty = parseNumericField(qtyStr);
+    if (qty <= 0) {
       const newMap = new Map(selectedItems);
       newMap.delete(id);
       setSelectedItems(newMap);
@@ -277,13 +278,13 @@ export default function QuickOutScreen({
             {item.base_unit} • Tồn: {totalStock.toFixed(1)}
           </Text>
         </View>
-        <TextInput
+        <BufferedTextInput
           style={styles.qtyInput}
           placeholder="0"
           placeholderTextColor="#64748B"
           keyboardType="decimal-pad"
           value={qty?.toString() || ""}
-          onChangeText={(val) => handleUpdateQty(item.id, val)}
+          onCommitText={(val) => handleUpdateQty(item.id, val)}
         />
       </View>
     );

@@ -20,7 +20,7 @@ const COLORS = {
   textMuted: "#71717A",
 };
 
-export function LowStockAlert() {
+export function LowStockAlert({ onRestock }: { onRestock: () => void }) {
   const { ingredients, supplies, totalCount, isLoading } = useLowStock();
   const [modalVisible, setModalVisible] = useState(false);
 
@@ -54,6 +54,7 @@ export function LowStockAlert() {
         onClose={() => setModalVisible(false)}
         data={{ ingredients, supplies }}
         isLoading={isLoading}
+        onRestock={onRestock}
       />
     </>
   );

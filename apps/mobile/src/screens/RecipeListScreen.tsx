@@ -44,7 +44,6 @@ export default function RecipeListScreen({
   onScanRecipe,
 }: RecipeListScreenProps) {
   const [recipes, setRecipes] = useState<RecipeWithCOGS[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
   const [activeTab, setActiveTab] = useState<"active" | "hidden">("active");
@@ -84,8 +83,6 @@ export default function RecipeListScreen({
       setRecipes(recipesWithCOGS);
     } catch (err) {
       console.error("Load error:", err);
-    } finally {
-      setLoading(false);
     }
   }, []);
 

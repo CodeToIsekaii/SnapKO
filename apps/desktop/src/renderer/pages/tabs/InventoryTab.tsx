@@ -7,6 +7,7 @@ import { COLORS, dashboardStyles } from "../../styles/theme";
 import {
   calculateInventoryItemValue,
   formatInventoryQuantity,
+  formatWarehouseInventoryQuantity,
   getInventoryDisplayQuantities,
   getInventoryDisplayUnits,
   getInventoryQuantitiesInBase,
@@ -24,8 +25,6 @@ type IngredientCategory = "raw_material" | "supply";
 
 interface InventoryTabProps {
   ingredients: Ingredient[];
-  totalValue: number;
-  lowStockCount: number;
   loading: boolean;
   onExport: () => Promise<any>;
   onRefresh: () => Promise<void>;
@@ -33,8 +32,6 @@ interface InventoryTabProps {
 
 export function InventoryTab({
   ingredients,
-  totalValue,
-  lowStockCount,
   loading,
   onExport,
   onRefresh,
@@ -218,8 +215,8 @@ export function InventoryTab({
             filteredIngredients.map((item) => {
               const { totalQtyInBase } = getInventoryQuantitiesInBase(item);
               const rowValue = calculateInventoryItemValue(item);
-              const { warehouseUnit, barUnit } = getInventoryDisplayUnits(item);
-              const { warehouseQty, barQty } = getInventoryDisplayQuantities(item);
+              const { barUnit } = getInventoryDisplayUnits(item);
+              const { barQty } = getInventoryDisplayQuantities(item);
               const threshold = item.min_threshold || 0;
               const isLowStock = threshold > 0 && totalQtyInBase < threshold;
 
@@ -237,7 +234,7 @@ export function InventoryTab({
                   </td>
                   <td style={dashboardStyles.tableCell}>{item.base_unit}</td>
                   <td style={dashboardStyles.tableCell}>
-                    {formatInventoryQuantity(warehouseQty, warehouseUnit, item)}
+                    {formatWarehouseInventoryQuantity(item)}
                   </td>
                   <td style={dashboardStyles.tableCell}>
                     {formatInventoryQuantity(barQty, barUnit, item)}

@@ -6,7 +6,6 @@
 import {
   inviteCodeSchema,
   inviteJoinSchema,
-  getFirstError,
   getFieldErrors,
 } from "@snapko/shared";
 
@@ -52,6 +51,7 @@ describe("Staff Invite Flow", () => {
         inviteCode: "ABC123",
         fullName: "Nguyen Van A",
         phoneNumber: "0901234567",
+        password: "secret123",
       };
 
       const result = inviteJoinSchema.safeParse(validData);
@@ -71,6 +71,7 @@ describe("Staff Invite Flow", () => {
           inviteCode: "ABC123",
           fullName: "Test User",
           phoneNumber: phone,
+          password: "secret123",
         });
         expect(result.success).toBe(false);
       });
@@ -89,6 +90,7 @@ describe("Staff Invite Flow", () => {
           inviteCode: "ABC123",
           fullName: "Test User",
           phoneNumber: phone,
+          password: "secret123",
         });
         expect(result.success).toBe(true);
       });
@@ -99,6 +101,7 @@ describe("Staff Invite Flow", () => {
         inviteCode: "A", // Too short
         fullName: "X", // Too short
         phoneNumber: "123", // Invalid
+        password: "123", // Too short
       };
 
       const errors = getFieldErrors(inviteJoinSchema, invalidData);
@@ -111,6 +114,7 @@ describe("Staff Invite Flow", () => {
         inviteCode: "ABC123",
         fullName: "Test User",
         phoneNumber: "090 123 4567",
+        password: "secret123",
       });
 
       expect(result.success).toBe(true);

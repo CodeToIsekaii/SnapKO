@@ -15,7 +15,7 @@ import RecipesPage from "./Recipes";
 import ReportsPage from "./ReportsPage";
 import SettingsPage from "./SettingsPage";
 import ProfileEditPage from "./ProfileEditPage";
-import { dashboardStyles, COLORS } from "../styles/theme";
+import { dashboardStyles } from "../styles/theme";
 import { User } from "../types";
 import {
   BarChart3,
@@ -47,20 +47,21 @@ export function Dashboard({ user }: DashboardProps) {
 
   // Subscription status (replaces old inline trial logic)
   const subscription = useSubscriptionStatus({
-    tier: profile?.tier,
+    subscriptionStatus: profile?.subscription_status,
+    daysRemaining: profile?.days_remaining,
     subscriptionExpiresAt: profile?.subscription_expires_at,
-    businessCreatedAt: profile?.business_created_at,
+    canUseDualWarehouse: profile?.entitlements?.canUseDualWarehouse,
   });
-  const effectiveTier = profile?.effective_tier ?? profile?.tier ?? "FREE";
   const entitlements = profile?.entitlements;
-  const canUseDualWarehouse =
-    entitlements?.canUseDualWarehouse ??
-    (effectiveTier === "PRO" || effectiveTier === "CHAIN");
+  const canUseDualWarehouse = entitlements?.canUseDualWarehouse ?? false;
   const canUseCustomStorageAreas =
-    entitlements?.canUseCustomStorageAreas ?? effectiveTier === "CHAIN";
-  const canInviteStaff = entitlements?.canInviteStaff ?? true;
+    entitlements?.canUseCustomStorageAreas ?? false;
+  const canInviteStaff = entitlements?.canInviteStaff ?? false;
   const canUseAdvancedReports =
-    entitlements?.canUseAdvancedReports ?? canUseDualWarehouse;
+    entitlements?.canUseAdvancedReports ?? false;
+  const isOwner = profile?.role === "OWNER";
+  const isManager = profile?.role === "BRANCH_MANAGER";
+  const readOnly = profile?.read_only === true;
 
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [editingProfile, setEditingProfile] = useState(false);
@@ -92,13 +93,13 @@ export function Dashboard({ user }: DashboardProps) {
   useEffect(() => {
     // 1. Load local data immediately (fast startup)
     inventory.loadData();
-    staff.loadStaff();
+    if (isOwner || isManager) staff.loadStaff();
 
     // 2. Background sync from server (if online)
     const autoSync = async () => {
       try {
         console.log("🔄 [Dashboard] Auto-syncing from server...");
-        await inventory.syncFromServer();
+        if (!readOnly) await inventory.syncFromServer();
         console.log("✅ [Dashboard] Auto-sync completed");
       } catch (err) {
         console.log("⚠️ [Dashboard] Auto-sync failed (offline?):", err);
@@ -109,7 +110,7 @@ export function Dashboard({ user }: DashboardProps) {
     const syncTimer = setTimeout(autoSync, 1000);
 
     return () => clearTimeout(syncTimer);
-  }, []);
+  }, [isManager, isOwner, readOnly]);
 
   // Refresh profile when user opens Settings tab (to get latest model from server)
   useEffect(() => {
@@ -145,8 +146,12 @@ export function Dashboard({ user }: DashboardProps) {
         </span>
       ),
     },
-    { id: "ingredients", label: "Nguyên liệu", icon: <Leaf size={16} /> },
-    { id: "recipes", label: "Công thức", icon: <ChefHat size={16} /> },
+    ...(isOwner
+      ? [
+          { id: "ingredients" as const, label: "Nguyên liệu", icon: <Leaf size={16} /> },
+          { id: "recipes" as const, label: "Công thức", icon: <ChefHat size={16} /> },
+        ]
+      : []),
     { id: "reports", label: "Báo cáo", icon: <TrendingUp size={16} />, locked: !canUseAdvancedReports },
     { id: "settings", label: "Cài đặt", icon: <Settings size={16} /> },
   ];
@@ -244,7 +249,13 @@ export function Dashboard({ user }: DashboardProps) {
       <Header
         user={user}
         syncStatus={inventory.syncStatus}
-        onSync={() => inventory.syncFromServer({ force: true })}
+        onSync={() =>
+          readOnly
+            ? Promise.resolve(
+                alert("Gói đã hết hạn hoặc đang chờ full-count Kho Tổng. Desktop hiện chỉ đọc."),
+              )
+            : inventory.syncFromServer({ force: true })
+        }
         onLogout={logout}
         businessId={profile?.business_id || undefined}
       />
@@ -278,6 +289,8 @@ export function Dashboard({ user }: DashboardProps) {
         {activeTab === "dashboard" && (
           <DashboardTab
             cogsReport={inventory.cogsReport}
+            canUseDualWarehouse={canUseDualWarehouse}
+            canUseAdvancedReports={canUseAdvancedReports}
             loading={inventory.loading}
             logs={inventory.logs} // Pass logs data
             onExport={inventory.exportCOGSReport}
@@ -300,19 +313,22 @@ export function Dashboard({ user }: DashboardProps) {
         {activeTab === "inventory" && (
           <InventoryTab
             ingredients={inventory.ingredients}
-            totalValue={inventory.totalValue}
-            lowStockCount={inventory.lowStockItems.length}
             loading={inventory.loading}
             onExport={inventory.exportToExcel}
             onRefresh={inventory.loadData}
           />
         )}
 
-        {activeTab === "ingredients" && <IngredientsPage />}
+        {activeTab === "ingredients" && isOwner && !readOnly && <IngredientsPage />}
 
-        {activeTab === "recipes" && <RecipesPage />}
+        {activeTab === "recipes" && isOwner && !readOnly && <RecipesPage />}
 
-        {activeTab === "reports" && canUseAdvancedReports && <ReportsPage />}
+        {activeTab === "reports" && canUseAdvancedReports && (
+          <ReportsPage
+            role={profile?.role}
+            branches={profile?.branches ?? []}
+          />
+        )}
 
         {activeTab === "settings" && (
           <SettingsPage

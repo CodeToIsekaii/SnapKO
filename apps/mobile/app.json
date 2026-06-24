@@ -71,7 +71,6 @@
         }
       ],
       "expo-secure-store",
-      "expo-router",
       "expo-web-browser"
     ],
     "extra": {

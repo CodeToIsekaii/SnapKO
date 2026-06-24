@@ -22,7 +22,7 @@ function loadEnv(filePath: string) {
         }
       });
     }
-  } catch (e) {}
+  } catch {}
 }
 
 loadEnv(path.resolve(process.cwd(), ".env"));
@@ -39,8 +39,7 @@ async function check() {
 
   const supabase = createClient(url, key);
 
-  const { data: user, error: userError } =
-    await supabase.auth.admin.listUsers();
+  const { data: user } = await supabase.auth.admin.listUsers();
   const adminUser = user?.users.find((u) => u.email === "admin@snapko.vn");
 
   if (!adminUser) {

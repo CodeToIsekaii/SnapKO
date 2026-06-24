@@ -13,10 +13,7 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
 import { Env } from "../env";
 import { useAuth } from "../contexts/AuthContext";

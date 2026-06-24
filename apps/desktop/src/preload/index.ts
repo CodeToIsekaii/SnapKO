@@ -104,7 +104,13 @@ export interface ElectronAPI {
   // Week 2: COGS Reports
   getCOGSReport: () => Promise<{
     summary: { totalValue: number; itemCount: number; lowStockCount: number };
-    monthly: Array<{ month: string; warehouse: number; bar: number }>;
+    monthly: Array<{
+      month: string;
+      date?: string;
+      fullDate?: string;
+      warehouse: number;
+      bar: number;
+    }>;
     losses: Array<{ name: string; value: number; color: string }>;
   }>;
 
@@ -316,7 +322,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on(channel, handler);
   },
 
-  off: (channel: string, callback: (data?: any) => void) => {
+  off: (channel: string, _callback: (data?: any) => void) => {
     ipcRenderer.removeAllListeners(channel);
   },
 

@@ -4,11 +4,13 @@
  */
 
 import {
+  buildSyncPushLog,
   buildSalesPendingFingerprint,
   findDuplicatePendingSalesLogs,
   PendingSyncLog,
   SyncStatus,
-} from "../sync/syncEngine";
+  toApiBoolean,
+} from "../sync/syncUtils";
 
 // Mock types for testing
 interface MockLog extends Omit<PendingSyncLog, "synced" | "sync_error"> {}
@@ -168,6 +170,51 @@ describe("Sync Engine E2E Tests", () => {
       // Second sync should be blocked
       const canStartNewSync = !isSyncing;
       expect(canStartNewSync).toBe(false);
+    });
+
+    it("should serialize SQLite boolean integers as API booleans", () => {
+      expect(toApiBoolean(1)).toBe(true);
+      expect(toApiBoolean(0)).toBe(false);
+      expect(toApiBoolean(true)).toBe(true);
+      expect(toApiBoolean(false)).toBe(false);
+    });
+
+    it("should preserve the selected storage area in API payloads", () => {
+      const payload = buildSyncPushLog(
+        {
+          id: "chain-import-1",
+          ingredient_id: "ingredient-1",
+          area_id: "5af438fa-7a36-4a87-8f17-f4af8c0cb2b7",
+          location: "WAREHOUSE",
+          type: "IMPORT",
+          ai_parsed_quantity: 10,
+          ai_confidence_score: 0.98,
+          final_confirmed_quantity: 10,
+          quantity_change_base: 10,
+          unit_cost_at_time: 50000,
+          source_photo_urls: [],
+          local_image_path: null,
+          ai_parsed_json: null,
+          staff_note: null,
+          is_verified: 1,
+          diff_percentage: 0,
+          created_at: "2026-06-14T08:00:00.000Z",
+          synced: 0,
+          sync_error: null,
+          is_new_ingredient: 0,
+          new_ingredient_name: null,
+          new_ingredient_unit: null,
+        },
+        ["https://cdn.example.com/import.jpg"],
+      );
+
+      expect(payload.area_id).toBe(
+        "5af438fa-7a36-4a87-8f17-f4af8c0cb2b7",
+      );
+      expect(payload.source_photos).toEqual([
+        "https://cdn.example.com/import.jpg",
+      ]);
+      expect(payload.is_verified).toBe(true);
     });
   });
 

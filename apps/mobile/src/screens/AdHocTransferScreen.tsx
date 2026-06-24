@@ -8,7 +8,6 @@ import {
   View,
   Text,
   StyleSheet,
-  Pressable,
   FlatList,
   TextInput,
   TouchableOpacity,
@@ -21,13 +20,8 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Crypto from "expo-crypto";
 import * as Haptics from "expo-haptics";
 import { getDB } from "../db";
-
-interface TransferItem {
-  id: string;
-  name: string;
-  unit: string;
-  qty: number;
-}
+import { BufferedTextInput } from "../components/BufferedTextInput";
+import { parseNumericField } from "./inventoryCaptureValidation";
 
 interface AdHocTransferScreenProps {
   onBack: () => void;
@@ -68,8 +62,8 @@ export default function AdHocTransferScreen({
   );
 
   const handleUpdateQty = (id: string, qtyStr: string) => {
-    const qty = parseFloat(qtyStr);
-    if (isNaN(qty) || qty <= 0) {
+    const qty = parseNumericField(qtyStr);
+    if (qty <= 0) {
       const newMap = new Map(selectedItems);
       newMap.delete(id);
       setSelectedItems(newMap);
@@ -145,13 +139,13 @@ export default function AdHocTransferScreen({
           <Text style={styles.itemName}>{item.name}</Text>
           <Text style={styles.itemUnit}>{item.base_unit}</Text>
         </View>
-        <TextInput
+        <BufferedTextInput
           style={styles.qtyInput}
           placeholder="0"
           placeholderTextColor="#64748B"
           keyboardType="decimal-pad"
           value={qty?.toString() || ""}
-          onChangeText={(val) => handleUpdateQty(item.id, val)}
+          onCommitText={(val) => handleUpdateQty(item.id, val)}
         />
       </View>
     );

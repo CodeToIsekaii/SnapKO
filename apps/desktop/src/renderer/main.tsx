@@ -17,7 +17,7 @@ import "./index.css";
  * Only handles: Check auth state → render LoginPage, ProfileSetup, ModelSelection, or Dashboard
  */
 function AppContent() {
-  const { user, profile, loading, updateProfile } = useAuth();
+  const { user, profile, loading, updateProfile, logout } = useAuth();
 
   // Loading state
   if (loading) {
@@ -49,6 +49,37 @@ function AppContent() {
         <div style={styles.loadingContent}>
           <span style={styles.logo}>SnapKO</span>
           <p style={styles.loadingText}>Đang tải hồ sơ...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (profile.role === "STAFF") {
+    return (
+      <div style={styles.loadingContainer}>
+        <div style={{ ...styles.loadingContent, maxWidth: 440 }}>
+          <span style={styles.logo}>SnapKO Desktop</span>
+          <h2 style={{ color: COLORS.textPrimary, marginTop: 24 }}>
+            Tài khoản Staff chỉ dùng Mobile
+          </h2>
+          <p style={styles.loadingText}>
+            Desktop dành cho Owner và Manager để quản trị, xem tồn kho và báo cáo.
+          </p>
+          <button
+            onClick={logout}
+            style={{
+              marginTop: 20,
+              border: 0,
+              borderRadius: 8,
+              padding: "10px 18px",
+              background: COLORS.primary,
+              color: "#fff",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            Đăng xuất
+          </button>
         </div>
       </div>
     );

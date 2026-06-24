@@ -20,8 +20,6 @@ import {
   ActivityIndicator,
   Image,
 } from "react-native";
-import { InventoryService } from "../features/inventory/services/inventory.service";
-
 // Type matching AiMappedItem from InventoryCaptureScreen
 export interface ConfirmItem {
   rawName: string;

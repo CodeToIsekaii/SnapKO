@@ -6,7 +6,7 @@
  * Auth: apiFetch handles backend tokens + 401 refresh automatically
  */
 
-import { getDatabase } from "./database";
+import { getDatabase, runDailySnapshot } from "./database";
 import { apiFetch } from "./apiClient";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -238,6 +238,7 @@ export async function pullStockLevels(): Promise<{ success: boolean; synced: num
     type SyncPullData = {
       storageAreas?: Array<{ id: string; businessId: string; name: string; type: string; isDefault: boolean; isActive: boolean }>;
       stockLevels?: Array<{ id: string; ingredientId: string; areaId?: string; storageAreaId?: string; quantity: number; lastCountedAt?: string; deletedAt?: string }>;
+      recentLogs?: any[];
     };
     const raw = await apiFetch<SyncPullData | { success?: boolean; data?: SyncPullData }>("/sync/pull");
     const data = "data" in (raw as any) && (raw as any).data
@@ -259,6 +260,34 @@ export async function pullStockLevels(): Promise<{ success: boolean; synced: num
       ON CONFLICT(ingredient_id, area_id) DO UPDATE SET
         quantity = excluded.quantity, last_counted_at = excluded.last_counted_at,
         deleted_at = excluded.deleted_at, synced = 1
+    `);
+
+    const upsertLog = db.prepare(`
+      INSERT INTO local_inventory_logs
+        (id, ingredient_id, location, type, ai_parsed_quantity,
+         ai_confidence_score, final_confirmed_quantity, quantity_change_base,
+         unit_cost_at_time, source_photo_urls, ai_parsed_json, staff_note,
+         is_verified, diff_percentage, created_at, created_by,
+         created_by_name, business_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        ingredient_id = excluded.ingredient_id,
+        location = excluded.location,
+        type = excluded.type,
+        ai_parsed_quantity = excluded.ai_parsed_quantity,
+        ai_confidence_score = excluded.ai_confidence_score,
+        final_confirmed_quantity = excluded.final_confirmed_quantity,
+        quantity_change_base = excluded.quantity_change_base,
+        unit_cost_at_time = excluded.unit_cost_at_time,
+        source_photo_urls = excluded.source_photo_urls,
+        ai_parsed_json = excluded.ai_parsed_json,
+        staff_note = excluded.staff_note,
+        is_verified = excluded.is_verified,
+        diff_percentage = excluded.diff_percentage,
+        created_at = excluded.created_at,
+        created_by = excluded.created_by,
+        created_by_name = excluded.created_by_name,
+        business_id = excluded.business_id
     `);
 
     const syncCache = db.prepare(`
@@ -285,13 +314,39 @@ export async function pullStockLevels(): Promise<{ success: boolean; synced: num
         if (!areaId) continue;
         upsertLevel.run(sl.id, sl.ingredientId, areaId, sl.quantity ?? 0, sl.lastCountedAt ?? null, sl.deletedAt ?? null);
       }
+      for (const log of data.recentLogs ?? []) {
+        upsertLog.run(
+          log.id,
+          log.ingredientId ?? log.ingredient_id ?? null,
+          log.location ?? null,
+          log.type ?? null,
+          log.aiParsedQuantity ?? log.ai_parsed_quantity ?? null,
+          log.aiConfidenceScore ?? log.ai_confidence_score ?? null,
+          log.finalConfirmedQuantity ?? log.final_confirmed_quantity ?? null,
+          log.quantityChangeBase ?? log.quantity_change_base ?? null,
+          log.unitCostAtTime ?? log.unit_cost_at_time ?? null,
+          JSON.stringify(log.sourcePhotos ?? log.source_photo_urls ?? []),
+          typeof (log.aiParsedJson ?? log.ai_parsed_json) === "string"
+            ? (log.aiParsedJson ?? log.ai_parsed_json)
+            : JSON.stringify(log.aiParsedJson ?? log.ai_parsed_json ?? null),
+          log.staffNote ?? log.staff_note ?? null,
+          (log.isVerified ?? log.is_verified) ? 1 : 0,
+          log.diffPercentage ?? log.diff_percentage ?? null,
+          log.createdAt ?? log.created_at,
+          log.createdById ?? log.created_by ?? null,
+          log.createdBy?.fullName ?? log.created_by_name ?? null,
+          log.businessId ?? log.business_id ?? null,
+        );
+      }
       syncCache.run();
     });
 
     tx();
     const synced = (data.stockLevels?.length ?? 0);
-    console.log(`[Sync] Pulled ${data.storageAreas?.length ?? 0} areas, ${synced} stock levels`);
-    return { success: true, synced };
+    const syncedLogs = data.recentLogs?.length ?? 0;
+    runDailySnapshot(db);
+    console.log(`[Sync] Pulled ${data.storageAreas?.length ?? 0} areas, ${synced} stock levels, ${syncedLogs} logs`);
+    return { success: true, synced: synced + syncedLogs };
   } catch (err: any) {
     console.error('[Sync] pullStockLevels error:', err);
     return { success: false, synced: 0 };

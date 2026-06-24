@@ -151,19 +151,12 @@ import {
   Eye,
   EyeOff,
   Recycle,
-  FlaskConical,
-  ScrollText,
-  Wrench,
   CircleDollarSign,
   Settings,
   Plus,
   HelpCircle,
-  Pencil,
-  Trash2,
   CheckCircle,
   AlertCircle,
-  RefreshCcw,
-  Info,
   Search,
   X,
 } from "lucide-react";
@@ -258,9 +251,6 @@ export default function IngredientsPage() {
 
   // Batch recipe inputs (for PHANTOM items)
   const [batchInputs, setBatchInputs] = useState<BatchRecipeInput[]>([]);
-
-  // Search filter for ingredient dropdown
-  const [ingredientSearch, setIngredientSearch] = useState<string>("");
 
   // Restore feature state
   const [showHidden, setShowHidden] = useState(false);
@@ -580,7 +570,7 @@ export default function IngredientsPage() {
 
     // 🔔 REALTIME LISTENERS
     // Listen for Signal (Stock & Master Data updates from Sync Signals)
-    const removeSignalListener = (window as any).electronAPI?.on?.(
+    (window as any).electronAPI?.on?.(
       "ingredients-updated",
       () => {
         console.log("🔔 [UI] Received ingredients-updated signal");
@@ -602,7 +592,7 @@ export default function IngredientsPage() {
     });
 
     // Listen for stock updates specifically
-    const removeStockListener = (window as any).electronAPI?.on?.(
+    (window as any).electronAPI?.on?.(
       "stock-updated",
       () => {
         console.log("🔔 [UI] Received stock-updated signal");

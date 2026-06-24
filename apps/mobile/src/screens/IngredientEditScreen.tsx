@@ -9,7 +9,6 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
-  Switch,
   TouchableOpacity,
 } from "react-native";
 import { getDB } from "../db";

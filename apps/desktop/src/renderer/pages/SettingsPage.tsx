@@ -13,7 +13,6 @@ import {
   Factory,
   Check,
   Timer,
-  LogOut,
   Trash2,
   Pencil,
   AlertTriangle,
@@ -42,6 +41,8 @@ interface SettingsPageProps {
     canUseDualWarehouse: boolean;
     canUseCustomStorageAreas: boolean;
     canInviteStaff: boolean;
+    canUseCloudSync: boolean;
+    canUseFraudProtection: boolean;
     canUseAdvancedReports: boolean;
   } | null;
   onEditProfile?: () => void;
@@ -64,12 +65,6 @@ export default function SettingsPage({
   onChangeModel,
   subscription,
 }: SettingsPageProps) {
-  const [showInviteModal, setShowInviteModal] = useState(false);
-  const [inviteCode, setInviteCode] = useState<string | null>(null);
-  const [generatingCode, setGeneratingCode] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<
-    "idle" | "syncing" | "success" | "error"
-  >("idle");
   const [changingModel, setChangingModel] = useState(false);
   const [retentionDays, setRetentionDays] = useState(30);
   const [exportingHistory, setExportingHistory] = useState(false);
@@ -92,7 +87,7 @@ export default function SettingsPage({
     entitlements?.canUseDualWarehouse ??
     (subscription?.canUseDualWarehouse ?? false);
   const canUseCustomStorageAreas =
-    entitlements?.canUseCustomStorageAreas ?? planTier === "CHAIN";
+    entitlements?.canUseCustomStorageAreas ?? false;
   const storedModelLocked =
     storedModel !== displayedModel &&
     (storedModel === "STANDARD" || storedModel === "CHAIN");
@@ -213,50 +208,6 @@ export default function SettingsPage({
       console.error("Failed to update shareRecipesWithStaff", e);
     } finally {
       setSavingShareRecipes(false);
-    }
-  };
-
-  // Generate invite code for staff
-  const handleGenerateInviteCode = async () => {
-    setGeneratingCode(true);
-    try {
-      const result = await (window as any).electronAPI?.generateInviteCode?.();
-      if (result?.code) {
-        setInviteCode(result.code);
-      } else {
-        alert(
-          "Không thể tạo mã mời: " + (result?.error || "Lỗi không xác định")
-        );
-      }
-    } catch (err) {
-      console.error("Generate invite failed:", err);
-      alert("Lỗi khi tạo mã mời");
-    } finally {
-      setGeneratingCode(false);
-    }
-  };
-
-  // Copy invite code to clipboard
-  const copyToClipboard = () => {
-    if (inviteCode) {
-      navigator.clipboard.writeText(inviteCode);
-      alert("Đã copy mã mời!");
-    }
-  };
-
-  // Manual sync
-  const handleSync = async () => {
-    setSyncStatus("syncing");
-    try {
-      const result = await (window as any).electronAPI?.syncFromServer?.({ force: true });
-      if (result?.success) {
-        setSyncStatus("success");
-        setTimeout(() => setSyncStatus("idle"), 3000);
-      } else {
-        setSyncStatus("error");
-      }
-    } catch {
-      setSyncStatus("error");
     }
   };
 
@@ -1021,33 +972,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 500,
     cursor: "pointer",
     width: "100%",
-  },
-  inviteCodeBox: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: COLORS.surfaceHover,
-    padding: 16,
-    borderRadius: 8,
-    border: `2px dashed ${COLORS.positive}`,
-  },
-  inviteCode: {
-    flex: 1,
-    fontSize: 24,
-    fontWeight: 700,
-    letterSpacing: 4,
-    color: COLORS.positive,
-    fontFamily: "monospace",
-  },
-  copyButton: {
-    backgroundColor: COLORS.positive,
-    color: "white",
-    border: "none",
-    padding: "8px 16px",
-    borderRadius: 6,
-    fontSize: 13,
-    cursor: "pointer",
-    fontWeight: 500,
   },
   dangerRow: {
     display: "flex",

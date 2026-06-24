@@ -1,164 +1,99 @@
-/**
- * Subscription Check Hook
- * Logic chặn tính năng nếu hết hạn gói
- *
- * States:
- * - TRIAL: Free trial period (14 days from account creation)
- * - PRO_ACTIVE: Paid PRO subscription, plenty of time left
- * - PRO_WARNING: Paid PRO subscription expiring in ≤5 days
- * - EXPIRED: Trial or subscription has ended
- */
-
 import { useMemo } from "react";
 
-export type Tier = "FREE" | "PRO" | "PERSONAL" | "CHAIN";
+export type Tier = "FREE" | "PRO" | "CHAIN";
 export type SubscriptionState =
   | "TRIAL"
   | "PRO_ACTIVE"
   | "PRO_WARNING"
   | "EXPIRED";
 
-export interface SubscriptionStatus {
+export interface CanonicalEntitlements {
+  canUseDualWarehouse: boolean;
+  canUseCustomStorageAreas: boolean;
+  canInviteStaff: boolean;
+  canUseCloudSync: boolean;
+  canUseFraudProtection: boolean;
+  canUseAdvancedReports: boolean;
+}
+
+export interface CanonicalSubscriptionInput {
+  effectiveTier?: string | null;
+  subscriptionStatus?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED" | null;
+  daysRemaining?: number | null;
+  expiresAt?: string | null;
+  entitlements?: CanonicalEntitlements | null;
+}
+
+export interface SubscriptionStatus extends CanonicalEntitlements {
   tier: Tier;
   state: SubscriptionState;
   isExpired: boolean;
   expiresAt: Date | null;
   daysRemaining: number;
-  // Feature flags
-  canUseDualWarehouse: boolean;
-  canUseCloudSync: boolean;
-  canUseAdvancedReports: boolean;
-  canInviteStaff: boolean;
-  // UI flags
   showTrialBanner: boolean;
   showExpiryWarning: boolean;
   showExpiredBanner: boolean;
 }
 
-const TRIAL_DAYS = 14;
-const WARNING_THRESHOLD_DAYS = 5;
-
-const FREE_FEATURES = {
+const SAFE_ENTITLEMENTS: CanonicalEntitlements = {
   canUseDualWarehouse: false,
+  canUseCustomStorageAreas: false,
+  canInviteStaff: false,
   canUseCloudSync: false,
+  canUseFraudProtection: false,
   canUseAdvancedReports: false,
-  canInviteStaff: true,
 };
 
-const PRO_FEATURES = {
-  canUseDualWarehouse: true,
-  canUseCloudSync: true,
-  canUseAdvancedReports: true,
-  canInviteStaff: true,
-};
-
-/**
- * Calculate days between two dates
- */
-function daysBetween(date1: Date, date2: Date): number {
-  const diffMs = date2.getTime() - date1.getTime();
-  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+function normalizeTier(value: string | null | undefined): Tier {
+  const tier = String(value ?? "FREE").toUpperCase();
+  if (tier === "CHAIN") return "CHAIN";
+  if (tier === "PRO") return "PRO";
+  return "FREE";
 }
 
-/**
- * Check subscription status with trial support
- */
 export function checkSubscription(
-  tier: Tier | string | null | undefined,
-  expiresAt: string | null | undefined,
-  businessCreatedAt: string | null | undefined
+  input: CanonicalSubscriptionInput,
 ): SubscriptionStatus {
-  const now = new Date();
-  const normalizedTier = (tier?.toUpperCase() as Tier) || "FREE";
+  const status = input.subscriptionStatus ?? "EXPIRED";
+  const state: SubscriptionState =
+    status === "TRIAL"
+      ? "TRIAL"
+      : status === "ACTIVE"
+        ? "PRO_ACTIVE"
+        : status === "WARNING"
+          ? "PRO_WARNING"
+          : "EXPIRED";
+  const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
 
-  // Default expired state
-  const defaultExpired: SubscriptionStatus = {
-    tier: "FREE",
-    state: "EXPIRED",
-    isExpired: true,
-    expiresAt: null,
-    daysRemaining: 0,
-    ...FREE_FEATURES,
-    showTrialBanner: false,
-    showExpiryWarning: false,
-    showExpiredBanner: true,
+  return {
+    tier: normalizeTier(input.effectiveTier),
+    state,
+    isExpired: status === "EXPIRED",
+    expiresAt:
+      expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null,
+    daysRemaining: Math.max(0, input.daysRemaining ?? 0),
+    ...(input.entitlements ?? SAFE_ENTITLEMENTS),
+    showTrialBanner: status === "TRIAL",
+    showExpiryWarning: status === "WARNING",
+    showExpiredBanner: status === "EXPIRED",
   };
-
-  // 1. Check if user has active paid subscription
-  if (expiresAt) {
-    const expiration = new Date(expiresAt);
-    const daysRemaining = daysBetween(now, expiration);
-
-    if (daysRemaining >= 0) {
-      // Subscription is still valid
-      const isWarning = daysRemaining <= WARNING_THRESHOLD_DAYS;
-
-      return {
-        tier: normalizedTier,
-        state: isWarning ? "PRO_WARNING" : "PRO_ACTIVE",
-        isExpired: false,
-        expiresAt: expiration,
-        daysRemaining,
-        ...PRO_FEATURES,
-        showTrialBanner: false,
-        showExpiryWarning: isWarning,
-        showExpiredBanner: false,
-      };
-    }
-
-    // Subscription has expired
-    return defaultExpired;
-  }
-
-  // 2. No subscription - check trial period (14 days from business creation)
-  if (businessCreatedAt) {
-    const createdDate = new Date(businessCreatedAt);
-    const daysSinceCreation = daysBetween(createdDate, now);
-    const trialDaysLeft = Math.max(0, TRIAL_DAYS - daysSinceCreation);
-
-    if (trialDaysLeft > 0) {
-      // Still in trial period - allow all features
-      const trialExpiry = new Date(
-        createdDate.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000
-      );
-
-      return {
-        tier: "FREE",
-        state: "TRIAL",
-        isExpired: false,
-        expiresAt: trialExpiry,
-        daysRemaining: trialDaysLeft,
-        ...PRO_FEATURES, // Trial users get PRO features
-        showTrialBanner: true,
-        showExpiryWarning: false,
-        showExpiredBanner: false,
-      };
-    }
-  }
-
-  // 3. No subscription and trial expired (or no creation date)
-  return defaultExpired;
 }
 
-/**
- * Hook to use subscription status
- */
 export function useSubscription(
-  tier: Tier | string | null | undefined,
-  expiresAt: string | null | undefined,
-  businessCreatedAt?: string | null | undefined
+  input: CanonicalSubscriptionInput,
 ): SubscriptionStatus {
-  const status = useMemo(
-    () => checkSubscription(tier, expiresAt, businessCreatedAt),
-    [tier, expiresAt, businessCreatedAt]
+  return useMemo(
+    () => checkSubscription(input),
+    [
+      input.effectiveTier,
+      input.subscriptionStatus,
+      input.daysRemaining,
+      input.expiresAt,
+      input.entitlements,
+    ],
   );
-
-  return status;
 }
 
-/**
- * Get expiration warning message (for push notifications)
- */
 export function getExpirationWarning(daysRemaining: number): string | null {
   if (daysRemaining <= 0)
     return "⚠️ Gói của bạn đã hết hạn. Nâng cấp để tiếp tục sử dụng tính năng nâng cao.";
@@ -167,30 +102,29 @@ export function getExpirationWarning(daysRemaining: number): string | null {
   return null;
 }
 
-/**
- * Feature gate for React Native components
- */
 export function canUseFeature(
   status: SubscriptionStatus,
-  feature: "dualWarehouse" | "cloudSync" | "advancedReports" | "inviteStaff"
+  feature:
+    | "dualWarehouse"
+    | "cloudSync"
+    | "fraudProtection"
+    | "advancedReports"
+    | "inviteStaff",
 ): boolean {
   switch (feature) {
     case "dualWarehouse":
       return status.canUseDualWarehouse;
     case "cloudSync":
       return status.canUseCloudSync;
+    case "fraudProtection":
+      return status.canUseFraudProtection;
     case "advancedReports":
       return status.canUseAdvancedReports;
     case "inviteStaff":
       return status.canInviteStaff;
-    default:
-      return false;
   }
 }
 
-/**
- * Get upgrade prompt for blocked feature
- */
 export function getUpgradePrompt(feature: string): {
   title: string;
   message: string;

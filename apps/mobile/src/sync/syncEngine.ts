@@ -18,6 +18,26 @@ import { supabase } from "../lib/supabase";
 import { api } from "../services/api";
 import { fetchSyncPull, invalidatePullCache } from "./pullSync";
 import { syncLegacyQtyLocal } from "../db/stockLevelHelper";
+import {
+  createSingleFlight,
+  normalizeMasterDataPayload,
+  type MasterDataTable,
+} from "./masterDataQueue";
+import {
+  buildSyncPushLog,
+  findDuplicatePendingSalesLogs,
+  type PendingSyncLog,
+  type PendingSyncLogRow,
+  type SyncStatus,
+} from "./syncUtils";
+
+export {
+  buildSyncPushLog,
+  buildSalesPendingFingerprint,
+  findDuplicatePendingSalesLogs,
+  toApiBoolean,
+} from "./syncUtils";
+export type { PendingSyncLog, SyncStatus } from "./syncUtils";
 
 const SYNC_TASK_NAME = "SNAPKO_BACKGROUND_SYNC";
 
@@ -53,7 +73,7 @@ export const addToSyncQueue = async (
   }
 };
 
-export const processSyncQueue = async () => {
+const processSyncQueueImpl = async () => {
   try {
     const { getDB } = await import("../db");
     const db = await getDB();
@@ -73,48 +93,14 @@ export const processSyncQueue = async () => {
 
     for (const item of pendingItems) {
       try {
-        const payload = JSON.parse(item.payload);
+        const rawPayload = JSON.parse(item.payload) as Record<string, unknown>;
+        const payload = normalizeMasterDataPayload(
+          item.table_name as MasterDataTable,
+          rawPayload,
+        );
         let error = null;
 
         if (item.action === "UPSERT") {
-          // SELF-HEAL: Fix malformed aliases (Legacy bug: stored as JSON string but Supabase expects Array)
-          if (payload.aliases && typeof payload.aliases === "string") {
-            try {
-              const parsedAliases = JSON.parse(payload.aliases);
-              if (Array.isArray(parsedAliases)) {
-                payload.aliases = parsedAliases;
-                console.log(
-                  `[SyncEngine] 🩹 Self-healed aliases for item ${item.id}`,
-                );
-              }
-            } catch (e) {
-              console.warn(
-                `[SyncEngine] Failed to heal aliases for item ${item.id}`,
-                e,
-              );
-            }
-          }
-
-          // Ingredients API expects camelCase while local queue may store snake_case.
-          if (
-            item.table_name === "ingredients" &&
-            payload &&
-            typeof payload === "object"
-          ) {
-            if (
-              Object.prototype.hasOwnProperty.call(payload, "shelf_life_days") &&
-              !Object.prototype.hasOwnProperty.call(payload, "shelfLifeDays")
-            ) {
-              payload.shelfLifeDays = payload.shelf_life_days;
-            }
-            if (
-              Object.prototype.hasOwnProperty.call(payload, "stock_check_unit") &&
-              !Object.prototype.hasOwnProperty.call(payload, "stockCheckUnit")
-            ) {
-              payload.stockCheckUnit = payload.stock_check_unit;
-            }
-          }
-
           const basePath =
             item.table_name === "recipes" ? "/recipes" : "/ingredients";
           try {
@@ -170,6 +156,8 @@ export const processSyncQueue = async () => {
   }
 };
 
+export const processSyncQueue = createSingleFlight(processSyncQueueImpl);
+
 // --- DOWNSTREAM SYNC (Cloud -> Mobile) ---
 export const fetchMasterDataUpdates = async () => {
   try {
@@ -221,8 +209,9 @@ export const fetchMasterDataUpdates = async () => {
           `INSERT INTO local_ingredients
             (id, business_id, name, base_unit, stock_check_unit, min_threshold, average_unit_cost,
              unit_cost, density, tare_weight, archived, shelf_life_days, warehouse_qty, bar_qty,
-             unit_weight, unit_weight_unit, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             unit_weight, unit_weight_unit, last_purchase_price, last_purchase_qty, last_purchase_unit,
+             created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              business_id = excluded.business_id,
              name = excluded.name,
@@ -239,6 +228,9 @@ export const fetchMasterDataUpdates = async () => {
              bar_qty = excluded.bar_qty,
              unit_weight = COALESCE(excluded.unit_weight, unit_weight),
              unit_weight_unit = COALESCE(excluded.unit_weight_unit, unit_weight_unit),
+             last_purchase_price = excluded.last_purchase_price,
+             last_purchase_qty = excluded.last_purchase_qty,
+             last_purchase_unit = excluded.last_purchase_unit,
              created_at = excluded.created_at`,
           [
             i.id,
@@ -257,6 +249,9 @@ export const fetchMasterDataUpdates = async () => {
             i.barQty ?? i.bar_qty ?? 0,
             i.unitWeight ?? i.unit_weight ?? null,
             i.unitWeightUnit ?? i.unit_weight_unit ?? null,
+            i.lastPurchasePrice ?? i.last_purchase_price ?? null,
+            i.lastPurchaseQty ?? i.last_purchase_qty ?? null,
+            i.lastPurchaseUnit ?? i.last_purchase_unit ?? null,
             i.createdAt ?? i.created_at,
           ],
         );
@@ -329,47 +324,6 @@ export const fetchMasterDataUpdates = async () => {
   }
 };
 
-// Types
-export interface PendingSyncLog {
-  id: string;
-  ingredient_id: string | null;
-  location: "WAREHOUSE" | "BAR";
-  type:
-    | "IMPORT"
-    | "TRANSFER"
-    | "AUDIT"
-    | "WASTE"
-    | "LENT"
-    | "SALES"
-    | "STOCK"
-    | "STOCK_CHECK";
-  ai_parsed_quantity: number | null;
-  ai_confidence_score: number | null;
-  final_confirmed_quantity: number | null;
-  quantity_change_base: number | null;
-  unit_cost_at_time: number | null;
-  source_photo_urls: string[];
-  local_image_path: string | null; // Local image path (before upload)
-  ai_parsed_json: string | null;
-  staff_note: string | null;
-  is_verified: boolean;
-  diff_percentage: number | null;
-  created_at: string;
-  synced: boolean;
-  sync_error: string | null;
-  // New ingredient support
-  is_new_ingredient: boolean;
-  new_ingredient_name: string | null;
-  new_ingredient_unit: string | null;
-}
-
-export interface SyncStatus {
-  isOnline: boolean;
-  pendingCount: number;
-  lastSyncAt: string | null;
-  isSyncing: boolean;
-}
-
 // Global state
 let syncStatus: SyncStatus = {
   isOnline: true,
@@ -407,6 +361,7 @@ export async function initSyncSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     CREATE TABLE IF NOT EXISTS pending_sync_logs (
       id TEXT PRIMARY KEY NOT NULL,
       ingredient_id TEXT,
+      area_id TEXT,
       location TEXT NOT NULL,
       type TEXT NOT NULL,
       ai_parsed_quantity REAL,
@@ -449,6 +404,11 @@ export async function initSyncSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   } catch {
     // Column already exists.
   }
+  try {
+    await db.runAsync("ALTER TABLE pending_sync_logs ADD COLUMN area_id TEXT");
+  } catch {
+    // Column already exists.
+  }
 }
 
 // Add a log to the pending queue
@@ -458,14 +418,15 @@ export async function addPendingLog(
 ): Promise<void> {
   await db.runAsync(
     `INSERT OR REPLACE INTO pending_sync_logs 
-     (id, ingredient_id, location, type, ai_parsed_quantity, ai_confidence_score,
+     (id, ingredient_id, area_id, location, type, ai_parsed_quantity, ai_confidence_score,
       final_confirmed_quantity, quantity_change_base, unit_cost_at_time,
       source_photo_urls, ai_parsed_json, staff_note, is_verified, diff_percentage,
       created_at, synced, sync_error, is_new_ingredient, new_ingredient_name, new_ingredient_unit)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)`,
     [
       log.id,
       log.ingredient_id,
+      log.area_id ?? null,
       log.location,
       log.type,
       log.ai_parsed_quantity,
@@ -564,11 +525,6 @@ export async function uploadImageToStorage(
 
 // Track local images pending cleanup (only after full sync success)
 const pendingCleanupPaths: Map<string, string> = new Map(); // logId -> localPath
-const SALES_DUPLICATE_WINDOW_MS = 15000;
-
-interface PendingSyncLogRow extends PendingSyncLog {
-  local_image_path: string | null;
-}
 
 interface SyncPushResultItem {
   id: string;
@@ -580,108 +536,6 @@ interface SyncPushResult {
   synced: number;
   total: number;
   results: SyncPushResultItem[];
-}
-
-function normalizeSalesFingerprintValue(value: unknown): string {
-  if (typeof value !== "string") return "";
-  return value.trim().toLowerCase();
-}
-
-function normalizeSalesFingerprintNumber(value: unknown): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return 0;
-  return Math.round(num * 1000) / 1000;
-}
-
-function getSalesFingerprintItems(aiParsedJson: string | null): Array<{
-  key: string;
-  quantity: number;
-  unit: string;
-  unitCost: number;
-}> | null {
-  if (!aiParsedJson) return null;
-
-  try {
-    const parsed = JSON.parse(aiParsedJson);
-    const items = Array.isArray(parsed?.items) ? parsed.items : [];
-    return items.map((item: any) => ({
-      key: normalizeSalesFingerprintValue(
-        item?.recipe_id ?? item?.ingredient_id ?? item?.ingredient_name,
-      ),
-      quantity: normalizeSalesFingerprintNumber(item?.quantity),
-      unit: normalizeSalesFingerprintValue(item?.unit),
-      unitCost: normalizeSalesFingerprintNumber(item?.unit_cost),
-    }));
-  } catch {
-    return null;
-  }
-}
-
-export function buildSalesPendingFingerprint(log: {
-  type: string;
-  location: string;
-  ai_parsed_json: string | null;
-}): string | null {
-  if (log.type !== "SALES") return null;
-
-  const items = getSalesFingerprintItems(log.ai_parsed_json);
-  if (!items?.length) return null;
-
-  try {
-    const parsed = log.ai_parsed_json ? JSON.parse(log.ai_parsed_json) : null;
-    return JSON.stringify({
-      type: log.type,
-      location: log.location,
-      totalRevenue: normalizeSalesFingerprintNumber(parsed?.total_revenue),
-      totalItems: normalizeSalesFingerprintNumber(parsed?.total_items),
-      items: items.sort((a, b) => {
-        const byKey = a.key.localeCompare(b.key);
-        if (byKey !== 0) return byKey;
-        if (a.quantity !== b.quantity) return a.quantity - b.quantity;
-        if (a.unit !== b.unit) return a.unit.localeCompare(b.unit);
-        return a.unitCost - b.unitCost;
-      }),
-    });
-  } catch {
-    return null;
-  }
-}
-
-export function findDuplicatePendingSalesLogs(
-  rows: PendingSyncLogRow[],
-): Array<{ duplicateId: string; canonicalId: string }> {
-  const sortedRows = [...rows].sort((a, b) =>
-    a.created_at.localeCompare(b.created_at),
-  );
-  const canonicalByFingerprint = new Map<
-    string,
-    { id: string; createdAtMs: number }
-  >();
-  const duplicates: Array<{ duplicateId: string; canonicalId: string }> = [];
-
-  for (const row of sortedRows) {
-    const fingerprint = buildSalesPendingFingerprint(row);
-    if (!fingerprint) continue;
-
-    const createdAtMs = Date.parse(row.created_at);
-    if (!Number.isFinite(createdAtMs)) continue;
-
-    const canonical = canonicalByFingerprint.get(fingerprint);
-    if (
-      canonical &&
-      createdAtMs - canonical.createdAtMs <= SALES_DUPLICATE_WINDOW_MS
-    ) {
-      duplicates.push({ duplicateId: row.id, canonicalId: canonical.id });
-      continue;
-    }
-
-    canonicalByFingerprint.set(fingerprint, {
-      id: row.id,
-      createdAtMs,
-    });
-  }
-
-  return duplicates;
 }
 
 // Mark image for cleanup (call before sync)
@@ -729,6 +583,14 @@ export async function syncPendingLogs(
     );
     await db.runAsync(
       `UPDATE pending_sync_logs SET type = 'WASTE' WHERE type = 'MARKETING' AND synced = 0`,
+    );
+    // Retry logs that old builds incorrectly marked as permanent failures
+    // because SQLite returned boolean columns as 0/1 numbers.
+    await db.runAsync(
+      `UPDATE pending_sync_logs
+       SET synced = 0, sync_error = NULL
+       WHERE synced = 1
+         AND sync_error LIKE 'PERMANENT_FAILURE: Invalid log payload: Invalid input: expected boolean%'`,
     );
 
     // Get unsynced logs
@@ -795,25 +657,7 @@ export async function syncPendingLogs(
         ? [...existingPhotos, imageUrl]
         : existingPhotos;
 
-      logsForSync.push({
-        id: row.id,
-        ingredient_id: row.ingredient_id,
-        location: row.location,
-        type: row.type,
-        ai_parsed_quantity: row.ai_parsed_quantity,
-        ai_confidence_score: row.ai_confidence_score,
-        final_confirmed_quantity: row.final_confirmed_quantity,
-        quantity_change_base: row.quantity_change_base,
-        unit_cost_at_time: row.unit_cost_at_time,
-        source_photos: sourcePhotos,
-        ai_parsed_json: row.ai_parsed_json
-          ? JSON.parse(row.ai_parsed_json)
-          : null,
-        staff_note: row.staff_note,
-        is_verified: row.is_verified,
-        diff_percentage: row.diff_percentage,
-        created_at: row.created_at,
-      });
+      logsForSync.push(buildSyncPushLog(row, sourcePhotos));
     }
 
     if (logsForSync.length === 0) {

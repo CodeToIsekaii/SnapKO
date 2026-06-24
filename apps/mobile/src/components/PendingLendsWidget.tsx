@@ -6,11 +6,9 @@ import {
   TouchableOpacity,
   Alert,
   Modal,
-  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { getPendingLends, markLendReturned, PendingLend } from "../db";
-import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase"; // For realtime
 import { getDB } from "../db";
 import { incrementStockLevel, resolveLocalAreaByLocation } from "../db/stockLevelHelper";

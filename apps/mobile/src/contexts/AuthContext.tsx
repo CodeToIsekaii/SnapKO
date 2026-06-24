@@ -44,12 +44,30 @@ export interface UserProfile {
   inventoryModel?: string | null;
   effectiveInventoryModel?: "SIMPLE" | "STANDARD" | "CHAIN" | null;
   subscriptionStatus?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED" | null;
+  daysRemaining?: number | null;
+  chainState?:
+    | "ACTIVE"
+    | "READ_ONLY_EXPIRED"
+    | "BRANCH_SELECTION_REQUIRED"
+    | "HUB_REBASELINE_REQUIRED"
+    | "MIGRATION_REQUIRED"
+    | null;
+  chainOutletLimit?: number | null;
+  operationalState?:
+    | "ACTIVE"
+    | "READ_ONLY_EXPIRED"
+    | "WAREHOUSE_REBASELINE_REQUIRED"
+    | null;
+  readOnly?: boolean;
+  branches?: Array<{ branchId: string; role: string }>;
   subscriptionExpiresAt?: string | null;
   businessCreatedAt?: string | null;
   entitlements?: {
     canUseDualWarehouse: boolean;
     canUseCustomStorageAreas: boolean;
     canInviteStaff: boolean;
+    canUseCloudSync: boolean;
+    canUseFraudProtection: boolean;
     canUseAdvancedReports: boolean;
   } | null;
 }
@@ -99,10 +117,16 @@ interface BackendProfileResponse {
     tier?: string | null;
     effectiveTier?: string | null;
     subscriptionStatus?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED" | null;
+    daysRemaining?: number | null;
+    chainState?: UserProfile["chainState"];
+    chainOutletLimit?: number | null;
+    operationalState?: UserProfile["operationalState"];
+    readOnly?: boolean;
     subscriptionExpiresAt?: string | null;
     createdAt?: string | null;
     entitlements?: UserProfile["entitlements"];
   } | null;
+  branches?: UserProfile["branches"];
 }
 
 function mapProfile(raw: BackendProfileResponse): UserProfile {
@@ -119,6 +143,12 @@ function mapProfile(raw: BackendProfileResponse): UserProfile {
     effectiveInventoryModel:
       raw.business?.effectiveInventoryModel ?? "SIMPLE",
     subscriptionStatus: raw.business?.subscriptionStatus ?? null,
+    daysRemaining: raw.business?.daysRemaining ?? 0,
+    chainState: raw.business?.chainState ?? null,
+    chainOutletLimit: raw.business?.chainOutletLimit ?? 0,
+    operationalState: raw.business?.operationalState ?? "ACTIVE",
+    readOnly: raw.business?.readOnly === true,
+    branches: raw.branches ?? [],
     subscriptionExpiresAt: raw.business?.subscriptionExpiresAt ?? null,
     businessCreatedAt: raw.business?.createdAt ?? null,
     entitlements: raw.business?.entitlements ?? null,

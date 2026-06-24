@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabaseClient";
 import { loginMobile } from "@/lib/backendClient";
 import { FaGoogle } from "react-icons/fa";
@@ -14,7 +13,6 @@ import { FaGoogle } from "react-icons/fa";
  */
 
 export default function RegisterPage() {
-  const router = useRouter();
   const supabase = getSupabaseBrowserClient();
 
   const [businessName, setBusinessName] = useState("");

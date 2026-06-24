@@ -32,11 +32,13 @@ interface StorageArea {
 
 export default function StorageAreasScreen() {
   const { authState } = useAuth();
-  const tier =
+  const profile =
     authState.status === "authenticated" || authState.status === "needs_setup"
-      ? authState.profile.tier ?? "FREE"
-      : "FREE";
+      ? authState.profile
+      : null;
+  const tier = profile?.effectiveTier ?? "FREE";
   const isChain = tier === "CHAIN";
+  const isOwner = profile?.role === "OWNER";
 
   const [areas, setAreas] = useState<StorageArea[]>([]);
   const [loading, setLoading] = useState(true);
@@ -141,12 +143,12 @@ export default function StorageAreasScreen() {
       </View>
 
       <View style={styles.rowActions}>
-        {(isChain || tier === "PRO") && (
+        {isOwner && (isChain || tier === "PRO") && (
           <TouchableOpacity onPress={() => openEdit(item)} style={styles.actionBtn}>
             <Ionicons name="pencil-outline" size={18} color="#6B7280" />
           </TouchableOpacity>
         )}
-        {isChain && !item.isDefault && (
+        {isOwner && isChain && !item.isDefault && (
           <>
             <TouchableOpacity onPress={() => handleToggleActive(item)} style={styles.actionBtn}>
               <Ionicons
@@ -168,7 +170,7 @@ export default function StorageAreasScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Khu vực kho</Text>
-        {isChain && (
+        {isOwner && isChain && (
           <TouchableOpacity onPress={openCreate} style={styles.addBtn}>
             <Ionicons name="add" size={22} color="#fff" />
           </TouchableOpacity>

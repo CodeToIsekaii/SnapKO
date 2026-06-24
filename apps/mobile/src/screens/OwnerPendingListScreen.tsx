@@ -35,7 +35,6 @@ export default function OwnerPendingListScreen({
   const [pending, setPending] = useState<PendingProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [isRealtime, setIsRealtime] = useState(false);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -111,9 +110,7 @@ export default function OwnerPendingListScreen({
               loadPending();
             },
           )
-          .subscribe((status) => {
-            setIsRealtime(status === "SUBSCRIBED");
-          });
+          .subscribe();
       } catch (err) {
         console.error("Realtime setup error:", err);
       }

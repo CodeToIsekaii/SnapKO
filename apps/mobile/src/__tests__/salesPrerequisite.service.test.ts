@@ -1,5 +1,6 @@
 import {
   checkSalesPrerequisite,
+  getStockSalesGuardScope,
   type SalesGuardScope,
 } from "../features/inventory/services/salesPrerequisite.service";
 
@@ -21,6 +22,60 @@ async function runGuard(
 }
 
 describe("salesPrerequisite.service", () => {
+  describe("getStockSalesGuardScope", () => {
+    it("requires BAR sales for CHAIN inventory", () => {
+      expect(
+        getStockSalesGuardScope({
+          inventoryModel: "CHAIN",
+          area: "BAR",
+          checkMode: undefined,
+          isProRebaselineCheck: false,
+        }),
+      ).toBe("BAR");
+    });
+
+    it("requires BAR sales for STANDARD inventory", () => {
+      expect(
+        getStockSalesGuardScope({
+          inventoryModel: "STANDARD",
+          area: "BAR",
+          checkMode: undefined,
+          isProRebaselineCheck: false,
+        }),
+      ).toBe("BAR");
+    });
+
+    it("requires BAR sales for STANDARD inventory during rebaseline", () => {
+      expect(
+        getStockSalesGuardScope({
+          inventoryModel: "STANDARD",
+          area: "BAR",
+          checkMode: undefined,
+          isProRebaselineCheck: true,
+        }),
+      ).toBe("BAR");
+    });
+
+    it("does not require BAR sales for warehouse or spot checks", () => {
+      expect(
+        getStockSalesGuardScope({
+          inventoryModel: "CHAIN",
+          area: "WAREHOUSE",
+          checkMode: "FULL",
+          isProRebaselineCheck: false,
+        }),
+      ).toBeNull();
+      expect(
+        getStockSalesGuardScope({
+          inventoryModel: "CHAIN",
+          area: "BAR",
+          checkMode: "SPOT",
+          isProRebaselineCheck: false,
+        }),
+      ).toBeNull();
+    });
+  });
+
   it("BAR: returns false when no sales after latest BAR stock check", async () => {
     const db = createMockDb();
     const since = "2026-05-19T08:00:00.000Z";
@@ -91,20 +146,23 @@ describe("salesPrerequisite.service", () => {
     expect(result).toEqual({ hasSales: true, since });
   });
 
-  it("no previous stock check: returns true when sales history exists", async () => {
+  it("no previous BAR check: only counts sales from the start of today", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-06-14T10:30:00.000Z"));
     const db = createMockDb();
     db.getFirstAsync
       .mockResolvedValueOnce({ created_at: null })
-      .mockResolvedValueOnce({ count: 3 });
+      .mockResolvedValueOnce({ count: 0 });
 
     const result = await runGuard(db, "BAR");
 
-    expect(result).toEqual({ hasSales: true, since: null });
-    expect(Array.isArray(db.getFirstAsync.mock.calls[1][1])).toBe(true);
+    expect(result).toEqual({ hasSales: false, since: null });
+    const expectedTodayStart = new Date();
+    expectedTodayStart.setHours(0, 0, 0, 0);
     expect(db.getFirstAsync.mock.calls[1][1]).toEqual([
-      "1970-01-01T00:00:00.000Z",
-      "1970-01-01T00:00:00.000Z",
+      expectedTodayStart.toISOString(),
+      expectedTodayStart.toISOString(),
     ]);
+    jest.useRealTimers();
   });
 
   it("no previous stock check: returns false when no sales history exists", async () => {

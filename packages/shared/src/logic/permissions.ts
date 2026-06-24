@@ -16,7 +16,10 @@ export function isOwner(profile: Profile | null): boolean {
  * Check if profile is an active Staff
  */
 export function isActiveStaff(profile: Profile | null): boolean {
-  return profile?.role === "STAFF" && profile?.status === "ACTIVE";
+  return (
+    (profile?.role === "STAFF" || profile?.role === "BRANCH_MANAGER") &&
+    profile?.status === "ACTIVE"
+  );
 }
 
 /**
@@ -26,7 +29,9 @@ export function canPerformInventory(profile: Profile | null): boolean {
   if (!profile) return false;
   return (
     profile.status === "ACTIVE" &&
-    (profile.role === "OWNER" || profile.role === "STAFF")
+    (profile.role === "OWNER" ||
+      profile.role === "BRANCH_MANAGER" ||
+      profile.role === "STAFF")
   );
 }
 
@@ -72,9 +77,7 @@ export function isSubscriptionActive(business: Business | null): boolean {
  * Check if business can use cloud sync
  */
 export function canUseCloudSync(business: Business | null): boolean {
-  if (!business) return false;
-  if (business.tier === "FREE") return false;
-  return isSubscriptionActive(business);
+  return business !== null;
 }
 
 /**
@@ -107,7 +110,8 @@ export function hasMinimumRole(
 
   const roleHierarchy: Record<ProfileRoleEnum, number> = {
     STAFF: 1,
-    OWNER: 2,
+    BRANCH_MANAGER: 2,
+    OWNER: 3,
   };
 
   return roleHierarchy[profile.role] >= roleHierarchy[requiredRole];

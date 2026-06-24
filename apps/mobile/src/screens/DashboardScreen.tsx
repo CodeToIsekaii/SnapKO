@@ -25,6 +25,7 @@ import { useLowStock } from "../hooks/useLowStock";
 import { InventoryService } from "../features/inventory/services/inventory.service";
 import {
   checkSalesPrerequisite,
+  getStockSalesGuardScope,
   type SalesGuardScope,
 } from "../features/inventory/services/salesPrerequisite.service";
 import { useInventoryModel } from "../contexts/InventoryModelContext";
@@ -35,29 +36,15 @@ import AreaSelectorModal, {
   CheckMode,
 } from "../components/AreaSelectorModal";
 import { PendingLendsWidget } from "../components/PendingLendsWidget";
-import { useSubscription, SubscriptionStatus } from "../hooks/useSubscription";
+import { useSubscription } from "../hooks/useSubscription";
 import { checkAndNotifySubscription } from "../utils/subscriptionNotification";
 import {
+  getProRebaselineBannerMessage,
   getProRebaselineState,
   type ProRebaselineState,
 } from "../utils/proRebaseline";
 import { COLORS } from "../shared/theme/colors";
 import { api } from "../services/api";
-
-interface DailySummary {
-  date: string;
-  imports: number;
-  waste: number;
-}
-
-interface RecentLog {
-  id: string;
-  type: string;
-  ingredient_name: string | null;
-  quantity: number | null;
-  created_at: string;
-  ai_parsed_json?: string;
-}
 
 interface ExpiringLotAlert {
   lotId: string;
@@ -78,6 +65,7 @@ interface DashboardScreenProps {
   onOpenRecipes?: () => void;
   onOpenIngredients?: () => void;
   onOpenTransfer?: () => void;
+  onOpenPendingTransfers?: () => void;
   onOpenQuickOut?: () => void; // New: For quick out/disposal
   refreshKey?: number; // Increment to trigger refresh from parent
 }
@@ -89,6 +77,7 @@ export default function DashboardScreen({
   onOpenRecipes,
   onOpenIngredients,
   onOpenTransfer,
+  onOpenPendingTransfers,
   onOpenQuickOut,
   refreshKey = 0,
 }: DashboardScreenProps) {
@@ -103,8 +92,6 @@ export default function DashboardScreen({
   const [totalValue, setTotalValue] = useState(0);
   const [ingredientCount, setIngredientCount] = useState(0);
   const [recipeCount, setRecipeCount] = useState(0);
-  const [recentLogs, setRecentLogs] = useState<RecentLog[]>([]);
-  const [loading, setLoading] = useState(true);
   const [hasTodaySales, setHasTodaySales] = useState(false);
   const [todayTransfers, setTodayTransfers] = useState<any[]>([]);
   const [todayActivity, setTodayActivity] = useState<any[]>([]); // Unified activity list
@@ -123,17 +110,19 @@ export default function DashboardScreen({
   // Subscription Hook
   const profile =
     authState.status === "authenticated" ? authState.profile : null;
+  const canManageStaff =
+    profile?.role === "OWNER" || profile?.role === "BRANCH_MANAGER";
   const model = profile?.effectiveInventoryModel || contextModel;
   const isStandard = model !== "SIMPLE";
 
-  const subscription = useSubscription(
-    profile?.tier,
-    profile?.subscriptionExpiresAt,
-    profile?.businessCreatedAt,
-  );
-  const canUseAdvancedReports =
-    profile?.entitlements?.canUseAdvancedReports ??
-    subscription.canUseAdvancedReports;
+  const subscription = useSubscription({
+    effectiveTier: profile?.effectiveTier,
+    subscriptionStatus: profile?.subscriptionStatus,
+    daysRemaining: profile?.daysRemaining,
+    expiresAt: profile?.subscriptionExpiresAt,
+    entitlements: profile?.entitlements,
+  });
+  const canUseAdvancedReports = subscription.canUseAdvancedReports;
   const [proRebaseline, setProRebaseline] = useState<ProRebaselineState>({
     required: false,
     warehouseDone: false,
@@ -517,8 +506,6 @@ export default function DashboardScreen({
       setTotalValue(total);
       setIngredientCount(ings.length);
 
-      setIngredientCount(ings.length);
-
       // Get Recipe Count
       const rCount = await InventoryService.getRecipeCount();
       setRecipeCount(rCount);
@@ -526,42 +513,11 @@ export default function DashboardScreen({
       // Load low stock items (via hook)
       await refetchLowStock();
 
-      // Load recent activity logs from pending_sync_logs
-      const logsDb = await getDB();
-      const recentActivity = await logsDb.getAllAsync<{
-        id: string;
-        type: string;
-        ai_parsed_json: string;
-        created_at: string;
-        location: string;
-      }>(
-        `SELECT id, type, ai_parsed_json, created_at, location 
-         FROM pending_sync_logs 
-         ORDER BY created_at DESC 
-         LIMIT 10`,
-      );
-      console.log(
-        "[Dashboard] Local pending_sync_logs count:",
-        recentActivity.length,
-      );
-      setRecentLogs(
-        recentActivity.map((log) => ({
-          id: log.id,
-          type: log.type,
-          created_at: log.created_at,
-          ai_parsed_json: log.ai_parsed_json,
-          ingredient_name: null,
-          quantity: null,
-        })),
-      );
-
       // Also load today's data for guards
       await loadTodayData();
       await loadNotifications();
     } catch (err) {
       console.log("Dashboard load error:", err);
-    } finally {
-      setLoading(false);
     }
   }, [syncModel, loadTodayData, refetchLowStock, loadNotifications]);
 
@@ -649,42 +605,6 @@ export default function DashboardScreen({
     return value.toLocaleString("vi-VN") + " đ";
   };
 
-  // Render individual log item
-  const renderLogItem = ({ item: log }: { item: RecentLog }) => (
-    <View
-      style={{
-        backgroundColor: "#1A1A1A",
-        borderRadius: 8,
-        padding: 12,
-        marginBottom: 8,
-        marginHorizontal: 16,
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-      }}
-    >
-      <View>
-        <Text
-          style={{
-            color:
-              log.type === "IMPORT"
-                ? "#E07A2F"
-                : log.type === "WASTE"
-                  ? "#EF4444"
-                  : "#94A3B8",
-            fontSize: 12,
-            fontWeight: "600",
-          }}
-        >
-          {log.type}
-        </Text>
-      </View>
-      <Text style={{ color: "#64748B", fontSize: 11 }}>
-        {new Date(log.created_at).toLocaleString("vi-VN")}
-      </Text>
-    </View>
-  );
-
   // Dashboard header content (rendered via ListHeaderComponent)
   const DashboardHeader = () => (
     <>
@@ -767,9 +687,7 @@ export default function DashboardScreen({
             }}
           >
             <Text style={{ color: "white", fontWeight: "600", flex: 1 }}>
-              {proRebaseline.warehouseDone
-                ? "Cần kiểm lại Bar để khôi phục Kho Kép."
-                : "Cần kiểm lại Kho tổng và Bar để khôi phục Kho Kép."}
+              {getProRebaselineBannerMessage(proRebaseline)}
             </Text>
             <Ionicons name="chevron-forward" size={20} color="white" />
           </Pressable>
@@ -803,12 +721,22 @@ export default function DashboardScreen({
 
         {/* Right Actions Group */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          <Pressable onPress={onOpenPendingList}>
-            <Text style={{ color: "#F59E0B", fontSize: 16 }}>👥</Text>
-          </Pressable>
+          {onOpenPendingTransfers && (
+            <Pressable
+              onPress={onOpenPendingTransfers}
+              accessibilityLabel="Transfer đang chờ"
+            >
+              <Ionicons name="file-tray-full-outline" size={20} color="#E07A2F" />
+            </Pressable>
+          )}
+          {canManageStaff && (
+            <Pressable onPress={onOpenPendingList}>
+              <Text style={{ color: "#F59E0B", fontSize: 16 }}>👥</Text>
+            </Pressable>
+          )}
 
-          {/* Notification Bell - Owner Only */}
-          {isOwner && (
+          {/* Operational alerts: Owner receives all, Manager receives assigned branch. */}
+          {canManageStaff && (
             <Pressable
               onPress={() => setShowNotifications(true)}
               style={{
@@ -877,6 +805,31 @@ export default function DashboardScreen({
             </Text>
           </View>
         </Pressable>
+
+        {profile?.readOnly && (
+          <View
+            style={{
+              backgroundColor:
+                profile.operationalState === "WAREHOUSE_REBASELINE_REQUIRED"
+                  ? "#1E3A5F"
+                  : "#7F1D1D",
+              borderRadius: 8,
+              padding: 12,
+              marginBottom: 12,
+            }}
+          >
+            <Text style={{ color: "#FFFFFF", fontWeight: "700" }}>
+              {profile.operationalState === "WAREHOUSE_REBASELINE_REQUIRED"
+                ? "Cần full-count Kho Tổng"
+                : "Gói đã hết hạn - chế độ chỉ đọc"}
+            </Text>
+            <Text style={{ color: "#E2E8F0", fontSize: 12, marginTop: 4 }}>
+              {profile.operationalState === "WAREHOUSE_REBASELINE_REQUIRED"
+                ? "Kiểm đầy đủ Kho Tổng, sau đó nhập Sales trước khi kiểm Bar."
+                : "Gia hạn trên web để tiếp tục nhập, bán, chuyển và kiểm kho."}
+            </Text>
+          </View>
+        )}
 
         {/* 🔔 PENDING LENDS WIDGET (LEND/RETURN FEATURE) */}
         {businessId && (
@@ -1536,9 +1489,15 @@ export default function DashboardScreen({
               }
             }
 
-            // BAR requires SALES after latest BAR stock check
-            if (area === "BAR" && !proRebaseline.required) {
-              const canProceed = await requireSalesBeforeStock("BAR");
+            // BAR always requires SALES after the latest BAR stock check.
+            const guardScope = getStockSalesGuardScope({
+              inventoryModel: model,
+              area,
+              checkMode: mode,
+              isProRebaselineCheck: proRebaseline.required,
+            });
+            if (guardScope) {
+              const canProceed = await requireSalesBeforeStock(guardScope);
               if (!canProceed) {
                 return;
               }
@@ -1857,6 +1816,7 @@ export default function DashboardScreen({
         onClose={() => setShowLowStockModal(false)}
         data={{ ingredients: lowStockIngredients, supplies: lowStockSupplies }}
         isLoading={lowStockLoading}
+        onRestock={() => onOpenInventory("import")}
       />
     </>
   );

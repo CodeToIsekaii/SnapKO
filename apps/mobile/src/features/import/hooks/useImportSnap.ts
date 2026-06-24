@@ -16,7 +16,7 @@ import {
   type ParsedInvoiceItem,
   type ParsedInvoiceResponse,
 } from "../../../services/aiService";
-import { syncQueue, type SyncActionType } from "../../../services/syncQueue";
+import { syncQueue } from "../../../services/syncQueue";
 
 interface ImportState {
   isCapturing: boolean;

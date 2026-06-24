@@ -21,7 +21,7 @@ interface Props {
   onClose: () => void;
 }
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 // A4 aspect ratio is 1:1.414 (portrait)
 const FRAME_WIDTH = SCREEN_WIDTH * 0.9;

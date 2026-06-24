@@ -14,6 +14,14 @@ export interface ProRebaselineState {
   barDone: boolean;
 }
 
+export function getProRebaselineBannerMessage(
+  state: ProRebaselineState,
+): string {
+  return state.warehouseDone
+    ? "Kho tổng đã xong. Cần kiểm riêng Bar để hoàn tất khôi phục Kho Kép."
+    : "Cần kiểm lại Kho tổng và Bar để khôi phục Kho Kép.";
+}
+
 async function getMeta(
   db: SQLiteDatabase,
   key: string,

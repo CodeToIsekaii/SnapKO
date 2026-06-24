@@ -1,14 +1,3 @@
-/**
- * useSubscriptionStatus - Central hook for subscription state management
- * Determines user's subscription status and feature access
- *
- * States:
- * - TRIAL: Free trial period (14 days from account creation)
- * - PRO_ACTIVE: Paid subscription, plenty of time left
- * - PRO_WARNING: Paid subscription expiring in ≤5 days
- * - EXPIRED: Trial or subscription has ended
- */
-
 import { useMemo } from "react";
 
 export type SubscriptionState =
@@ -28,90 +17,48 @@ export interface SubscriptionInfo {
 }
 
 interface UseSubscriptionStatusParams {
-  tier?: string | null; // Business tier: FREE, PRO, etc.
-  subscriptionExpiresAt?: string | null; // Subscription expiry date
-  businessCreatedAt?: string | null; // For trial calculation
-}
-
-const TRIAL_DAYS = 14;
-const WARNING_THRESHOLD_DAYS = 5;
-
-/**
- * Calculate days between two dates
- */
-function daysBetween(date1: Date, date2: Date): number {
-  const diffMs = date2.getTime() - date1.getTime();
-  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  subscriptionStatus?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED" | null;
+  daysRemaining?: number | null;
+  subscriptionExpiresAt?: string | null;
+  canUseDualWarehouse?: boolean;
 }
 
 export function useSubscriptionStatus({
-  tier,
+  subscriptionStatus,
+  daysRemaining,
   subscriptionExpiresAt,
-  businessCreatedAt,
+  canUseDualWarehouse,
 }: UseSubscriptionStatusParams): SubscriptionInfo {
   return useMemo(() => {
-    const now = new Date();
-
-    // Default expired state
-    const defaultExpired: SubscriptionInfo = {
-      state: "EXPIRED",
-      daysLeft: 0,
-      expiresAt: null,
-      canUseDualWarehouse: false,
-      showTrialBanner: false,
-      showExpiryWarning: false,
-      showExpiredBanner: true,
+    const status = subscriptionStatus ?? "EXPIRED";
+    const parsedExpiry = subscriptionExpiresAt
+      ? new Date(subscriptionExpiresAt)
+      : null;
+    return {
+      state:
+        status === "TRIAL"
+          ? "TRIAL"
+          : status === "ACTIVE"
+            ? "PRO_ACTIVE"
+            : status === "WARNING"
+              ? "PRO_WARNING"
+              : "EXPIRED",
+      daysLeft: Math.max(0, daysRemaining ?? 0),
+      expiresAt:
+        parsedExpiry && !Number.isNaN(parsedExpiry.getTime())
+          ? parsedExpiry
+          : null,
+      canUseDualWarehouse: canUseDualWarehouse ?? false,
+      showTrialBanner: status === "TRIAL",
+      showExpiryWarning: status === "WARNING",
+      showExpiredBanner: status === "EXPIRED",
     };
-
-    // 1. Check if user has active PRO subscription
-    if (subscriptionExpiresAt) {
-      const expiryDate = new Date(subscriptionExpiresAt);
-      const daysLeft = daysBetween(now, expiryDate);
-
-      if (daysLeft >= 0) {
-        // Subscription is still valid
-        const isWarning = daysLeft <= WARNING_THRESHOLD_DAYS;
-
-        return {
-          state: isWarning ? "PRO_WARNING" : "PRO_ACTIVE",
-          daysLeft,
-          expiresAt: expiryDate,
-          canUseDualWarehouse: true, // PRO users can always use dual warehouse
-          showTrialBanner: false,
-          showExpiryWarning: isWarning,
-          showExpiredBanner: false,
-        };
-      }
-
-      // PRO subscription has expired
-      return defaultExpired;
-    }
-
-    // 2. No subscription - check trial period
-    if (businessCreatedAt) {
-      const createdDate = new Date(businessCreatedAt);
-      const daysSinceCreation = daysBetween(createdDate, now);
-      const trialDaysLeft = Math.max(0, TRIAL_DAYS - daysSinceCreation);
-
-      if (trialDaysLeft > 0) {
-        // Still in trial period
-        return {
-          state: "TRIAL",
-          daysLeft: trialDaysLeft,
-          expiresAt: new Date(
-            createdDate.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000
-          ),
-          canUseDualWarehouse: true, // Trial users can use dual warehouse
-          showTrialBanner: true,
-          showExpiryWarning: false,
-          showExpiredBanner: false,
-        };
-      }
-    }
-
-    // 3. No subscription and trial expired (or no creation date)
-    return defaultExpired;
-  }, [tier, subscriptionExpiresAt, businessCreatedAt]);
+  }, [
+    canUseDualWarehouse,
+    daysRemaining,
+    subscriptionExpiresAt,
+    subscriptionStatus,
+  ]);
 }
 
 export default useSubscriptionStatus;

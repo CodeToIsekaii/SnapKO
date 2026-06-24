@@ -350,7 +350,7 @@ export const PendingLogService = {
   /**
    * Mark log as error
    */
-  markError: async (id: string, error: string): Promise<void> => {
+  markError: async (id: string, _error: string): Promise<void> => {
     const database = await getDB();
     await database.runAsync(
       "UPDATE pending_sync_logs SET sync_status = 'error' WHERE id = ?",

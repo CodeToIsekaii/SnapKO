@@ -3,23 +3,24 @@
  * Features: Camera, Compress <1MB, AI parse, Confidence highlighting, Autocomplete dropdown
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
   Pressable,
   Image,
   ActivityIndicator,
+  AppState,
   ScrollView,
   TextInput,
   Alert,
   FlatList,
   Modal,
-  KeyboardAvoidingView,
   Platform,
   ToastAndroid,
   StyleSheet,
   TouchableOpacity,
+  LogBox,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker, {
@@ -31,7 +32,6 @@ import { Directory, File, Paths } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import * as Crypto from "expo-crypto";
 import {
-  calculateNetVolume,
   canConvert,
   convertToIngredientBase,
   getUnitGroup,
@@ -44,9 +44,10 @@ import {
   parseInvoiceMultiWithAI,
   parseSalesMultiWithAI,
   parseHandwritingMultiWithAI,
+  confirmAiResultCharge,
   QuotaExceededError,
-  type ParsedHandwritingItem,
   type AiQualityMode,
+  type AiQuotaMetadata,
 } from "../services/aiService";
 import { QuotaModal } from "../features/ads/QuotaModal";
 import {
@@ -61,25 +62,56 @@ import {
   upsertStockLevel,
 } from "../db/stockLevelHelper";
 import { useInventoryModel } from "../contexts/InventoryModelContext";
+import { resolveCaptureArea } from "../contexts/inventoryModelState";
 import { useTodayIncoming } from "../hooks/useTodayIncoming";
 import { IncomingLogCard } from "../components/IncomingLogCard";
+import { BufferedTextInput } from "../components/BufferedTextInput";
 import { StorageArea, CheckMode } from "../components/AreaSelectorModal";
 import { DocumentCameraModal } from "../components/DocumentCameraModal";
 import { SalesCameraModal } from "../components/SalesCameraModal";
 import { calculateAllTheoreticalBarStock } from "../features/inventory/services/theoreticalStock";
 import {
   checkSalesPrerequisite,
+  getStockSalesGuardScope,
   type SalesGuardScope,
 } from "../features/inventory/services/salesPrerequisite.service";
+import {
+  buildStockSaveConfirmation,
+  validateWarehousePurchasePacks,
+  type StockSaveConfirmation,
+  type WarehousePackViolation,
+} from "../features/inventory/services/stockSavePolicy";
 import {
   getProRebaselineState,
   markProRebaselineBarDone,
   markProRebaselineWarehouseDone,
   type ProRebaselineState,
 } from "../utils/proRebaseline";
+import {
+  formatParseErrorMessage,
+  isExpectedNetworkError,
+} from "./inventoryCaptureError";
+import {
+  fullCountItemActions,
+  type FullCountItemActionId,
+} from "./inventoryCaptureItemActions";
+import {
+  createInventoryCaptureItemKey,
+  removeInventoryCaptureItemByKey,
+  updateInventoryCaptureItemByKey,
+} from "./inventoryCaptureItems";
+import {
+  getVolumeWeightFeedback,
+  parseNumericField,
+} from "./inventoryCaptureValidation";
+import { runInventorySaveOperation } from "./inventoryCaptureSave";
 
 const CONFIDENCE_THRESHOLD = 0.85; // Backend returns 0-1 decimal
 const CAPTURE_IMAGES_DIR = "pending_images";
+
+if (__DEV__) {
+  LogBox.ignoreLogs(["Network request failed"]);
+}
 
 function getCaptureImagesDirectory(): Directory {
   return new Directory(Paths.document, CAPTURE_IMAGES_DIR);
@@ -178,6 +210,7 @@ interface AiRawItem {
 }
 
 interface AiMappedItem {
+  clientKey: string;
   rawName: string;
   quantity: number;
   unit: string;
@@ -216,6 +249,9 @@ interface LocalIngredient {
   tare_weight: number;
   unit_weight?: number | null;
   unit_weight_unit?: string | null;
+  last_purchase_price?: number | null;
+  last_purchase_qty?: number | null;
+  last_purchase_unit?: string | null;
   warehouse_qty: number;
   bar_qty: number;
   type?: string; // raw_material | supply | semi_product | resale_item
@@ -230,6 +266,38 @@ interface LocalRecipe {
   category: string | null;
   price?: number | null;
 }
+
+interface InventoryCaptureItemRowProps {
+  item: AiMappedItem;
+  snapMode: "STOCK" | "IMPORT" | "SALES";
+  activeDropdown: string | null;
+  searchQuery: string;
+  expiryPickerTargetKey: string | null;
+  expiryPickerValueTime: number;
+  ingredients: LocalIngredient[];
+  recipes: LocalRecipe[];
+  warehouseFullCount: boolean;
+  render: (item: AiMappedItem) => React.ReactElement;
+}
+
+const InventoryCaptureItemRow = React.memo(
+  function InventoryCaptureItemRow({
+    item,
+    render,
+  }: InventoryCaptureItemRowProps) {
+    return render(item);
+  },
+  (previous, next) =>
+    previous.item === next.item &&
+    previous.snapMode === next.snapMode &&
+    previous.activeDropdown === next.activeDropdown &&
+    previous.searchQuery === next.searchQuery &&
+    previous.expiryPickerTargetKey === next.expiryPickerTargetKey &&
+    previous.expiryPickerValueTime === next.expiryPickerValueTime &&
+    previous.ingredients === next.ingredients &&
+    previous.recipes === next.recipes &&
+    previous.warehouseFullCount === next.warehouseFullCount,
+);
 
 interface InventoryCaptureScreenProps {
   onBack: () => void;
@@ -367,18 +435,20 @@ function roundInventoryQuantity(value: number): number {
 export default function InventoryCaptureScreen({
   onBack,
   onOpenSettings,
-  onNavigateToConfirm,
+  onNavigateToConfirm: _onNavigateToConfirm,
   initialMode = "stock",
   areaType,
   checkMode,
 }: InventoryCaptureScreenProps) {
-  const { isStandard, businessId } = useInventoryModel();
+  const { model, isStandard, businessId } = useInventoryModel();
 
   // Multi-image support: store array of images
   const MAX_IMAGES = 5;
   const [imageUris, setImageUris] = useState<string[]>([]);
   const [localImagePaths, setLocalImagePaths] = useState<string[]>([]);
   const [parsing, setParsing] = useState(false);
+  const [activeQualityMode, setActiveQualityMode] =
+    useState<AiQualityMode | null>(null);
   const [loadingStep, setLoadingStep] = useState<string>(""); // Multi-step loading
   const [items, setItems] = useState<AiMappedItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -388,6 +458,8 @@ export default function InventoryCaptureScreen({
     maxAdRewardsPerDay: number;
   } | null>(null);
   const [canRetryHighAccuracy, setCanRetryHighAccuracy] = useState(false);
+  const [preservedFullCountIngredientIds, setPreservedFullCountIngredientIds] =
+    useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const saveInFlightRef = useRef(false);
   const stockUnitLearningItemsRef = useRef<AiMappedItem[]>([]);
@@ -431,7 +503,7 @@ export default function InventoryCaptureScreen({
   // After doing Sales, switching to Stock tab should go to BAR for end-of-shift check
   const [currentAreaType, setCurrentAreaType] = useState<
     StorageArea | undefined
-  >(areaType);
+  >(resolveCaptureArea(model, initialMode, areaType));
 
   // Storage Areas state for Standard Mode
   const [currentAreaId, setCurrentAreaId] = useState<string | null>(null);
@@ -444,12 +516,20 @@ export default function InventoryCaptureScreen({
 
   // Recipes for SALES mode linking
   const [recipes, setRecipes] = useState<LocalRecipe[]>([]);
+  const ingredientById = useMemo(
+    () => new Map(ingredients.map((ingredient) => [ingredient.id, ingredient])),
+    [ingredients],
+  );
+  const recipeById = useMemo(
+    () => new Map(recipes.map((recipe) => [recipe.id, recipe])),
+    [recipes],
+  );
 
   // Dropdown state
-  const [activeDropdown, setActiveDropdown] = useState<number | null>(null);
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [expiryPickerTargetIndex, setExpiryPickerTargetIndex] = useState<
-    number | null
+  const [expiryPickerTargetKey, setExpiryPickerTargetKey] = useState<
+    string | null
   >(null);
   const [expiryPickerValue, setExpiryPickerValue] = useState<Date>(new Date());
 
@@ -481,15 +561,33 @@ export default function InventoryCaptureScreen({
   });
   const [showDocumentCamera, setShowDocumentCamera] = useState(false); // Guide frame camera
   const [showSalesCamera, setShowSalesCamera] = useState(false); // Sales grid camera
+  const [fullCountActionTarget, setFullCountActionTarget] = useState<{
+    clientKey: string;
+    title: string;
+  } | null>(null);
+  const parsingRef = useRef(false);
+  const appStateRef = useRef(AppState.currentState);
+  const parseInterruptedByBackgroundRef = useRef(false);
 
   // Load ingredients and recipes from local DB
   useEffect(() => {
     loadIngredients();
     loadRecipes(); // Load recipes for SALES mode
+    setCurrentAreaId(null);
     if (isStandard && currentAreaType) {
-      loadAreaId();
+      loadAreaId(currentAreaType);
     }
   }, [isStandard, currentAreaType]);
+
+  useEffect(() => {
+    if (areaType) {
+      setCurrentAreaType(areaType);
+      return;
+    }
+    if (snapMode === "SALES") {
+      setCurrentAreaType(resolveCaptureArea(model, "sales"));
+    }
+  }, [areaType, model, snapMode]);
 
   useEffect(() => {
     let mounted = true;
@@ -507,12 +605,36 @@ export default function InventoryCaptureScreen({
     };
   }, []);
 
-  const loadAreaId = async () => {
+  useEffect(() => {
+    parsingRef.current = parsing;
+  }, [parsing]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (
+        parsingRef.current &&
+        appStateRef.current === "active" &&
+        nextState !== "active"
+      ) {
+        parseInterruptedByBackgroundRef.current = true;
+      }
+      appStateRef.current = nextState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  const loadAreaId = async (targetAreaType: StorageArea) => {
     try {
       const db = await getDB();
       const area = await db.getFirstAsync<{ id: string }>(
-        "SELECT id FROM local_storage_areas WHERE type = ? LIMIT 1",
-        [currentAreaType === "BAR" ? "SERVICE" : "STORAGE"],
+        `SELECT id FROM local_storage_areas
+         WHERE type = ? AND is_active = 1
+         ORDER BY is_default DESC, name ASC
+         LIMIT 1`,
+        [targetAreaType === "BAR" ? "SERVICE" : "STORAGE"],
       );
       if (area) {
         setCurrentAreaId(area.id);
@@ -526,7 +648,7 @@ export default function InventoryCaptureScreen({
     try {
       const db = await getDB();
       const rows = await db.getAllAsync<LocalIngredient>(
-        "SELECT id, name, aliases, base_unit, stock_check_unit, unit_cost, density, tare_weight, unit_weight, unit_weight_unit, warehouse_qty, bar_qty, type, shelf_life_days FROM local_ingredients WHERE archived = 0",
+        "SELECT id, name, aliases, base_unit, stock_check_unit, unit_cost, density, tare_weight, unit_weight, unit_weight_unit, last_purchase_price, last_purchase_qty, last_purchase_unit, warehouse_qty, bar_qty, type, shelf_life_days FROM local_ingredients WHERE archived = 0",
       );
       setIngredients(rows);
     } catch (err) {
@@ -615,6 +737,7 @@ export default function InventoryCaptureScreen({
       clearSalesCrossCheck();
       setError(null);
       setCanRetryHighAccuracy(false);
+      setPreservedFullCountIngredientIds([]);
       setQuotaExceeded(null);
     }
 
@@ -660,92 +783,6 @@ export default function InventoryCaptureScreen({
     }
 
     return persistedUris;
-  };
-
-  /**
-   * Slice image into 3 overlapping vertical parts for better OCR accuracy
-   * This "Divide & Conquer" technique prevents AI from drifting across rows
-   * Each slice is 40% of height with 10% overlap
-   */
-  const sliceImage = async (uri: string): Promise<string[]> => {
-    try {
-      // Get image dimensions first
-      const info = await ImageManipulator.manipulateAsync(uri, []);
-      const { width, height } = info;
-      const ratio = height / width;
-
-      // STOCK sheets are dense A4-style documents; force slicing even when
-      // aspect ratio looks "normal" so OCR sees fewer rows per image.
-      let numSlices = 1;
-      if (snapMode === "STOCK") {
-        numSlices = ratio > 3.5 ? 5 : 3;
-      } else if (ratio > 5) {
-        numSlices = 6; // Very long receipt
-      } else if (ratio > 3.5) {
-        numSlices = 4; // Long receipt
-      } else if (ratio > 1.8) {
-        numSlices = 2; // Medium receipt
-      }
-
-      console.log(
-        `[Capture] Adaptive Slicing: Ratio=${ratio.toFixed(2)} -> ${numSlices} slices`,
-      );
-
-      const slices: string[] = [];
-
-      // Generate slice configs dynamically
-      const sliceConfigs = [];
-      if (numSlices === 1) {
-        sliceConfigs.push({ originY: 0, heightFactor: 1 });
-      } else {
-        const sliceHeightFactor = 1 / numSlices + 0.15; // +15% overlap
-        for (let i = 0; i < numSlices; i++) {
-          let originY = i * (1 / numSlices);
-          if (originY + sliceHeightFactor > 1) {
-            originY = 1 - sliceHeightFactor;
-          }
-          if (originY < 0) originY = 0;
-          sliceConfigs.push({ originY, heightFactor: sliceHeightFactor });
-        }
-      }
-
-      for (const config of sliceConfigs) {
-        const sliceHeight = Math.floor(height * config.heightFactor);
-        const originY = Math.floor(height * config.originY);
-
-        const result = await ImageManipulator.manipulateAsync(
-          uri,
-          [
-            {
-              crop: {
-                originX: 0,
-                originY: originY,
-                width: width,
-                height: Math.min(sliceHeight, height - originY), // Don't exceed bounds
-              },
-            },
-            { resize: { width: snapMode === "STOCK" ? 1600 : 1024 } },
-          ],
-          {
-            compress: snapMode === "STOCK" ? 0.75 : 0.6,
-            format: ImageManipulator.SaveFormat.JPEG,
-          },
-        );
-
-        // Read as base64
-        const file = new File(result.uri);
-        const base64 = await file.base64();
-        slices.push(base64);
-      }
-
-      console.log(`[Capture] Sliced image into ${slices.length} parts`);
-      return slices;
-    } catch (err) {
-      console.error("[Capture] sliceImage error:", err);
-      // Fallback: return original image compressed
-      const fallback = await compressAndSaveImage(uri);
-      return [fallback.base64];
-    }
   };
 
   // Take photo - append to images array
@@ -836,7 +873,7 @@ export default function InventoryCaptureScreen({
     ingredientId: string | null | undefined,
   ): number | null => {
     if (!ingredientId) return null;
-    const ingredient = ingredients.find((ing) => ing.id === ingredientId);
+    const ingredient = ingredientById.get(ingredientId);
     if (!ingredient) return null;
     const shelfLifeDays = Number(ingredient.shelf_life_days ?? 0);
     if (!Number.isFinite(shelfLifeDays) || shelfLifeDays <= 0) return null;
@@ -901,12 +938,21 @@ export default function InventoryCaptureScreen({
       internalInconsistent: !!raw.internal_inconsistent,
       menuPriceDiffers: !!raw.menu_price_differs,
     });
-    const mapped: AiMappedItem[] = rawItems.map((raw): AiMappedItem => {
+    const withClientKey = (
+      raw: AiRawItem,
+      rawIndex: number,
+      item: Omit<AiMappedItem, "clientKey">,
+    ): AiMappedItem => ({
+      clientKey: createInventoryCaptureItemKey(raw, rawIndex),
+      ...item,
+    });
+
+    const mapped: AiMappedItem[] = rawItems.map((raw, rawIndex): AiMappedItem => {
       if (snapMode === "SALES" && raw.recipe_id) {
-        const matchedRecipe = recipes.find((recipe) => recipe.id === raw.recipe_id);
+        const matchedRecipe = recipeById.get(raw.recipe_id);
 
         if (matchedRecipe) {
-          return {
+          return withClientKey(raw, rawIndex, {
             rawName: raw.ingredient_name,
             quantity: raw.stock_qty,
             unit: raw.unit || "phần",
@@ -918,10 +964,10 @@ export default function InventoryCaptureScreen({
             isNewIngredient: false,
             ...captureExtras(raw),
             ...salesExtras(raw),
-          };
+          });
         }
 
-        return {
+        return withClientKey(raw, rawIndex, {
           rawName: raw.ingredient_name,
           quantity: raw.stock_qty,
           unit: raw.unit || "phần",
@@ -933,14 +979,14 @@ export default function InventoryCaptureScreen({
           isNewIngredient: false,
           ...captureExtras(raw),
           ...salesExtras(raw),
-        };
+        });
       }
 
       // 0. Use Backend Mapping if available (High Priority)
       if (raw.linkedIngredientId || raw.ingredient_id) {
         const backendId = raw.linkedIngredientId || raw.ingredient_id;
         // Verify it exists in local DB
-        const matchedIng = ingredients.find((ing) => ing.id === backendId);
+        const matchedIng = backendId ? ingredientById.get(backendId) : null;
 
         if (matchedIng) {
           // STOCK review should display the staff-preferred unit, while save
@@ -970,26 +1016,23 @@ export default function InventoryCaptureScreen({
             if (!canAutoConvert) {
               finalUnit = aiUnit;
             } else {
-            const converted = convertToIngredientBase(
-              raw.stock_qty,
-              sourceUnit,
-              targetUnit,
-              matchedIng.density,
-              matchedIng.unit_weight,
-              matchedIng.unit_weight_unit,
-            );
-            if (typeof converted === "number") {
-              finalQty = converted;
-              console.log(
-                `[AutoMap] Converted ${raw.stock_qty} ${aiUnit} → ${finalQty} ${finalUnit} for "${matchedIng.name}"`,
+              const converted = convertToIngredientBase(
+                raw.stock_qty,
+                sourceUnit,
+                targetUnit,
+                matchedIng.density,
+                matchedIng.unit_weight,
+                matchedIng.unit_weight_unit,
               );
-            } else {
-              finalUnit = aiUnit;
-            }
+              if (typeof converted === "number") {
+                finalQty = converted;
+              } else {
+                finalUnit = aiUnit;
+              }
             }
           }
 
-          return {
+          return withClientKey(raw, rawIndex, {
             rawName: raw.ingredient_name,
             quantity: finalQty,
             unit: finalUnit,
@@ -1001,7 +1044,7 @@ export default function InventoryCaptureScreen({
             isNewIngredient: false,
             ...captureExtras(raw),
             ...salesExtras(raw),
-          };
+          });
         }
       }
 
@@ -1048,7 +1091,7 @@ export default function InventoryCaptureScreen({
             ? null
             : ((bestMatch as LocalRecipe).price ?? null);
 
-          return {
+          return withClientKey(raw, rawIndex, {
             rawName: raw.ingredient_name,
             quantity: raw.stock_qty,
             unit: raw.unit || (isResaleItem ? "cái" : "phần"),
@@ -1060,10 +1103,10 @@ export default function InventoryCaptureScreen({
             isNewIngredient: false,
             ...captureExtras(raw),
             ...salesExtras(raw),
-          };
+          });
         }
 
-        return {
+        return withClientKey(raw, rawIndex, {
           rawName: raw.ingredient_name,
           quantity: raw.stock_qty,
           unit: raw.unit || "phần",
@@ -1075,7 +1118,7 @@ export default function InventoryCaptureScreen({
           isNewIngredient: false,
           ...captureExtras(raw),
           ...salesExtras(raw),
-        };
+        });
       }
 
       // For IMPORT/STOCK mode, match with ingredients
@@ -1120,26 +1163,23 @@ export default function InventoryCaptureScreen({
           if (!canAutoConvert) {
             finalUnit = aiUnit;
           } else {
-          const converted = convertToIngredientBase(
-            raw.stock_qty,
-            sourceUnit,
-            targetUnit,
-            bestMatch.density,
-            bestMatch.unit_weight,
-            bestMatch.unit_weight_unit,
-          );
-          if (typeof converted === "number") {
-            finalQty = converted;
-            console.log(
-              `[AutoMap] Converted ${raw.stock_qty} ${aiUnit} → ${finalQty} ${finalUnit} for "${bestMatch.name}"`,
+            const converted = convertToIngredientBase(
+              raw.stock_qty,
+              sourceUnit,
+              targetUnit,
+              bestMatch.density,
+              bestMatch.unit_weight,
+              bestMatch.unit_weight_unit,
             );
-          } else {
-            finalUnit = aiUnit;
-          }
+            if (typeof converted === "number") {
+              finalQty = converted;
+            } else {
+              finalUnit = aiUnit;
+            }
           }
         }
 
-        return {
+        return withClientKey(raw, rawIndex, {
           rawName: raw.ingredient_name,
           quantity: finalQty,
           unit: finalUnit,
@@ -1151,10 +1191,10 @@ export default function InventoryCaptureScreen({
           recipeId: null,
           isNewIngredient: false,
           ...captureExtras(raw),
-        };
+        });
       }
 
-      return {
+      return withClientKey(raw, rawIndex, {
         rawName: raw.ingredient_name,
         quantity: raw.stock_qty,
         unit: raw.unit || "",
@@ -1166,7 +1206,7 @@ export default function InventoryCaptureScreen({
         recipeId: null,
         isNewIngredient: false,
         ...captureExtras(raw),
-      };
+      });
     });
 
     if (snapMode === "SALES") {
@@ -1224,11 +1264,26 @@ export default function InventoryCaptureScreen({
     return result;
   };
 
+  const confirmDisplayedAiResult = (token: string | undefined) => {
+    if (!token) return;
+
+    requestAnimationFrame(() => {
+      confirmAiResultCharge(token).catch((err) => {
+        if (!isExpectedNetworkError(err)) {
+          console.warn("[Capture] confirm-ai-result failed:", err);
+        }
+      });
+    });
+  };
+
   // Parse image with AI - Route to different functions based on snapMode
   // Multi-image support: sends array of images for sequential page parsing
   const handleParseImage = async (qualityMode: AiQualityMode = "standard") => {
     if (imageUris.length === 0) return;
 
+    parseInterruptedByBackgroundRef.current = false;
+    setPreservedFullCountIngredientIds([]);
+    setActiveQualityMode(qualityMode);
     setParsing(true);
     setError(null);
     setQuotaExceeded(null);
@@ -1266,6 +1321,11 @@ export default function InventoryCaptureScreen({
         used_raw_ocr_parser?: boolean;
         missing_row_numbers?: number[];
         duplicate_row_numbers?: number[];
+        quota?: AiQuotaMetadata;
+        quotaPreview?: AiQuotaMetadata;
+        scanChargeToken?: string;
+        qualityMode?: AiQualityMode;
+        model?: string;
       };
 
       switch (snapMode) {
@@ -1294,6 +1354,11 @@ export default function InventoryCaptureScreen({
             items: salesRes.items_sold, // Map items_sold to items for common processing
             error: salesRes.error,
             canRetryHighAccuracy: salesRes.canRetryHighAccuracy,
+            quota: salesRes.quota,
+            quotaPreview: salesRes.quotaPreview,
+            scanChargeToken: salesRes.scanChargeToken,
+            qualityMode: salesRes.qualityMode,
+            model: salesRes.model,
           };
           break;
         case "STOCK":
@@ -1306,7 +1371,7 @@ export default function InventoryCaptureScreen({
           const stockRes = await parseHandwritingMultiWithAI(
             compressedImages,
             businessId || "",
-            isStandard ? "STANDARD" : "SIMPLE",
+            model,
             currentAreaType === "BAR" ? "SERVICE" : "STORAGE",
             qualityMode,
           );
@@ -1429,15 +1494,7 @@ export default function InventoryCaptureScreen({
       }
 
       if (rawItems.length > 0) {
-        // DEBUG: Log rawItems first item
-        console.log("[Capture] rawItems[0]:", JSON.stringify(rawItems[0]));
-        console.log("[Capture] rawItems[0].unit_cost:", rawItems[0].unit_cost);
-
         const mapped = autoMapItems(rawItems);
-
-        // DEBUG: Log mapped first item
-        console.log("[Capture] mapped[0]:", JSON.stringify(mapped[0]));
-        console.log("[Capture] mapped[0].unitCost:", mapped[0]?.unitCost);
 
         // AI CROSS-CHECK: Check for duplicate transfers (Per .script Section 2.3.C)
         if (snapMode === "STOCK" && currentAreaType === "BAR") {
@@ -1521,25 +1578,32 @@ export default function InventoryCaptureScreen({
         }
 
         setItems(mapped);
+        confirmDisplayedAiResult(aiResult.scanChargeToken);
       } else {
         console.warn("[Capture] No items found in response");
         setError("Không tìm thấy dữ liệu. Thử chụp lại?");
       }
     } catch (err: any) {
-      console.error("[Capture] Parse error:", err);
+      if (!isExpectedNetworkError(err)) {
+        console.error("[Capture] Parse error:", err);
+      }
       if (err instanceof QuotaExceededError) {
         setQuotaExceeded({
           canWatchAd: err.canWatchAd,
           adRewardScans: err.adRewardScans,
           maxAdRewardsPerDay: err.maxAdRewardsPerDay,
         });
-      } else if (err.name === "AbortError") {
-        setError("Quá thời gian chờ (30s). Kiểm tra kết nối mạng và thử lại.");
       } else {
-        setError(err.message || "Có lỗi xảy ra");
+        setError(
+          formatParseErrorMessage(
+            err,
+            parseInterruptedByBackgroundRef.current,
+          ),
+        );
       }
     } finally {
       setParsing(false);
+      setActiveQualityMode(null);
       setLoadingStep("");
     }
   };
@@ -1588,9 +1652,7 @@ export default function InventoryCaptureScreen({
     if (snapMode === "SALES" || item.recipeId || !item.linkedIngredientId) {
       return null;
     }
-    return (
-      ingredients.find((ing) => ing.id === item.linkedIngredientId) ?? null
-    );
+    return ingredientById.get(item.linkedIngredientId) ?? null;
   };
 
   const convertLinkedItemToUnit = (
@@ -1728,8 +1790,21 @@ export default function InventoryCaptureScreen({
     db: Awaited<ReturnType<typeof getDB>>,
     location: "WAREHOUSE" | "BAR",
   ): Promise<string | null> => {
+    const expectedType = location === "BAR" ? "SERVICE" : "STORAGE";
+    if (currentAreaId) {
+      const selectedArea = await db.getFirstAsync<{ id: string }>(
+        `SELECT id FROM local_storage_areas
+         WHERE id = ? AND type = ? AND is_active = 1`,
+        [currentAreaId, expectedType],
+      );
+      if (selectedArea) return selectedArea.id;
+    }
+
     const existingAreaId = await resolveLocalAreaByLocation(db, location);
     if (existingAreaId) return existingAreaId;
+
+    // STANDARD and CHAIN require server-backed area UUIDs for branch access.
+    if (isStandard) return null;
 
     const profile = await db.getFirstAsync<{ business_id: string | null }>(
       "SELECT business_id FROM local_profiles LIMIT 1",
@@ -1740,14 +1815,13 @@ export default function InventoryCaptureScreen({
       return null;
     }
 
-    const type = location === "BAR" ? "SERVICE" : "STORAGE";
-    const areaId = `local_${type.toLowerCase()}_${localBusinessId}`;
-    const name = type === "SERVICE" ? "Quầy Bar" : "Kho Tổng";
+    const areaId = `local_${expectedType.toLowerCase()}_${localBusinessId}`;
+    const name = expectedType === "SERVICE" ? "Quầy Bar" : "Kho Tổng";
     await db.runAsync(
       `INSERT OR IGNORE INTO local_storage_areas
         (id, business_id, name, type, is_default, is_active, synced)
        VALUES (?, ?, ?, ?, 1, 1, 0)`,
-      [areaId, localBusinessId, name, type],
+      [areaId, localBusinessId, name, expectedType],
     );
     return areaId;
   };
@@ -1758,11 +1832,13 @@ export default function InventoryCaptureScreen({
     location: "WAREHOUSE" | "BAR",
     itemsForSave: AiMappedItem[],
     countedAt: string,
+    areaId: string | null,
   ): Promise<void> => {
     if (mode === "SALES") return;
 
-    const areaId = await ensureLocalAreaForLocation(db, location);
-    if (!areaId) return;
+    const localAreaId =
+      areaId ?? (await ensureLocalAreaForLocation(db, location));
+    if (!localAreaId) return;
 
     if (mode === "STOCK") {
       for (const item of itemsForSave) {
@@ -1772,7 +1848,7 @@ export default function InventoryCaptureScreen({
         await upsertStockLevel(
           db,
           item.linkedIngredientId,
-          areaId,
+          localAreaId,
           item.quantity,
           countedAt,
         );
@@ -1813,13 +1889,18 @@ export default function InventoryCaptureScreen({
         }
       }
 
-      await incrementStockLevel(db, item.linkedIngredientId, areaId, item.quantity);
+      await incrementStockLevel(
+        db,
+        item.linkedIngredientId,
+        localAreaId,
+        item.quantity,
+      );
     }
   };
 
   // Link item to ingredient or recipe (based on snapMode)
   const linkIngredient = (
-    itemIndex: number,
+    clientKey: string,
     item: LocalIngredient | LocalRecipe,
   ) => {
     // Check if it's a recipe (for SALES mode) or ingredient
@@ -1832,23 +1913,21 @@ export default function InventoryCaptureScreen({
             prevItemUnitCost ?? (item as LocalIngredient).unit_cost;
 
     setItems((prev) =>
-      prev.map((prevItem, i) =>
-        i === itemIndex
-          ? applyImportExpiryRules(
-              applyLinkedDisplayUnit(
-                {
-                  ...prevItem,
-                  linkedIngredientId: item.id,
-                  linkedIngredientName: item.name,
-                  recipeId: isRecipe ? item.id : null,
-                  unitCost: linkedUnitCost(prevItem.unitCost),
-                  isNewIngredient: false,
-                },
-                false,
-              ),
-              item.id,
-            )
-          : prevItem,
+      updateInventoryCaptureItemByKey(prev, clientKey, (prevItem) =>
+        applyImportExpiryRules(
+          applyLinkedDisplayUnit(
+            {
+              ...prevItem,
+              linkedIngredientId: item.id,
+              linkedIngredientName: item.name,
+              recipeId: isRecipe ? item.id : null,
+              unitCost: linkedUnitCost(prevItem.unitCost),
+              isNewIngredient: false,
+            },
+            false,
+          ),
+          item.id,
+        ),
       ),
     );
     setActiveDropdown(null);
@@ -1856,46 +1935,45 @@ export default function InventoryCaptureScreen({
   };
 
   // Mark as new ingredient
-  const markAsNew = (itemIndex: number) => {
+  const markAsNew = (clientKey: string) => {
     setItems((prev) =>
-      prev.map((item, i) =>
-        i === itemIndex
-          ? {
-              ...item,
-              linkedIngredientId: null,
-              linkedIngredientName: null,
-              recipeId: null,
-              isNewIngredient: true,
-              expiryDate: null,
-              expirySource: null,
-              shelfLifeDaysSnapshot: null,
-            }
-          : item,
-      ),
+      updateInventoryCaptureItemByKey(prev, clientKey, {
+        linkedIngredientId: null,
+        linkedIngredientName: null,
+        recipeId: null,
+        isNewIngredient: true,
+        expiryDate: null,
+        expirySource: null,
+        shelfLifeDaysSnapshot: null,
+      }),
     );
     setActiveDropdown(null);
   };
 
   // Update item field
-  const updateItem = (index: number, field: keyof AiMappedItem, value: any) => {
+  const updateItem = (clientKey: string, field: keyof AiMappedItem, value: any) => {
     setItems((prev) =>
-      prev.map((item, i) => (i === index ? { ...item, [field]: value } : item)),
+      updateInventoryCaptureItemByKey(prev, clientKey, { [field]: value } as Partial<AiMappedItem>),
     );
   };
 
-  const applyManualExpiryForIndex = (itemIndex: number, date: Date) => {
-    updateItem(itemIndex, "expiryDate", formatDateToYyyyMmDd(date));
-    updateItem(itemIndex, "expirySource", "MANUAL");
-    updateItem(itemIndex, "shelfLifeDaysSnapshot", null);
+  const applyManualExpiryForKey = (clientKey: string, date: Date) => {
+    setItems((prev) =>
+      updateInventoryCaptureItemByKey(prev, clientKey, {
+        expiryDate: formatDateToYyyyMmDd(date),
+        expirySource: "MANUAL",
+        shelfLifeDaysSnapshot: null,
+      }),
+    );
   };
 
   const openExpiryPickerForItem = (
-    itemIndex: number,
+    clientKey: string,
     currentValue: string | null | undefined,
   ) => {
     const parsed = parseYyyyMmDd(currentValue);
     setExpiryPickerValue(parsed ?? new Date());
-    setExpiryPickerTargetIndex(itemIndex);
+    setExpiryPickerTargetKey(clientKey);
   };
 
   const handleExpiryPickerChange = (
@@ -1904,34 +1982,130 @@ export default function InventoryCaptureScreen({
   ) => {
     if (Platform.OS === "android") {
       if (event.type === "dismissed") {
-        setExpiryPickerTargetIndex(null);
+        setExpiryPickerTargetKey(null);
         return;
       }
-      if (event.type === "set" && selectedDate && expiryPickerTargetIndex != null) {
-        applyManualExpiryForIndex(expiryPickerTargetIndex, selectedDate);
+      if (event.type === "set" && selectedDate && expiryPickerTargetKey != null) {
+        applyManualExpiryForKey(expiryPickerTargetKey, selectedDate);
       }
-      setExpiryPickerTargetIndex(null);
+      setExpiryPickerTargetKey(null);
       return;
     }
 
     if (selectedDate) {
       setExpiryPickerValue(selectedDate);
-      if (expiryPickerTargetIndex != null) {
-        applyManualExpiryForIndex(expiryPickerTargetIndex, selectedDate);
+      if (expiryPickerTargetKey != null) {
+        applyManualExpiryForKey(expiryPickerTargetKey, selectedDate);
       }
     }
   };
 
-  // Remove item
-  const removeItem = (index: number) => {
-    if (expiryPickerTargetIndex != null) {
-      if (expiryPickerTargetIndex === index) {
-        setExpiryPickerTargetIndex(null);
-      } else if (expiryPickerTargetIndex > index) {
-        setExpiryPickerTargetIndex(expiryPickerTargetIndex - 1);
-      }
+  const isWarehouseFullCountMode = () =>
+    snapMode === "STOCK" &&
+    currentCheckMode === "FULL" &&
+    currentAreaType === "WAREHOUSE";
+
+  const clearExpiryPickerAfterItemRemoval = (clientKey: string) => {
+    if (expiryPickerTargetKey === clientKey) {
+      setExpiryPickerTargetKey(null);
     }
-    setItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const removeItemByKey = (clientKey: string) => {
+    clearExpiryPickerAfterItemRemoval(clientKey);
+    setActiveDropdown((prev) => (prev === clientKey ? null : prev));
+    setItems((prev) => removeInventoryCaptureItemByKey(prev, clientKey));
+  };
+
+  const preserveFullCountIngredient = (ingredientId: string) => {
+    setPreservedFullCountIngredientIds((prev) =>
+      prev.includes(ingredientId) ? prev : [...prev, ingredientId],
+    );
+  };
+
+  const unpreserveFullCountIngredient = (ingredientId: string) => {
+    setPreservedFullCountIngredientIds((prev) =>
+      prev.filter((id) => id !== ingredientId),
+    );
+  };
+
+  const setFullCountItemToZero = (clientKey: string) => {
+    const item = items.find((entry) => entry.clientKey === clientKey);
+    if (!item?.linkedIngredientId) {
+      Alert.alert(
+        "Chưa liên kết nguyên liệu",
+        "Muốn set tồn kho về 0 thì cần liên kết dòng này với nguyên liệu trước.",
+      );
+      return;
+    }
+
+    unpreserveFullCountIngredient(item.linkedIngredientId);
+    setItems((prev) =>
+      updateInventoryCaptureItemByKey(prev, clientKey, { quantity: 0 }),
+    );
+  };
+
+  const skipFullCountItemAndKeepStock = (clientKey: string) => {
+    const item = items.find((entry) => entry.clientKey === clientKey);
+    if (!item?.linkedIngredientId) {
+      Alert.alert(
+        "Bỏ qua dòng chưa liên kết?",
+        "Dòng này chưa liên kết nên app không biết nguyên liệu nào cần giữ nguyên. Nếu đây là nguyên liệu đã có, hãy liên kết trước rồi bỏ qua.",
+        [
+          { text: "Quay lại", style: "cancel" },
+          {
+            text: "Vẫn bỏ qua dòng OCR",
+            style: "destructive",
+            onPress: () => removeItemByKey(clientKey),
+          },
+        ],
+      );
+      return;
+    }
+
+    preserveFullCountIngredient(item.linkedIngredientId);
+    removeItemByKey(clientKey);
+  };
+
+  const deleteFullCountItemFromSheet = (clientKey: string) => {
+    const item = items.find((entry) => entry.clientKey === clientKey);
+    if (item?.linkedIngredientId) {
+      unpreserveFullCountIngredient(item.linkedIngredientId);
+    }
+    removeItemByKey(clientKey);
+  };
+
+  const handleFullCountItemAction = (actionId: FullCountItemActionId) => {
+    if (!fullCountActionTarget) return;
+
+    const targetKey = fullCountActionTarget.clientKey;
+    setFullCountActionTarget(null);
+
+    if (actionId === "preserve") {
+      skipFullCountItemAndKeepStock(targetKey);
+      return;
+    }
+
+    if (actionId === "zero") {
+      setFullCountItemToZero(targetKey);
+      return;
+    }
+
+    deleteFullCountItemFromSheet(targetKey);
+  };
+
+  // Remove item
+  const removeItem = (clientKey: string) => {
+    if (!isWarehouseFullCountMode()) {
+      removeItemByKey(clientKey);
+      return;
+    }
+
+    const item = items.find((entry) => entry.clientKey === clientKey);
+    setFullCountActionTarget({
+      clientKey,
+      title: item?.linkedIngredientName || item?.rawName || "Mục này",
+    });
   };
 
   // Confidence style - Side border pattern per .UXUIrules
@@ -1967,9 +2141,9 @@ export default function InventoryCaptureScreen({
   ).length;
   // Check for invalid weights (gross < tare)
   const hasInvalidWeights = items.some((item) => {
-    const matched = ingredients.find(
-      (ing) => ing.id === item.linkedIngredientId,
-    );
+    const matched = item.linkedIngredientId
+      ? ingredientById.get(item.linkedIngredientId)
+      : null;
     if (!matched) return false;
     const isVolumeBased =
       matched.base_unit === "ml" ||
@@ -2000,6 +2174,8 @@ export default function InventoryCaptureScreen({
     !hasMissingImportExpiry;
   const hasSalesTotalMismatch =
     snapMode === "SALES" && Boolean(salesQtyMismatch || salesRevenueMismatch);
+  const isRetryingHighAccuracy =
+    parsing && activeQualityMode === "high_accuracy";
   const rawOcrTextForModal =
     snapMode === "STOCK" ? stockRawOcrText || stockRawDebugText : salesRawOcrText;
   const hasStockDiagnostics =
@@ -2023,19 +2199,6 @@ export default function InventoryCaptureScreen({
     !proRebaseline.barDone;
   const isProRebaselineCheck =
     isProRebaselineWarehouseCheck || isProRebaselineBarCheck;
-
-  const getStockSalesGuardScope = (): SalesGuardScope | null => {
-    if (isProRebaselineCheck) {
-      return null;
-    }
-    if (currentCheckMode === "SPOT") {
-      return null;
-    }
-    if (isStandard) {
-      return currentAreaType === "BAR" ? "BAR" : null;
-    }
-    return null;
-  };
 
   const ensureSalesBeforeStock = async (
     scope: SalesGuardScope,
@@ -2073,6 +2236,51 @@ export default function InventoryCaptureScreen({
         [
           { text: "Quay lại kiểm tra", style: "cancel", onPress: () => resolve(false) },
           { text: "Đã kiểm tra, vẫn lưu", style: "destructive", onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
+    });
+
+  const formatPolicyNumber = (value: number): string =>
+    value.toLocaleString("vi-VN", { maximumFractionDigits: 3 });
+
+  const showWarehousePackViolations = (
+    violations: WarehousePackViolation[],
+  ): void => {
+    const preview = violations
+      .slice(0, 4)
+      .map(
+        (item) =>
+          `${item.name}: ${formatPolicyNumber(
+            item.packCount,
+          )} hàng nguyên. Sửa về ${item.lowerPackCount} (${formatPolicyNumber(
+            item.lowerBaseQty,
+          )} ${item.unit || ""}) hoặc ${item.upperPackCount} (${formatPolicyNumber(
+            item.upperBaseQty,
+          )} ${item.unit || ""}).`,
+      )
+      .join("\n");
+
+    Alert.alert(
+      "Kho Tổng phải là hàng nguyên",
+      `${preview}${
+        violations.length > 4
+          ? `\n... và ${violations.length - 4} món khác.`
+          : ""
+      }\n\nHãy sửa số lượng trước khi lưu.`,
+    );
+  };
+
+  const confirmStockSave = (
+    confirmation: StockSaveConfirmation,
+  ): Promise<boolean> =>
+    new Promise((resolve) => {
+      Alert.alert(
+        confirmation.title,
+        confirmation.message,
+        [
+          { text: "Quay lại kiểm tra", style: "cancel", onPress: () => resolve(false) },
+          { text: "Xác nhận lưu", style: "destructive", onPress: () => resolve(true) },
         ],
         { cancelable: true, onDismiss: () => resolve(false) },
       );
@@ -2117,6 +2325,30 @@ export default function InventoryCaptureScreen({
     headerIcon = "cart";
   }
 
+  const showParsingNavigationAlert = () => {
+    Alert.alert(
+      "Đang quét AI",
+      "Ở lại màn này đến khi quét xong để tránh mất kết quả.",
+      [{ text: "Đã hiểu" }],
+    );
+  };
+
+  const canLeaveParseFlow = () => {
+    if (!parsing) return true;
+    showParsingNavigationAlert();
+    return false;
+  };
+
+  const handleHeaderBack = () => {
+    if (!canLeaveParseFlow()) return;
+    onBack();
+  };
+
+  const handleHeaderSettings = () => {
+    if (!canLeaveParseFlow()) return;
+    onOpenSettings();
+  };
+
   return (
     <View
       style={{ flex: 1, backgroundColor: isFullCount ? "#1F1212" : "#121212" }}
@@ -2133,7 +2365,10 @@ export default function InventoryCaptureScreen({
           borderBottomColor: isFullCount ? "#3F1818" : "#2A2A2A",
         }}
       >
-        <Pressable onPress={onBack} style={{ padding: 8, marginLeft: -8 }}>
+        <Pressable
+          onPress={handleHeaderBack}
+          style={{ padding: 8, marginLeft: -8 }}
+        >
           <Text style={{ color: "#E07A2F", fontSize: 16, fontWeight: "600" }}>
             ← Quay lại
           </Text>
@@ -2179,7 +2414,7 @@ export default function InventoryCaptureScreen({
           </Text>
         </View>
         <Pressable
-          onPress={onOpenSettings}
+          onPress={handleHeaderSettings}
           style={{ padding: 8, marginRight: -8 }}
         >
           <Text style={{ color: "#B8B3A8", fontSize: 20 }}>⚙️</Text>
@@ -2208,7 +2443,11 @@ export default function InventoryCaptureScreen({
         }}
       >
         <Pressable
-          onPress={() => setSnapMode("IMPORT")}
+          onPress={() => {
+            if (!canLeaveParseFlow()) return;
+            setCurrentAreaType(resolveCaptureArea(model, "import"));
+            setSnapMode("IMPORT");
+          }}
           style={{
             flex: 1,
             paddingVertical: 10,
@@ -2228,7 +2467,11 @@ export default function InventoryCaptureScreen({
           </Text>
         </Pressable>
         <Pressable
-          onPress={() => setSnapMode("SALES")}
+          onPress={() => {
+            if (!canLeaveParseFlow()) return;
+            setCurrentAreaType(resolveCaptureArea(model, "sales"));
+            setSnapMode("SALES");
+          }}
           style={{
             flex: 1,
             paddingVertical: 10,
@@ -2249,6 +2492,7 @@ export default function InventoryCaptureScreen({
         </Pressable>
         <Pressable
           onPress={async () => {
+            if (!canLeaveParseFlow()) return;
             // When switching from SALES/IMPORT to STOCK:
             // - Renew rebaseline: force Warehouse full count first, then Bar baseline.
             // - STANDARD normal flow: require SALES before BAR stock check.
@@ -2298,7 +2542,26 @@ export default function InventoryCaptureScreen({
         </Pressable>
       </View>
 
-      <ScrollView style={{ flex: 1, padding: 16 }}>
+      <FlatList
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: 16 }}
+        data={items}
+        keyExtractor={(item) => item.clientKey}
+        keyboardShouldPersistTaps="handled"
+        removeClippedSubviews
+        initialNumToRender={10}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        extraData={{
+          activeDropdown,
+          searchQuery,
+          expiryPickerTargetKey,
+          expiryPickerValue,
+          snapMode,
+          ingredients,
+        }}
+        ListHeaderComponent={
+          <>
         {/* MODEL-BASED ALERTS & LABELS */}
         {isStandard && snapMode === "STOCK" && currentAreaType === "BAR" && (
           <IncomingLogCard items={incomingItems} />
@@ -2329,7 +2592,9 @@ export default function InventoryCaptureScreen({
             </Text>
             <Pressable
               onPress={() =>
-                setCurrentAreaId(currentAreaId === "bar" ? "warehouse" : "bar")
+                setCurrentAreaType((previous) =>
+                  previous === "BAR" ? "WAREHOUSE" : "BAR",
+                )
               }
               style={{
                 flexDirection: "row",
@@ -2344,19 +2609,19 @@ export default function InventoryCaptureScreen({
               }}
             >
               <Text style={{ fontSize: 16, marginRight: 8 }}>
-                {!currentAreaId || currentAreaId === "warehouse" ? "🏭" : "🍷"}
+                {currentAreaType === "BAR" ? "🍷" : "🏭"}
               </Text>
               <Text
                 style={{
                   color:
-                    !currentAreaId || currentAreaId === "warehouse"
+                    currentAreaType !== "BAR"
                       ? "#E07A2F"
                       : "#6B8E23",
                   fontWeight: "700",
                   fontSize: 14,
                 }}
               >
-                {!currentAreaId || currentAreaId === "warehouse"
+                {currentAreaType !== "BAR"
                   ? "Kho Tổng"
                   : "Quầy Bar"}
               </Text>
@@ -2542,23 +2807,61 @@ export default function InventoryCaptureScreen({
         )}
 
         {canRetryHighAccuracy && imageUris.length > 0 && (
-          <Pressable
+          <TouchableOpacity
             onPress={() => handleParseImage("high_accuracy")}
             disabled={parsing}
-            style={{
-              backgroundColor: "#1A1A1A",
-              padding: 14,
-              borderRadius: 10,
-              alignItems: "center",
-              marginBottom: 16,
-              borderWidth: 1,
-              borderColor: "#E07A2F",
-            }}
+            activeOpacity={0.75}
+            style={[
+              {
+                width: "100%",
+                minHeight: 52,
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+                borderRadius: 12,
+                alignItems: "center",
+                justifyContent: "center",
+                marginBottom: 16,
+                borderWidth: 1,
+                borderColor: "#E07A2F",
+                backgroundColor: "#1A1A1A",
+              },
+              isRetryingHighAccuracy
+                ? {
+                    backgroundColor: "#E07A2F",
+                    borderColor: "#F59E0B",
+                    elevation: 2,
+                  }
+                : null,
+              parsing && !isRetryingHighAccuracy ? { opacity: 0.55 } : null,
+            ]}
           >
-            <Text style={{ color: "#E07A2F", fontWeight: "700" }}>
-              Quét lại chính xác hơn (+1 lượt)
-            </Text>
-          </Pressable>
+            {isRetryingHighAccuracy ? (
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <ActivityIndicator color="#FFFFFF" size="small" />
+                <Text
+                  style={{
+                    color: "#FFFFFF",
+                    fontWeight: "700",
+                    marginLeft: 8,
+                  }}
+                >
+                  Đang quét lại chính xác hơn...
+                </Text>
+              </View>
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Ionicons
+                  name="sparkles"
+                  size={17}
+                  color="#E07A2F"
+                  style={{ marginRight: 8 }}
+                />
+                <Text style={{ color: "#E07A2F", fontWeight: "700" }}>
+                  Quét lại chính xác hơn (+1 lượt)
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
         )}
 
         {/* Warnings */}
@@ -2846,19 +3149,31 @@ export default function InventoryCaptureScreen({
           );
         })()}
 
-        {/* Items list */}
-        {items.map((item, index) => {
-          const style = getConfidenceStyle(item.confidence, item.quantity);
-          const needsMapping =
-            !item.linkedIngredientId && !item.isNewIngredient;
-          const salesCritical =
-            snapMode === "SALES" &&
-            (item.internalInconsistent ||
-              ((item.revenueDeviation ?? 0) > 0.10 && !item.menuPriceDiffers));
+          </>
+        }
+        renderItem={({ item }) => (
+          <InventoryCaptureItemRow
+            item={item}
+            snapMode={snapMode}
+            activeDropdown={activeDropdown}
+            searchQuery={searchQuery}
+            expiryPickerTargetKey={expiryPickerTargetKey}
+            expiryPickerValueTime={expiryPickerValue.getTime()}
+            ingredients={ingredients}
+            recipes={recipes}
+            warehouseFullCount={isWarehouseFullCountMode()}
+            render={(item) => {
+              const style = getConfidenceStyle(item.confidence, item.quantity);
+              const needsMapping =
+                !item.linkedIngredientId && !item.isNewIngredient;
+              const salesCritical =
+                snapMode === "SALES" &&
+                (item.internalInconsistent ||
+                  ((item.revenueDeviation ?? 0) > 0.10 &&
+                    !item.menuPriceDiffers));
 
-          return (
+              return (
             <View
-              key={index}
               style={{
                 backgroundColor: "#1A1A1A",
                 borderRadius: 12,
@@ -3061,7 +3376,9 @@ export default function InventoryCaptureScreen({
               {/* Ingredient Link (Autocomplete) */}
               <Pressable
                 onPress={() =>
-                  setActiveDropdown(activeDropdown === index ? null : index)
+                  setActiveDropdown(
+                    activeDropdown === item.clientKey ? null : item.clientKey,
+                  )
                 }
                 style={{
                   backgroundColor: "#121212",
@@ -3092,7 +3409,7 @@ export default function InventoryCaptureScreen({
               </Pressable>
 
               {/* Dropdown */}
-              {activeDropdown === index && (
+              {activeDropdown === item.clientKey && (
                 <View
                   style={{
                     backgroundColor: "#1A1A1A",
@@ -3122,7 +3439,7 @@ export default function InventoryCaptureScreen({
                     {getFilteredSuggestions().map((ing) => (
                       <Pressable
                         key={ing.id}
-                        onPress={() => linkIngredient(index, ing)}
+                        onPress={() => linkIngredient(item.clientKey, ing)}
                         style={{
                           padding: 12,
                           borderBottomWidth: 1,
@@ -3144,7 +3461,7 @@ export default function InventoryCaptureScreen({
                     {/* Create new ingredient button - HIDDEN for SALES mode */}
                     {snapMode !== "SALES" && (
                       <Pressable
-                        onPress={() => markAsNew(index)}
+                        onPress={() => markAsNew(item.clientKey)}
                         style={{ padding: 12, backgroundColor: "#1A1A1A" }}
                       >
                         <Text style={{ color: "#E07A2F" }}>
@@ -3171,10 +3488,10 @@ export default function InventoryCaptureScreen({
                   </Text>
                 </View>
                 <View style={{ flexDirection: "row", gap: 8 }}>
-                  <TextInput
+                  <BufferedTextInput
                     value={String(item.quantity)}
-                    onChangeText={(t) =>
-                      updateItem(index, "quantity", parseFloat(t) || 0)
+                    onCommitText={(t) =>
+                      updateItem(item.clientKey, "quantity", parseNumericField(t))
                     }
                     keyboardType="numeric"
                     placeholder="0"
@@ -3189,9 +3506,9 @@ export default function InventoryCaptureScreen({
                       borderColor: "#2A2A2A",
                     }}
                   />
-                  <TextInput
+                  <BufferedTextInput
                     value={item.unit}
-                    onChangeText={(t) => updateItem(index, "unit", t)}
+                    onCommitText={(t) => updateItem(item.clientKey, "unit", t)}
                     placeholder="đơn vị"
                     placeholderTextColor="#475569"
                     style={{
@@ -3209,45 +3526,35 @@ export default function InventoryCaptureScreen({
 
               {/* 🧮 LIVE FEEDBACK - TARE & DENSITY */}
               {(() => {
-                const matched = ingredients.find(
-                  (ing) => ing.id === item.linkedIngredientId,
-                );
-                const isVolumeBased =
-                  matched &&
-                  (matched.base_unit === "ml" ||
-                    matched.base_unit === "l" ||
-                    matched.base_unit === "lít");
-                const isWeightInput = item.unit === "g" || item.unit === "kg";
+                const matched = item.linkedIngredientId
+                  ? ingredientById.get(item.linkedIngredientId)
+                  : null;
+                const volumeFeedback = getVolumeWeightFeedback({
+                  baseUnit: matched?.base_unit,
+                  inputUnit: item.unit,
+                  quantity: item.quantity,
+                  tareWeight: matched?.tare_weight,
+                  density: matched?.density,
+                });
 
-                if (isVolumeBased && isWeightInput) {
-                  const netMl = calculateNetVolume(
-                    item.quantity,
-                    item.unit,
-                    matched.tare_weight || 0,
-                    matched.density || 1,
+                if (volumeFeedback?.kind === "invalid") {
+                  return (
+                    <View
+                      style={{
+                        backgroundColor: "#FEF2F2",
+                        padding: 8,
+                        borderRadius: 8,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <Text style={{ color: "#DC2626", fontSize: 12 }}>
+                        ⚠️ Trọng lượng không hợp lệ (nhỏ hơn tare)
+                      </Text>
+                    </View>
                   );
+                }
 
-                  if (netMl === null || netMl === -1) {
-                    // 🔔 Haptic feedback for invalid weight
-                    Haptics.notificationAsync(
-                      Haptics.NotificationFeedbackType.Error,
-                    );
-                    return (
-                      <View
-                        style={{
-                          backgroundColor: "#FEF2F2",
-                          padding: 8,
-                          borderRadius: 8,
-                          marginBottom: 8,
-                        }}
-                      >
-                        <Text style={{ color: "#DC2626", fontSize: 12 }}>
-                          ⚠️ Trọng lượng không hợp lệ (nhỏ hơn tare)
-                        </Text>
-                      </View>
-                    );
-                  }
-
+                if (volumeFeedback?.kind === "converted" && matched) {
                   return (
                     <View
                       style={{
@@ -3258,7 +3565,7 @@ export default function InventoryCaptureScreen({
                       }}
                     >
                       <Text style={{ color: "#94A3B8", fontSize: 12 }}>
-                        📊 Quy đổi: {netMl!.toFixed(0)}ml (trừ bình{" "}
+                        📊 Quy đổi: {volumeFeedback.netMl.toFixed(0)}ml (trừ bình{" "}
                         {matched.tare_weight}g, tỷ trọng {matched.density})
                       </Text>
                     </View>
@@ -3280,10 +3587,14 @@ export default function InventoryCaptureScreen({
                   <Text style={{ color: "#94A3B8", fontSize: 12 }}>
                     Đơn giá:
                   </Text>
-                  <TextInput
+                  <BufferedTextInput
                     value={item.unitCost ? String(item.unitCost) : ""}
-                    onChangeText={(t) =>
-                      updateItem(index, "unitCost", parseFloat(t) || null)
+                    onCommitText={(t) =>
+                      updateItem(
+                        item.clientKey,
+                        "unitCost",
+                        parseNumericField(t) || null,
+                      )
                     }
                     keyboardType="numeric"
                     placeholder="VND"
@@ -3309,7 +3620,7 @@ export default function InventoryCaptureScreen({
                     );
                     const isAutoExpiry = !!shelfLifeDays;
                     const expiryDisplay = formatExpiryDisplay(item.expiryDate);
-                    const isPickerOpen = expiryPickerTargetIndex === index;
+                    const isPickerOpen = expiryPickerTargetKey === item.clientKey;
                     return (
                       <>
                         <Text style={{ color: "#94A3B8", fontSize: 12, marginBottom: 4 }}>
@@ -3332,7 +3643,10 @@ export default function InventoryCaptureScreen({
                         ) : (
                           <Pressable
                             onPress={() =>
-                              openExpiryPickerForItem(index, item.expiryDate ?? null)
+                              openExpiryPickerForItem(
+                                item.clientKey,
+                                item.expiryDate ?? null,
+                              )
                             }
                             style={{
                               backgroundColor: "#121212",
@@ -3374,7 +3688,7 @@ export default function InventoryCaptureScreen({
                                   marginTop: 6,
                                 }}
                               >
-                                <Pressable onPress={() => setExpiryPickerTargetIndex(null)}>
+                                <Pressable onPress={() => setExpiryPickerTargetKey(null)}>
                                   <Text style={{ color: "#94A3B8", fontSize: 13 }}>Đóng</Text>
                                 </Pressable>
                               </View>
@@ -3394,7 +3708,7 @@ export default function InventoryCaptureScreen({
 
               {/* Remove */}
               <Pressable
-                onPress={() => removeItem(index)}
+                onPress={() => removeItem(item.clientKey)}
                 style={{ paddingVertical: 8 }}
               >
                 <Text
@@ -3405,15 +3719,21 @@ export default function InventoryCaptureScreen({
                     fontWeight: "500",
                   }}
                 >
-                  ✕ Xóa mục này
+                  {isWarehouseFullCountMode()
+                    ? "⚙ Xử lý mục này"
+                    : "✕ Xóa mục này"}
                 </Text>
               </Pressable>
             </View>
-          );
-        })}
+              );
+            }}
+          />
+        )}
 
-        {/* Save button */}
-        {items.length > 0 && (
+        ListFooterComponent={
+          <>
+            {/* Save button */}
+            {items.length > 0 && (
           <Pressable
             onPress={async () => {
               if (!canSave || saveInFlightRef.current) return;
@@ -3427,7 +3747,8 @@ export default function InventoryCaptureScreen({
                 itemCount: items.length,
               });
 
-              try {
+              await runInventorySaveOperation(
+                async () => {
                 if (hasSalesTotalMismatch) {
                   const confirmed = await confirmSalesMismatchBeforeSave();
                   if (!confirmed) return;
@@ -3458,12 +3779,13 @@ export default function InventoryCaptureScreen({
                   }
                 }
 
-                if (
-                  snapMode === "STOCK" &&
-                  currentCheckMode !== "SPOT" &&
-                  !isProRebaselineCheck
-                ) {
-                  const guardScope = getStockSalesGuardScope();
+                if (snapMode === "STOCK") {
+                  const guardScope = getStockSalesGuardScope({
+                    inventoryModel: model,
+                    area: currentAreaType,
+                    checkMode: currentCheckMode,
+                    isProRebaselineCheck,
+                  });
                   if (guardScope) {
                     console.log("[Capture SAVE] checking sales prerequisite", {
                       guardScope,
@@ -3484,6 +3806,34 @@ export default function InventoryCaptureScreen({
                 stockUnitLearningItemsRef.current = displayItemsForLearning;
                 if (snapMode === "IMPORT") {
                   setItems(itemsForSave);
+                }
+
+                if (snapMode === "STOCK") {
+                  if (currentAreaType === "WAREHOUSE") {
+                    const packViolations = validateWarehousePurchasePacks(
+                      itemsForSave,
+                      ingredients,
+                    );
+                    if (packViolations.length > 0) {
+                      showWarehousePackViolations(packViolations);
+                      return;
+                    }
+                  }
+
+                  const stockConfirmed = await confirmStockSave(
+                    buildStockSaveConfirmation({
+                      areaType:
+                        currentAreaType === "BAR" ? "BAR" : "WAREHOUSE",
+                      checkMode:
+                        currentAreaType === "BAR"
+                          ? "BAR"
+                          : currentCheckMode || "FULL",
+                      items: itemsForSave,
+                      ingredients,
+                      preservedIngredientIds: preservedFullCountIngredientIds,
+                    }),
+                  );
+                  if (!stockConfirmed) return;
                 }
 
                 // === VARIANCE GATEKEEPER (STOCK Mode Only) ===
@@ -3699,7 +4049,6 @@ export default function InventoryCaptureScreen({
                 }
 
                 // === SAVE TO DB ===
-                try {
                 const db = await getDB();
 
                 // === STEP 1: AUTO-LEARN ALIASES ===
@@ -3818,9 +4167,24 @@ export default function InventoryCaptureScreen({
                     "ALTER TABLE pending_sync_logs ADD COLUMN unit_cost_at_time REAL",
                   );
                 } catch {}
+                try {
+                  await db.execAsync(
+                    "ALTER TABLE pending_sync_logs ADD COLUMN area_id TEXT",
+                  );
+                } catch {}
 
                 const location =
                   currentAreaType === "BAR" ? "BAR" : "WAREHOUSE";
+                const operationAreaId = await ensureLocalAreaForLocation(
+                  db,
+                  location,
+                );
+                if (isStandard && !operationAreaId) {
+                  throw new Error(
+                    "Chưa đồng bộ được khu vực kho. Vui lòng đồng bộ dữ liệu rồi thử lại.",
+                  );
+                }
+                const syncAreaId = isStandard ? operationAreaId : null;
                 const now = new Date().toISOString();
                 const stockCheckType =
                   currentAreaType === "BAR"
@@ -3863,14 +4227,15 @@ export default function InventoryCaptureScreen({
 
                   await db.runAsync(
                     `INSERT INTO pending_sync_logs (
-                      id, type, location, 
+                      id, type, location, area_id,
                       ai_parsed_json, 
                       created_at, synced
-                    ) VALUES (?, ?, ?, ?, ?, 0)`,
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0)`,
                     [
                       logId,
                       "SALES",
                       location,
+                      syncAreaId,
                       JSON.stringify({
                         items: salesPayloadItems,
                         total_revenue: totalRevenue,
@@ -3908,7 +4273,7 @@ export default function InventoryCaptureScreen({
 
                     await db.runAsync(
                       `INSERT INTO pending_sync_logs (
-                        id, type, location, 
+                        id, type, location, area_id,
                         ingredient_id, 
                         quantity_change_base, 
                         unit_cost_at_time,
@@ -3916,11 +4281,12 @@ export default function InventoryCaptureScreen({
                         final_confirmed_quantity,
                         ai_parsed_json, 
                         created_at, synced
-                      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+                      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
                       [
                         logId,
                         snapMode,
                         location,
+                        syncAreaId,
                         item.linkedIngredientId || null,
                         item.quantity, // IMPORT: qty change = item quantity
                         item.unitCost || 0,
@@ -3956,14 +4322,15 @@ export default function InventoryCaptureScreen({
 
                   await db.runAsync(
                     `INSERT INTO pending_sync_logs (
-                      id, type, location,
+                      id, type, location, area_id,
                       ai_parsed_json,
                       created_at, synced
-                    ) VALUES (?, ?, ?, ?, ?, 0)`,
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0)`,
                     [
                       logId,
                       snapMode,
                       location,
+                      syncAreaId,
                       JSON.stringify({
                         check_type: stockCheckType,
                         location: currentAreaType || "WAREHOUSE",
@@ -3994,6 +4361,7 @@ export default function InventoryCaptureScreen({
                   location,
                   itemsForSave,
                   now,
+                  operationAreaId,
                 );
 
                 // === STEP 3: SPECIAL HANDLING FOR FULL_COUNT ===
@@ -4005,9 +4373,15 @@ export default function InventoryCaptureScreen({
                   const countedIds = itemsForSave
                     .map((i) => i.linkedIngredientId)
                     .filter((id): id is string => !!id);
+                  const resetProtectedIds = Array.from(
+                    new Set([
+                      ...countedIds,
+                      ...preservedFullCountIngredientIds,
+                    ]),
+                  );
 
                   await InventoryService.resetUncountedWarehouseStock(
-                    countedIds,
+                    resetProtectedIds,
                   );
 
                   // Also need to create logs for these zeroed items?
@@ -4052,7 +4426,8 @@ export default function InventoryCaptureScreen({
                 });
 
                 onBack();
-              } catch (err) {
+              },
+              async (err) => {
                 console.error("Save failed:", err);
                 await Haptics.notificationAsync(
                   Haptics.NotificationFeedbackType.Error,
@@ -4061,11 +4436,12 @@ export default function InventoryCaptureScreen({
                   "Lỗi",
                   err instanceof Error ? err.message : "Không thể lưu dữ liệu",
                 );
-              }
-              } finally {
+              },
+              () => {
                 saveInFlightRef.current = false;
                 setIsSaving(false);
-              }
+              },
+            );
             }}
             disabled={!canSave || isSaving}
             style={{
@@ -4087,8 +4463,97 @@ export default function InventoryCaptureScreen({
                     : "⚠️ Chọn nguyên liệu"}
             </Text>
           </Pressable>
-        )}
-      </ScrollView>
+            )}
+          </>
+        }
+      />
+
+      <Modal
+        visible={!!fullCountActionTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFullCountActionTarget(null)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.72)",
+            justifyContent: "center",
+            padding: 24,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: "#1A1A1A",
+              borderRadius: 12,
+              padding: 18,
+              borderWidth: 1,
+              borderColor: "#2A2A2A",
+            }}
+          >
+            <Text
+              style={{ color: "#F5F3EF", fontSize: 18, fontWeight: "700" }}
+            >
+              Xử lý mục kiểm kho
+            </Text>
+            <Text
+              style={{
+                color: "#B8B3A8",
+                fontSize: 13,
+                marginTop: 8,
+                marginBottom: 14,
+                lineHeight: 18,
+              }}
+            >
+              "{fullCountActionTarget?.title}" nên xử lý thế nào?
+            </Text>
+
+            {fullCountItemActions.map((action) => (
+              <Pressable
+                key={action.id}
+                onPress={() => handleFullCountItemAction(action.id)}
+                style={{
+                  paddingVertical: 12,
+                  borderTopWidth: 1,
+                  borderTopColor: "#2A2A2A",
+                }}
+              >
+                <Text
+                  style={{
+                    color: action.destructive ? "#EF4444" : "#10B981",
+                    fontSize: 14,
+                    fontWeight: "700",
+                  }}
+                >
+                  {action.label}
+                </Text>
+                <Text
+                  style={{
+                    color: "#94A3B8",
+                    fontSize: 12,
+                    marginTop: 3,
+                    lineHeight: 16,
+                  }}
+                >
+                  {action.description}
+                </Text>
+              </Pressable>
+            ))}
+
+            <Pressable
+              onPress={() => setFullCountActionTarget(null)}
+              style={{
+                paddingVertical: 12,
+                borderTopWidth: 1,
+                borderTopColor: "#2A2A2A",
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "#94A3B8", fontWeight: "700" }}>Hủy</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       {/* Raw OCR Modal — show full text AI đã đọc để user verify */}
       <Modal
@@ -4171,6 +4636,16 @@ export default function InventoryCaptureScreen({
             const logId = Crypto.randomUUID();
             const now = new Date().toISOString();
             const location = currentAreaType === "BAR" ? "BAR" : "WAREHOUSE";
+            const operationAreaId = await ensureLocalAreaForLocation(
+              db,
+              location,
+            );
+            if (isStandard && !operationAreaId) {
+              throw new Error(
+                "Chưa đồng bộ được khu vực kho. Vui lòng đồng bộ dữ liệu rồi thử lại.",
+              );
+            }
+            const syncAreaId = isStandard ? operationAreaId : null;
             const stockCheckType =
               currentAreaType === "BAR" ? "BAR" : currentCheckMode || "FULL";
             const itemsForSave = items.map((item) =>
@@ -4184,14 +4659,15 @@ export default function InventoryCaptureScreen({
             // Create single batch log with all items
             await db.runAsync(
               `INSERT INTO pending_sync_logs (
-                id, type, location,
+                id, type, location, area_id,
                 ai_parsed_json,
                 created_at, synced
-              ) VALUES (?, ?, ?, ?, ?, 0)`,
+              ) VALUES (?, ?, ?, ?, ?, ?, 0)`,
               [
                 logId,
                 snapMode,
                 location,
+                syncAreaId,
                 JSON.stringify({
                   check_type: stockCheckType,
                   location: currentAreaType || "WAREHOUSE",
@@ -4223,6 +4699,7 @@ export default function InventoryCaptureScreen({
               location,
               itemsForSave,
               now,
+              operationAreaId,
             );
             await learnStockCheckUnits(db, displayItemsForLearning);
 

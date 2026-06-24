@@ -3,12 +3,13 @@
  * Excel export with Save As dialog (per user feedback)
  */
 
-import { ipcMain, dialog, BrowserWindow } from "electron";
+import { ipcMain, dialog } from "electron";
 import * as XLSX from "xlsx";
 import fs from "fs";
 import {
   calculateInventoryItemValue,
   formatInventoryQuantity,
+  formatWarehouseInventoryQuantity,
   getInventoryDisplayQuantities,
   getInventoryDisplayUnits,
   getInventoryQuantitiesInBase,
@@ -31,7 +32,7 @@ function formatDateForFilename(): string {
 /**
  * Register export IPC handlers
  */
-export function registerExportIPC(mainWindow: BrowserWindow | null): void {
+export function registerExportIPC(): void {
   // Export ingredients to Excel with Save As dialog
   ipcMain.handle(
     "export:excel",
@@ -44,6 +45,9 @@ export function registerExportIPC(mainWindow: BrowserWindow | null): void {
         warehouse_qty: number;
         bar_qty: number;
         unit_cost: number;
+        last_purchase_price?: number | null;
+        last_purchase_qty?: number | null;
+        last_purchase_unit?: string | null;
         density?: number | null;
         unit_weight?: number | null;
         unit_weight_unit?: string | null;
@@ -64,15 +68,15 @@ export function registerExportIPC(mainWindow: BrowserWindow | null): void {
         // 2. Transform data for Vietnamese headers
         const exportData = data.map((item, index) => {
           const { totalQtyInBase } = getInventoryQuantitiesInBase(item);
-          const { warehouseUnit, barUnit } = getInventoryDisplayUnits(item);
-          const { warehouseQty, barQty } = getInventoryDisplayQuantities(item);
+          const { barUnit } = getInventoryDisplayUnits(item);
+          const { barQty } = getInventoryDisplayQuantities(item);
 
           return {
             STT: index + 1,
             "Tên nguyên liệu": item.name,
             "Đơn vị kho": item.base_unit || "N/A",
-            "SL Kho": formatInventoryQuantity(warehouseQty, warehouseUnit, item),
-            "Đơn vị quầy": barUnit || warehouseUnit || "N/A",
+            "SL Kho": formatWarehouseInventoryQuantity(item),
+            "Đơn vị quầy": barUnit || item.base_unit || "N/A",
             "SL Quầy": formatInventoryQuantity(barQty, barUnit, item),
             "Tổng SL (đv kho)": totalQtyInBase,
             "Đơn giá / ĐV gốc (VNĐ)": item.unit_cost,

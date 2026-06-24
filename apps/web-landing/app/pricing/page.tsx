@@ -139,6 +139,8 @@ const PLAN_COPY = {
     features: [
       "20 lượt scan/tháng",
       "Quản lý kho cơ bản",
+      "Cloud sync đa thiết bị",
+      "Quản lý nhân viên và chống gian lận",
       "Phù hợp để làm quen quy trình",
     ],
   },
@@ -150,9 +152,8 @@ const PLAN_COPY = {
     button: "Chọn gói Pro",
     features: [
       "100 lượt scan/tháng",
-      "Cloud sync đa thiết bị",
-      "Duyệt nhân viên và phân quyền",
       "Kho chuẩn cho F&B",
+      "Tất cả tính năng Free có"
     ],
   },
   CHAIN: {
@@ -162,8 +163,8 @@ const PLAN_COPY = {
     accent: "border-[#6B8E23] shadow-md",
     button: "Chọn gói Chain",
     features: [
-      "500 lượt scan/tháng",
-      "Tất cả tính năng Pro",
+      "250 lượt scan/outlet/tháng",
+      "Tất cả tính năng Pro có",
       "Kho Model C / nhiều khu vực",
       "Ưu tiên cho vận hành chuỗi",
     ],
@@ -195,26 +196,19 @@ function PricingPageContent() {
   const [user, setUser] = useState<User | null>(null);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
+  const [chainOutletCount, setChainOutletCount] = useState(2);
   const [selectedPlanCode, setSelectedPlanCode] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [payosUrl, setPayosUrl] = useState<string | null>(null);
+  const [verifiedPaymentStatus, setVerifiedPaymentStatus] = useState<
+    "PENDING" | "SUCCESS" | "FAILED" | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
 
-  const paymentStatus = searchParams.get("status");
-  const paymentCode = searchParams.get("code");
-  const cancelParam = searchParams.get("cancel");
-
-  const isPaymentCancelled =
-    paymentStatus === "cancelled" ||
-    paymentStatus === "CANCELLED" ||
-    cancelParam === "true";
-
-  const isPaymentSuccess =
-    !isPaymentCancelled &&
-    (paymentStatus === "success" ||
-      paymentStatus === "PAID" ||
-      paymentCode === "00");
+  const paymentId = searchParams.get("paymentId");
+  const isPaymentCancelled = searchParams.get("cancelled") === "true";
+  const isPaymentSuccess = verifiedPaymentStatus === "SUCCESS";
 
   useEffect(() => {
     const init = async () => {
@@ -259,6 +253,36 @@ function PricingPageContent() {
     setSelectedPlanCode(null);
   }, [billingCycle]);
 
+  useEffect(() => {
+    if (!paymentId || isPaymentCancelled) return;
+
+    let active = true;
+    let attempts = 0;
+    const poll = async () => {
+      attempts += 1;
+      try {
+        const { apiFetch } = await import("@/lib/backendClient");
+        const result = await apiFetch<{
+          status: "PENDING" | "SUCCESS" | "FAILED";
+        }>(`/payments/${paymentId}/status`);
+        if (!active) return;
+        setVerifiedPaymentStatus(result.status);
+        if (result.status !== "PENDING") return;
+      } catch {
+        if (active && attempts >= 3) {
+          setError("Chưa thể xác minh thanh toán. Hệ thống sẽ tiếp tục kiểm tra.");
+        }
+      }
+
+      if (active && attempts < 90) window.setTimeout(poll, 2000);
+    };
+
+    void poll();
+    return () => {
+      active = false;
+    };
+  }, [isPaymentCancelled, paymentId]);
+
   const planByCode = useMemo(() => {
     const map = new Map<string, SubscriptionPlan>();
     for (const plan of CANONICAL_PLANS) map.set(plan.code, plan);
@@ -277,6 +301,17 @@ function PricingPageContent() {
     planByCode.get(`CHAIN_${currentSuffix}`) ??
     planByCode.get("CHAIN_MONTHLY") ??
     CANONICAL_PLANS[4];
+  const chainMultiplier =
+    billingCycle === "quarterly"
+      ? 3 * 0.9
+      : billingCycle === "yearly"
+        ? 12 * 0.8
+        : 1;
+  const displayedChainPlan: SubscriptionPlan = {
+    ...chainPlan,
+    price: Math.round(269000 * chainOutletCount * chainMultiplier),
+    monthly_scans_quota: 250 * chainOutletCount,
+  };
 
   const createPayment = async (plan: SubscriptionPlan) => {
     if (plan.price <= 0) {
@@ -286,6 +321,16 @@ function PricingPageContent() {
 
     if (!user) {
       router.push("/auth/register");
+      return;
+    }
+
+    if (plan.target_tier === "CHAIN") {
+      const params = new URLSearchParams({
+        planCode: plan.code,
+        outletCount: String(chainOutletCount),
+        purchaseMode: "SUBSCRIPTION",
+      });
+      router.push(`/chain/setup?${params.toString()}`);
       return;
     }
 
@@ -300,15 +345,18 @@ function PricingPageContent() {
       const { apiFetch } = await import("@/lib/backendClient");
       const origin = window.location.origin;
 
-      const data = await apiFetch<{ checkoutUrl?: string; error?: string }>(
+      const data = await apiFetch<{
+        paymentId: string;
+        orderCode: string;
+        checkoutUrl?: string;
+        error?: string;
+      }>(
         "/payments/create-link",
         {
           method: "POST",
           body: JSON.stringify({
             planCode: plan.code,
             origin,
-            returnUrl: `${origin}/pricing?status=success`,
-            cancelUrl: `${origin}/pricing?status=cancelled`,
           }),
         },
       );
@@ -503,6 +551,35 @@ function PricingPageContent() {
     );
   }
 
+  if (paymentId && !isPaymentSuccess) {
+    return (
+      <div className="min-h-screen bg-[#FAF9F7]">
+        <NavBar />
+        <div className="px-4 pb-20 pt-28">
+          <div className="mx-auto max-w-md text-center">
+            <h1 className="mb-4 text-3xl font-bold text-[#1E1E1E]">
+              {verifiedPaymentStatus === "FAILED"
+                ? "Thanh toán chưa hoàn tất"
+                : "Đang xác minh thanh toán"}
+            </h1>
+            <p className="mb-8 text-[#6F6B63]">
+              {verifiedPaymentStatus === "FAILED"
+                ? "Đơn thanh toán không còn hiệu lực. Gói cước chưa được kích hoạt."
+                : "SnapKO chỉ kích hoạt gói sau khi nhận webhook xác nhận từ PayOS."}
+            </p>
+            {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+            <button
+              onClick={() => router.replace("/pricing")}
+              className="block w-full rounded-lg bg-[#E07A2F] px-6 py-3 text-center font-semibold text-white"
+            >
+              Quay lại bảng giá
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-[#FAF9F7]">
@@ -553,10 +630,30 @@ function PricingPageContent() {
             </div>
           </div>
 
+          <div className="mx-auto mb-8 max-w-sm rounded-lg border border-[#E0DCD5] bg-white p-4 text-center">
+            <label className="mb-2 block text-sm font-semibold text-[#1E1E1E]">
+              Số outlet cho gói Chain
+            </label>
+            <select
+              value={chainOutletCount}
+              onChange={(event) => setChainOutletCount(Number(event.target.value))}
+              className="w-full rounded-md border border-[#E0DCD5] px-3 py-2"
+            >
+              {Array.from({ length: 9 }, (_, index) => index + 2).map((count) => (
+                <option key={count} value={count}>
+                  {count} outlet
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs text-[#6F6B63]">
+              Kho tổng không tính phí. Từ 11 outlet vui lòng liên hệ admin.
+            </p>
+          </div>
+
           <div className="grid gap-6 lg:grid-cols-3">
             {renderPlanCard("FREE", freePlan)}
             {renderPlanCard("PRO", proPlan)}
-            {renderPlanCard("CHAIN", chainPlan)}
+            {renderPlanCard("CHAIN", displayedChainPlan)}
           </div>
 
           {error && (

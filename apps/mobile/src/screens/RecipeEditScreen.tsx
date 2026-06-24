@@ -15,12 +15,9 @@ import {
   FlatList,
   Alert,
 } from "react-native";
-import * as SQLite from "expo-sqlite";
 import { getDB } from "../db";
-import * as Haptics from "expo-haptics";
 import * as Crypto from "expo-crypto";
 import {
-  convertUnits,
   areUnitsCompatible,
   calculateGrossProfit,
   calculateGrossProfitMargin,

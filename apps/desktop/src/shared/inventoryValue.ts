@@ -1,12 +1,24 @@
-type InventoryQuantityInput = {
+export type InventoryQuantityInput = {
   base_unit?: string | null;
   stock_check_unit?: string | null;
   warehouse_qty?: number | null;
   bar_qty?: number | null;
   unit_cost?: number | null;
+  last_purchase_price?: number | null;
+  last_purchase_qty?: number | null;
+  last_purchase_unit?: string | null;
   density?: number | null;
   unit_weight?: number | null;
   unit_weight_unit?: string | null;
+  archived?: boolean | number | null;
+};
+
+export type PurchasePack = {
+  baseQty: number;
+  baseUnit: string;
+  price: number;
+  purchaseQty: number;
+  purchaseUnit: string;
 };
 
 const WEIGHT_UNITS = new Set(["mg", "g", "kg"]);
@@ -155,6 +167,59 @@ export function convertInventoryQuantity(
   return value;
 }
 
+function roundQuantity(value: number): number {
+  return Math.round((value + Number.EPSILON) * 1_000_000) / 1_000_000;
+}
+
+export function getPurchasePack(item: InventoryQuantityInput): PurchasePack | null {
+  const baseUnit = (item.base_unit ?? "").trim();
+  const purchaseUnit = (item.last_purchase_unit ?? baseUnit).trim();
+  const price = toFiniteNumber(item.last_purchase_price);
+  const purchaseQty = toFiniteNumber(item.last_purchase_qty);
+
+  if (!baseUnit || !purchaseUnit || price <= 0 || purchaseQty <= 0) {
+    return null;
+  }
+
+  const baseQty = convertInventoryQuantity(
+    purchaseQty,
+    purchaseUnit,
+    baseUnit,
+    item,
+  );
+
+  if (!Number.isFinite(baseQty) || baseQty <= 0) {
+    return null;
+  }
+
+  return {
+    baseQty: roundQuantity(baseQty),
+    baseUnit,
+    price,
+    purchaseQty,
+    purchaseUnit,
+  };
+}
+
+export function getPurchasePackCount(
+  quantityInBase: number,
+  item: InventoryQuantityInput,
+): number | null {
+  const pack = getPurchasePack(item);
+  if (!pack) return null;
+  return roundQuantity(toFiniteNumber(quantityInBase) / pack.baseQty);
+}
+
+export function calculateWarehousePackValue(
+  quantityInBase: number,
+  item: InventoryQuantityInput,
+): number | null {
+  const pack = getPurchasePack(item);
+  const packCount = getPurchasePackCount(quantityInBase, item);
+  if (!pack || packCount === null) return null;
+  return packCount * pack.price;
+}
+
 export function getInventoryQuantitiesInBase(item: InventoryQuantityInput) {
   const warehouseQtyInBase = toFiniteNumber(item.warehouse_qty);
   const barQtyInBase = toFiniteNumber(item.bar_qty);
@@ -166,9 +231,18 @@ export function getInventoryQuantitiesInBase(item: InventoryQuantityInput) {
   };
 }
 
+export function isActiveInventoryRow(item: Pick<InventoryQuantityInput, "archived">): boolean {
+  return item.archived !== true && item.archived !== 1;
+}
+
 export function calculateInventoryItemValue(item: InventoryQuantityInput): number {
-  const { totalQtyInBase } = getInventoryQuantitiesInBase(item);
-  return totalQtyInBase * toFiniteNumber(item.unit_cost);
+  const { warehouseQtyInBase, barQtyInBase } = getInventoryQuantitiesInBase(item);
+  const unitCost = toFiniteNumber(item.unit_cost);
+  const warehouseValue =
+    calculateWarehousePackValue(warehouseQtyInBase, item) ??
+    warehouseQtyInBase * unitCost;
+
+  return warehouseValue + barQtyInBase * unitCost;
 }
 
 export function getInventoryDisplayUnits(item: InventoryQuantityInput) {
@@ -188,6 +262,24 @@ export function getInventoryDisplayQuantities(item: InventoryQuantityInput) {
     warehouseQty: convertInventoryQuantity(warehouseQty, baseUnit, warehouseUnit, item),
     barQty: convertInventoryQuantity(barQty, baseUnit, barUnit, item),
   };
+}
+
+export function formatWarehouseInventoryQuantity(
+  item: InventoryQuantityInput,
+): string {
+  const pack = getPurchasePack(item);
+  const packCount = getPurchasePackCount(toFiniteNumber(item.warehouse_qty), item);
+
+  if (pack && packCount !== null) {
+    const maxDigits = Number.isInteger(packCount) ? 0 : 3;
+    return `${formatNumber(packCount, maxDigits)} hàng nguyên (${formatNumber(
+      pack.purchaseQty,
+    )} ${pack.purchaseUnit}/hàng)`;
+  }
+
+  const { warehouseUnit } = getInventoryDisplayUnits(item);
+  const { warehouseQty } = getInventoryDisplayQuantities(item);
+  return formatInventoryQuantity(warehouseQty, warehouseUnit, item);
 }
 
 function formatNumber(value: number, maximumFractionDigits = 3): string {

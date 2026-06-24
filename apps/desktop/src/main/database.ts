@@ -10,7 +10,19 @@ import { apiFetch, ApiFetchError } from "./apiClient";
 import {
   calculateInventoryItemValue,
   getInventoryQuantitiesInBase,
+  isActiveInventoryRow,
 } from "../shared/inventoryValue";
+import {
+  buildStockCheckValueSeries,
+  type StockCheckValueLog,
+  type StockCheckValueIngredient,
+} from "../shared/cogsMetrics";
+import {
+  buildLossBreakdown,
+  dedupeLossLogs,
+  type LossBreakdownLog,
+  type LossIngredientRow,
+} from "../shared/lossBreakdown";
 
 let db: Database.Database | null = null;
 let currentBusinessId: string | null = null;
@@ -21,11 +33,164 @@ type InventoryValuationRow = {
   warehouse_qty?: number | null;
   bar_qty?: number | null;
   unit_cost?: number | null;
+  last_purchase_price?: number | null;
+  last_purchase_qty?: number | null;
+  last_purchase_unit?: string | null;
   min_threshold?: number | null;
   density?: number | null;
   unit_weight?: number | null;
   unit_weight_unit?: string | null;
+  archived?: number | boolean | null;
 };
+
+type InventoryLogRow = {
+  id: string;
+  type?: string | null;
+  location?: string | null;
+  ai_parsed_json?: unknown;
+  staff_note?: string | null;
+  quantity_change_base?: number | null;
+  unit_cost_at_time?: number | null;
+  created_at: string;
+  staff_name?: string | null;
+  profiles?: { full_name?: string | null } | null;
+};
+
+function parseJsonObject(value: unknown): Record<string, any> | null {
+  if (!value) return null;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object"
+        ? (parsed as Record<string, any>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof value === "object" ? (value as Record<string, any>) : null;
+}
+
+function buildLogDetails(log: InventoryLogRow): string {
+  let details = log.staff_note || "";
+  const parsed = parseJsonObject(log.ai_parsed_json);
+  if (!details && parsed) {
+    const parts: string[] = [];
+
+    if (parsed.reason_label) parts.push(String(parsed.reason_label));
+    else if (parsed.notes) parts.push(String(parsed.notes));
+
+    const items = Array.isArray(parsed.items) ? parsed.items : [];
+    if (log.type === "SALES" && items.length) {
+      const totalItems = items.reduce(
+        (sum: number, item: any) => sum + (Number(item.quantity) || 1),
+        0,
+      );
+      const totalRevenue =
+        Number(parsed.total_revenue) ||
+        items.reduce(
+          (sum: number, item: any) =>
+            sum + (Number(item.unit_cost) || 0) * (Number(item.quantity) || 1),
+          0,
+        );
+
+      let summary = `${totalItems} món`;
+      if (totalRevenue > 0) {
+        summary += `, ${totalRevenue.toLocaleString("vi-VN")}đ`;
+      }
+      parts.push(summary);
+    } else if (items.length) {
+      const itemNames = items
+        .slice(0, 3)
+        .map((item: any) => {
+          const name =
+            item.ingredient_name ||
+            item.name ||
+            item.rawName ||
+            item.original_name ||
+            "";
+          const qty = item.quantity ? `: ${item.quantity}` : "";
+          return name + qty;
+        })
+        .filter(Boolean)
+        .join(", ");
+      if (itemNames) parts.push(itemNames);
+      if (items.length > 3) parts.push(`(+${items.length - 3} khác)`);
+    }
+
+    details = parts.join(" - ");
+  }
+
+  return details || "Không có chi tiết";
+}
+
+function getActionLabel(log: InventoryLogRow): string {
+  if (log.type === "SALES") return "Kết ca";
+  if (log.type === "IMPORT") return "Nhập hàng";
+  if (log.type === "WASTE") return "Hủy/Hao hụt";
+  if (log.type === "LENT") return "Cho mượn";
+  if (log.type === "TRANSFER") return "Chuyển kho";
+
+  if (log.type === "STOCK" || log.type === "STOCK_CHECK") {
+    const parsed = parseJsonObject(log.ai_parsed_json);
+    const checkType = parsed?.check_type;
+    const location = parsed?.location ?? log.location;
+
+    if (location === "BAR" || checkType === "BAR") return "Kiểm quầy bar";
+    if (checkType === "FULL" || checkType === "STORAGE") {
+      return "Kiểm kho toàn phần";
+    }
+    if (checkType === "SPOT") return "Kiểm kho 1 phần";
+    return "Kiểm kho";
+  }
+
+  return log.type || "UNKNOWN";
+}
+
+function getLogItems(log: InventoryLogRow) {
+  if (log.type !== "STOCK" && log.type !== "IMPORT") return undefined;
+  const parsed = parseJsonObject(log.ai_parsed_json);
+  return Array.isArray(parsed?.items) ? parsed.items : undefined;
+}
+
+function mapActivityLogs(rows: InventoryLogRow[]) {
+  return rows.map((log) => ({
+    id: log.id,
+    created_at: log.created_at,
+    action: getActionLabel(log),
+    staff_name:
+      log.staff_name ||
+      log.profiles?.full_name ||
+      (log.location === "mobile" ? "Mobile" : "Desktop"),
+    details: buildLogDetails(log),
+    quantity_change: log.quantity_change_base ?? undefined,
+    items: getLogItems(log),
+  }));
+}
+
+function mergeActivityLogs(limit: number, ...groups: ReturnType<typeof mapActivityLogs>[]) {
+  const byId = new Map<string, ReturnType<typeof mapActivityLogs>[number]>();
+
+  for (const log of groups.flat()) {
+    if (!byId.has(log.id)) {
+      byId.set(log.id, log);
+    }
+  }
+
+  return [...byId.values()]
+    .sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    )
+    .slice(0, limit);
+}
+
+function getLocalDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 // Retained for backward compatibility; database.ts no longer touches Supabase directly.
 export function setDatabaseSupabaseClient(_client: any) {
@@ -149,6 +314,22 @@ export function initDatabase(): Database.Database {
 
     CREATE TABLE IF NOT EXISTS local_inventory_logs (
       id TEXT PRIMARY KEY NOT NULL,
+      ingredient_id TEXT,
+      location TEXT,
+      type TEXT,
+      ai_parsed_quantity REAL,
+      ai_confidence_score REAL,
+      final_confirmed_quantity REAL,
+      quantity_change_base REAL,
+      unit_cost_at_time REAL,
+      source_photo_urls TEXT,
+      ai_parsed_json TEXT,
+      staff_note TEXT,
+      is_verified INTEGER DEFAULT 0,
+      diff_percentage REAL,
+      created_by TEXT,
+      created_by_name TEXT,
+      business_id TEXT,
       ai_raw_json TEXT,
       confirmed_json TEXT,
       created_at TEXT NOT NULL
@@ -252,6 +433,32 @@ export function initDatabase(): Database.Database {
     db.exec(`ALTER TABLE local_sync_queue ADD COLUMN last_attempt_at INTEGER`);
   } catch (e) {
     /* Column already exists */
+  }
+
+  // Migration: cache recent inventory logs pulled from backend /sync/pull.
+  for (const column of [
+    "ingredient_id TEXT",
+    "location TEXT",
+    "type TEXT",
+    "ai_parsed_quantity REAL",
+    "ai_confidence_score REAL",
+    "final_confirmed_quantity REAL",
+    "quantity_change_base REAL",
+    "unit_cost_at_time REAL",
+    "source_photo_urls TEXT",
+    "ai_parsed_json TEXT",
+    "staff_note TEXT",
+    "is_verified INTEGER DEFAULT 0",
+    "diff_percentage REAL",
+    "created_by TEXT",
+    "created_by_name TEXT",
+    "business_id TEXT",
+  ]) {
+    try {
+      db.exec(`ALTER TABLE local_inventory_logs ADD COLUMN ${column}`);
+    } catch {
+      /* Column already exists */
+    }
   }
 
   // Migration: Add missing columns if table already exists
@@ -566,63 +773,55 @@ function runQueueMigration(db: Database.Database) {
  */
 export function runDailySnapshot(database: Database.Database): void {
   try {
-    const today = new Date().toISOString().slice(0, 10); // "2025-12-23"
+    const today = getLocalDateKey(); // "2025-12-23"
 
-    // Check if today's snapshot already exists
-    const existing = database
-      .prepare("SELECT date FROM daily_inventory_stats WHERE date = ?")
-      .get(today);
+    console.log("[Snapshot] Updating daily inventory snapshot...");
 
-    if (!existing) {
-      console.log("[Snapshot] Running daily inventory snapshot...");
-
-      // Calculate total values in the ingredient base unit before applying cost.
-      const ingredients = database
-        .prepare(
-          `
+    // Calculate total values in the ingredient base unit before applying cost.
+    const ingredients = database
+      .prepare(
+        `
         SELECT base_unit, stock_check_unit, warehouse_qty, bar_qty, unit_cost,
-               density, unit_weight, unit_weight_unit
+               last_purchase_price, last_purchase_qty, last_purchase_unit,
+               density, unit_weight, unit_weight_unit, archived
         FROM local_ingredients
       `,
-        )
-        .all() as InventoryValuationRow[];
+      )
+      .all() as InventoryValuationRow[];
 
-      const stats = ingredients.reduce(
-        (acc, item) => {
-          const { warehouseQtyInBase, barQtyInBase } =
-            getInventoryQuantitiesInBase(item);
-          const unitCost = Number(item.unit_cost ?? 0);
+    const stats = ingredients.filter(isActiveInventoryRow).reduce(
+      (acc, item) => {
+        acc.wh_val += calculateInventoryItemValue({ ...item, bar_qty: 0 });
+        acc.bar_val += calculateInventoryItemValue({ ...item, warehouse_qty: 0 });
+        acc.item_count += 1;
+        return acc;
+      },
+      { wh_val: 0, bar_val: 0, item_count: 0 },
+    );
 
-          acc.wh_val += warehouseQtyInBase * unitCost;
-          acc.bar_val += barQtyInBase * unitCost;
-          acc.item_count += 1;
-          return acc;
-        },
-        { wh_val: 0, bar_val: 0, item_count: 0 },
-      );
-
-      // Insert snapshot
-      database
-        .prepare(
-          `
+    database
+      .prepare(
+        `
         INSERT INTO daily_inventory_stats (id, date, total_value_warehouse, total_value_bar, total_items)
         VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(date) DO UPDATE SET
+          total_value_warehouse = excluded.total_value_warehouse,
+          total_value_bar = excluded.total_value_bar,
+          total_items = excluded.total_items,
+          created_at = datetime('now')
       `,
-        )
-        .run(
-          `snapshot_${today}`,
-          today,
-          stats.wh_val || 0,
-          stats.bar_val || 0,
-          stats.item_count || 0,
-        );
-
-      console.log(
-        `[Snapshot] Saved: Warehouse=${stats.wh_val}, Bar=${stats.bar_val}, Items=${stats.item_count}`,
+      )
+      .run(
+        `snapshot_${today}`,
+        today,
+        stats.wh_val || 0,
+        stats.bar_val || 0,
+        stats.item_count || 0,
       );
-    } else {
-      console.log("[Snapshot] Today's snapshot already exists, skipping.");
-    }
+
+    console.log(
+      `[Snapshot] Saved: Warehouse=${stats.wh_val}, Bar=${stats.bar_val}, Items=${stats.item_count}`,
+    );
   } catch (err) {
     console.error("[Snapshot] Error:", err);
   }
@@ -1024,247 +1223,87 @@ export function registerDatabaseIPC(): void {
     return { success: true, count: ids.length };
   });
 
-  // Get inventory logs (Cloud-first for Desktop Dashboard)
+  // Get inventory logs for Desktop Dashboard.
+  // Merge backend, pulled cache, and local pending rows so one stale source does
+  // not hide newer activity from another source.
   ipcMain.handle(
     "db:getInventoryLogs",
     async (_event, input: number | { limit?: number; days?: number } = 50) => {
-      const mapBackendLogs = (backendLogs: any[]) => {
-        const normalised = backendLogs.map((log: any) => ({
-          ...log,
+      const fetchLimit = typeof input === "object" ? input.limit || 50 : input;
+      const retentionDays = typeof input === "object" ? input.days : undefined;
+      const cutoffIso =
+        retentionDays && retentionDays > 0
+          ? new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString()
+          : null;
+      const database = getDatabase();
+      let backendRows: InventoryLogRow[] = [];
+
+      try {
+        const params = new URLSearchParams({ limit: String(fetchLimit) });
+        if (retentionDays && retentionDays > 0) {
+          params.set("days", String(retentionDays));
+        }
+
+        const data = await apiFetch<any[]>(`/inventory/logs?${params}`);
+        backendRows = (data || []).map((log: any) => ({
+          id: log.id,
+          type: log.type,
+          location: log.location,
           staff_note: log.staffNote,
           ai_parsed_json: log.aiParsedJson,
           quantity_change_base: log.quantityChangeBase,
           created_at: log.createdAt,
-          profiles: { full_name: log.createdBy?.fullName ?? "Unknown" },
+          staff_name: log.createdBy?.fullName ?? "Unknown Staff",
         }));
-        return normalised.map((log: any) => {
-          // Extract details from ai_parsed_json if staff_note is empty
-          let details = log.staff_note || "";
-          if (!details && log.ai_parsed_json) {
-            try {
-              const parsed =
-                typeof log.ai_parsed_json === "string"
-                  ? JSON.parse(log.ai_parsed_json)
-                  : log.ai_parsed_json;
+        console.log("[Database] Backend inventory logs count:", backendRows.length);
+      } catch (err) {
+        console.error("[Database] Backend log fetch exception:", err);
+      }
 
-              // Build details string with reason + items
-              const parts: string[] = [];
-
-              // Add reason label if exists (e.g., "Vỡ/Hỏng", "Cho mượn")
-              if (parsed.reason_label) parts.push(parsed.reason_label);
-              else if (parsed.notes) parts.push(parsed.notes);
-
-              // SPECIAL HANDLING FOR SALES: Show summary instead of item list
-              if (log.type === "SALES" && parsed.items?.length) {
-                const totalItems = parsed.items.reduce(
-                  (sum: number, i: any) => sum + (i.quantity || 1),
-                  0,
-                );
-                const totalRevenue =
-                  parsed.total_revenue ||
-                  parsed.items.reduce(
-                    (sum: number, i: any) =>
-                      sum + (i.unit_cost || 0) * (i.quantity || 1),
-                    0,
-                  );
-
-                let summary = `${totalItems} món`;
-                if (totalRevenue > 0) {
-                  summary += `, ${totalRevenue.toLocaleString("vi-VN")}đ`;
-                }
-                parts.push(summary);
-              } else if (parsed.items?.length) {
-                // Default: Add item names for non-SALES logs
-                const itemNames = parsed.items
-                  .slice(0, 3)
-                  .map((i: any) => {
-                    const name =
-                      i.ingredient_name ||
-                      i.name ||
-                      i.rawName ||
-                      i.original_name ||
-                      "";
-                    const qty = i.quantity ? `: ${i.quantity}` : "";
-                    return name + qty;
-                  })
-                  .filter(Boolean)
-                  .join(", ");
-                if (itemNames) parts.push(itemNames);
-                if (parsed.items.length > 3)
-                  parts.push(`(+${parsed.items.length - 3} khác)`);
-              }
-
-              details = parts.join(" - ");
-            } catch {}
-          }
-
-          // Generate proper action label for STOCK logs
-          let actionLabel = log.type || "UNKNOWN";
-          if (log.type === "SALES") {
-            actionLabel = "Kết ca";
-          } else if (log.type === "STOCK" || log.type === "STOCK_CHECK") {
-            // Parse check_type and location from ai_parsed_json
-            try {
-              const parsedAction =
-                typeof log.ai_parsed_json === "string"
-                  ? JSON.parse(log.ai_parsed_json)
-                  : log.ai_parsed_json;
-              const checkType = parsedAction?.check_type;
-              const location = parsedAction?.location;
-
-              if (location === "BAR" || checkType === "BAR") {
-                actionLabel = "Kiểm quầy bar";
-              } else if (checkType === "FULL" || checkType === "STORAGE") {
-                actionLabel = "Kiểm kho toàn phần";
-              } else if (checkType === "SPOT") {
-                actionLabel = "Kiểm kho 1 phần";
-              } else {
-                actionLabel = "Kiểm kho";
-              }
-            } catch {
-              actionLabel = "Kiểm kho";
-            }
-          } else if (log.type === "IMPORT") {
-            actionLabel = "Nhập hàng";
-          } else if (log.type === "WASTE") {
-            actionLabel = "Hủy/Hao hụt";
-          } else if (log.type === "LENT") {
-            actionLabel = "Cho mượn";
-          } else if (log.type === "TRANSFER") {
-            actionLabel = "Chuyển kho";
-          }
-
-          return {
-            id: log.id,
-            created_at: log.created_at,
-            action: actionLabel,
-            staff_name: log.profiles?.full_name || "Unknown Staff",
-            details: details || "Không có chi tiết",
-            quantity_change: log.quantity_change_base,
-            // Pass raw items for STOCK/IMPORT logs to enable dropdown expansion
-            items:
-              (log.type === "STOCK" || log.type === "IMPORT") &&
-              log.ai_parsed_json
-                ? (() => {
-                    try {
-                      const p =
-                        typeof log.ai_parsed_json === "string"
-                          ? JSON.parse(log.ai_parsed_json)
-                          : log.ai_parsed_json;
-                      return p.items || [];
-                    } catch {
-                      return [];
-                    }
-                  })()
-                : undefined,
-          };
-        });
-      };
-
-      // 1. Try fetching from Backend API if authenticated
       try {
-        const limit = typeof input === "object" ? input.limit || 50 : input;
-        const days = typeof input === "object" ? input.days : undefined;
-
-        const params = new URLSearchParams({ limit: String(limit) });
-        if (days && days > 0) params.set("days", String(days));
-
-        const data = await apiFetch<any[]>(`/inventory/logs?${params}`);
-
-        if (data && data.length > 0) {
-          console.log("[Database] Backend inventory logs count:", data.length);
-          return mapBackendLogs(data);
-        }
-
-        // Backend returned empty, fall through to local
-        } catch (err) {
-          console.error("[Database] Backend log fetch exception:", err);
-          // Fall through to local fallback
-        }
-
-      // 2. Fallback: Read from local pending_sync_logs
-      const database = getDatabase();
-      try {
-        // Determine query params
-        const fetchLimit =
-          typeof input === "object" ? input.limit || 50 : input;
-        const retentionDays =
-          typeof input === "object" ? input.days : undefined;
-
         let dateFilter = "";
-        const queryParams: any[] = [];
+        const queryParams: unknown[] = [];
 
-        if (retentionDays && retentionDays > 0) {
-          dateFilter = "AND created_at >= date('now', '-' || ? || ' days')";
-          queryParams.push(retentionDays.toString());
+        if (cutoffIso) {
+          dateFilter = "AND created_at >= ?";
+          queryParams.push(cutoffIso);
         }
-        // Add limit to params at the end
         queryParams.push(fetchLimit);
 
-        const localLogs = database
+        const cachedRows = database
           .prepare(
-            `SELECT id, type, ai_parsed_json, created_at, location 
-           FROM pending_sync_logs 
-           WHERE 1=1 ${dateFilter}
-           ORDER BY created_at DESC 
-           LIMIT ?`,
+            `SELECT id, type, location, ai_parsed_json, staff_note,
+                    quantity_change_base, created_at, created_by_name AS staff_name
+             FROM local_inventory_logs
+             WHERE 1=1 ${dateFilter}
+             ORDER BY created_at DESC
+             LIMIT ?`,
           )
-          .all(...queryParams) as {
-          id: string;
-          type: string;
-          ai_parsed_json: string;
-          created_at: string;
-          location: string;
-        }[];
+          .all(...queryParams) as InventoryLogRow[];
 
-        console.log(
-          "[Database] Local pending_sync_logs count:",
-          localLogs.length,
+        const pendingRows = database
+          .prepare(
+            `SELECT id, type, location, ai_parsed_json, staff_note,
+                    quantity_change_base, created_at
+             FROM pending_sync_logs
+             WHERE 1=1 ${dateFilter}
+             ORDER BY created_at DESC
+             LIMIT ?`,
+          )
+          .all(...queryParams) as InventoryLogRow[];
+
+        console.log("[Database] Cached inventory logs count:", cachedRows.length);
+        console.log("[Database] Local pending_sync_logs count:", pendingRows.length);
+
+        return mergeActivityLogs(
+          fetchLimit,
+          mapActivityLogs(backendRows),
+          mapActivityLogs(cachedRows),
+          mapActivityLogs(pendingRows),
         );
-
-        return localLogs.map((log) => {
-          let details = "Không có chi tiết";
-          try {
-            const parsed = JSON.parse(log.ai_parsed_json || "{}");
-            if (parsed.notes) details = parsed.notes;
-            // SALES: Show summary instead of item list
-            else if (log.type === "SALES" && parsed.items?.length) {
-              const totalItems = parsed.items.reduce(
-                (sum: number, i: any) => sum + (i.quantity || 1),
-                0,
-              );
-              const totalRevenue =
-                parsed.total_revenue ||
-                parsed.items.reduce(
-                  (sum: number, i: any) =>
-                    sum + (i.unit_cost || 0) * (i.quantity || 1),
-                  0,
-                );
-              details = `${totalItems} món`;
-              if (totalRevenue > 0) {
-                details += `, ${totalRevenue.toLocaleString("vi-VN")}đ`;
-              }
-            } else if (parsed.items?.length) {
-              details = parsed.items
-                .slice(0, 2)
-                .map((i: any) => i.ingredient_name || i.name)
-                .join(", ");
-              if (parsed.items.length > 2)
-                details += ` (+${parsed.items.length - 2} khác)`;
-            }
-          } catch {}
-
-          return {
-            id: log.id,
-            created_at: log.created_at,
-            action: log.type === "SALES" ? "Kết ca" : log.type || "UNKNOWN",
-            staff_name: log.location === "mobile" ? "Mobile" : "Desktop",
-            details,
-          };
-        });
       } catch (err) {
-        console.error("[Database] Local log fallback error:", err);
-        return [];
+        console.error("[Database] Local log merge error:", err);
+        return mapActivityLogs(backendRows);
       }
     },
   );
@@ -1400,7 +1439,7 @@ export function registerDatabaseIPC(): void {
   );
 
   // ==================== WEEK 2: COGS REPORT ====================
-  ipcMain.handle("db:getCOGSReport", () => {
+  ipcMain.handle("db:getCOGSReport", async () => {
     const database = getDatabase();
 
     // Get summary data (exclude archived, use base-unit quantities for valuation)
@@ -1408,6 +1447,7 @@ export function registerDatabaseIPC(): void {
       .prepare(
         `
         SELECT base_unit, stock_check_unit, warehouse_qty, bar_qty, unit_cost,
+               last_purchase_price, last_purchase_qty, last_purchase_unit,
                min_threshold, density, unit_weight, unit_weight_unit
         FROM local_ingredients
         WHERE archived != 1 OR archived IS NULL
@@ -1430,65 +1470,86 @@ export function registerDatabaseIPC(): void {
       { itemCount: 0, totalValue: 0, lowStockCount: 0 },
     );
 
-    // Get monthly data from daily_inventory_stats (real data, not mock!)
-    const monthlyData = database
-      .prepare(
-        `
-        SELECT 
-          date,
-          total_value_warehouse as warehouse,
-          total_value_bar as bar
-        FROM daily_inventory_stats
-        ORDER BY date DESC
-        LIMIT 6
-      `,
-      )
-      .all() as Array<{ date: string; warehouse: number; bar: number }>;
-
-    // Format for chart (reverse to show oldest first)
-    const months = monthlyData.reverse().map((row) => ({
-      month: new Date(row.date).toLocaleDateString("vi-VN", { month: "short" }),
-      warehouse: row.warehouse,
-      bar: row.bar,
-    }));
-
-    // If no historical data yet, use current values
-    if (months.length === 0) {
-      const currentIngredients = database
+    const stockCheckLogs = [
+      ...(database
         .prepare(
-          `SELECT base_unit, stock_check_unit, warehouse_qty, bar_qty,
-                  unit_cost, density, unit_weight, unit_weight_unit
-           FROM local_ingredients
-           WHERE archived != 1 OR archived IS NULL`,
+          `SELECT id, type, location, created_at, ai_parsed_json
+           FROM local_inventory_logs
+           WHERE type = 'STOCK'`,
         )
-        .all() as InventoryValuationRow[];
+        .all() as StockCheckValueLog[]),
+      ...(database
+        .prepare(
+          `SELECT id, type, location, created_at, ai_parsed_json
+           FROM pending_sync_logs
+           WHERE type = 'STOCK'`,
+        )
+        .all() as StockCheckValueLog[]),
+    ];
 
-      const currentValues = currentIngredients.reduce(
-        (acc, item) => {
-          const { warehouseQtyInBase, barQtyInBase } =
-            getInventoryQuantitiesInBase(item);
-          const unitCost = Number(item.unit_cost ?? 0);
+    const stockCheckIngredients = database
+      .prepare(
+        `SELECT id, base_unit, unit_cost,
+                last_purchase_price, last_purchase_qty, last_purchase_unit,
+                density, unit_weight, unit_weight_unit
+         FROM local_ingredients
+         WHERE archived != 1 OR archived IS NULL`,
+      )
+      .all() as StockCheckValueIngredient[];
 
-          acc.warehouse += warehouseQtyInBase * unitCost;
-          acc.bar += barQtyInBase * unitCost;
-          return acc;
-        },
-        { warehouse: 0, bar: 0 },
-      );
+    const months = buildStockCheckValueSeries(
+      stockCheckLogs,
+      stockCheckIngredients,
+    );
 
-      months.push({
-        month: new Date().toLocaleDateString("vi-VN", { month: "short" }),
-        warehouse: currentValues.warehouse,
-        bar: currentValues.bar,
-      });
+    const lossIngredients = database
+      .prepare(
+        `SELECT id, name, unit_cost
+         FROM local_ingredients
+         WHERE archived != 1 OR archived IS NULL`,
+      )
+      .all() as LossIngredientRow[];
+
+    const cachedLossLogs = database
+      .prepare(
+        `SELECT id, type, ingredient_id, quantity_change_base,
+                unit_cost_at_time, ai_parsed_json
+         FROM local_inventory_logs
+         WHERE type = 'WASTE'`,
+      )
+      .all() as LossBreakdownLog[];
+
+    const queuedLossLogs = database
+      .prepare(
+        `SELECT id, type, ingredient_id, quantity_change_base,
+                unit_cost_at_time, ai_parsed_json
+         FROM pending_sync_logs
+         WHERE type = 'WASTE'`,
+      )
+      .all() as LossBreakdownLog[];
+
+    let backendLossLogs: LossBreakdownLog[] = [];
+    try {
+      const backendLogs = await apiFetch<any[]>("/inventory/logs?limit=500&days=30");
+      backendLossLogs = (backendLogs || [])
+        .filter((log) => String(log.type ?? "").toUpperCase() === "WASTE")
+        .map((log) => ({
+          id: log.id,
+          type: log.type,
+          ingredientId: log.ingredientId ?? log.ingredient_id ?? null,
+          quantityChangeBase:
+            log.quantityChangeBase ?? log.quantity_change_base ?? null,
+          unitCostAtTime: log.unitCostAtTime ?? log.unit_cost_at_time ?? null,
+          aiParsedJson: log.aiParsedJson ?? log.ai_parsed_json ?? null,
+        }));
+    } catch (err) {
+      console.warn("[Database] Backend loss log fetch failed:", err);
     }
 
-    // Mock loss data (TODO: Calculate from inventory_logs)
-    const losses = [
-      { name: "Hao hụt", value: 500000, color: "#E07A2F" },
-      { name: "Hỏng", value: 300000, color: "#E63946" },
-      { name: "Mất", value: 100000, color: "#FFC857" },
-    ];
+    const losses = buildLossBreakdown(
+      dedupeLossLogs([...backendLossLogs, ...cachedLossLogs, ...queuedLossLogs]),
+      lossIngredients,
+    );
 
     return {
       summary: {

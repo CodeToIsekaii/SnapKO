@@ -39,7 +39,6 @@ export default function IngredientsListScreen({
 }: IngredientsListScreenProps) {
   const [ingredients, setIngredients] = useState<LocalIngredient[]>([]);
   const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
@@ -61,8 +60,6 @@ export default function IngredientsListScreen({
       setIngredients(rows);
     } catch (err) {
       console.log("Error loading ingredients:", err);
-    } finally {
-      setLoading(false);
     }
   }, []);
 

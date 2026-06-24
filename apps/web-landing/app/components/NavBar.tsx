@@ -45,7 +45,8 @@ export default function NavBar() {
           if (getStoredRefreshToken()) {
             try {
               const business = await apiFetch<{
-                tier?: string;
+                effectiveTier?: string;
+                subscriptionStatus?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED";
                 subscriptionExpiresAt?: string | null;
                 scansUsedThisMonth?: number;
                 monthlyScansQuota?: number;
@@ -55,9 +56,8 @@ export default function NavBar() {
                 ? new Date(business.subscriptionExpiresAt)
                 : null;
               const isPro =
-                (business?.tier === "PRO" || business?.tier === "CHAIN") &&
-                expiresAt != null &&
-                expiresAt > new Date();
+                business?.effectiveTier === "PRO" ||
+                business?.effectiveTier === "CHAIN";
               if (mounted) {
                 setSubscription({
                   isPro: Boolean(isPro),
@@ -101,7 +101,8 @@ export default function NavBar() {
           if (session?.user && getStoredRefreshToken()) {
             try {
               const business = await apiFetch<{
-                tier?: string;
+                effectiveTier?: string;
+                subscriptionStatus?: "TRIAL" | "ACTIVE" | "WARNING" | "EXPIRED";
                 subscriptionExpiresAt?: string | null;
                 scansUsedThisMonth?: number;
                 monthlyScansQuota?: number;
@@ -111,9 +112,8 @@ export default function NavBar() {
                 ? new Date(business.subscriptionExpiresAt)
                 : null;
               const isPro =
-                (business?.tier === "PRO" || business?.tier === "CHAIN") &&
-                expiresAt != null &&
-                expiresAt > new Date();
+                business?.effectiveTier === "PRO" ||
+                business?.effectiveTier === "CHAIN";
               if (mounted) {
                 setSubscription({
                   isPro: Boolean(isPro),

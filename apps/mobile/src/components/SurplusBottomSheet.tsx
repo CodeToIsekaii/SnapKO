@@ -11,11 +11,9 @@ import {
   Pressable,
   StyleSheet,
   Animated,
-  Dimensions,
   TouchableWithoutFeedback,
 } from "react-native";
 
-const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const SHEET_HEIGHT = 280;
 
 interface SurplusItem {

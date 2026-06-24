@@ -1,13 +1,35 @@
 import type { SQLiteDatabase } from "expo-sqlite";
+import type { InventoryModel } from "../../../contexts/inventoryModelState";
 
 export type SalesGuardScope = "BAR" | "SIMPLE";
+type StockCheckMode = "FULL" | "SPOT" | undefined;
 
 interface SalesPrerequisiteResult {
   hasSales: boolean;
   since: string | null;
 }
 
-const EARLIEST_SALES_ANCHOR = "1970-01-01T00:00:00.000Z";
+interface StockSalesGuardInput {
+  inventoryModel: InventoryModel;
+  area: "BAR" | "WAREHOUSE" | undefined;
+  checkMode: StockCheckMode;
+  isProRebaselineCheck: boolean;
+}
+
+export function getStockSalesGuardScope({
+  inventoryModel,
+  area,
+  checkMode,
+  isProRebaselineCheck,
+}: StockSalesGuardInput): SalesGuardScope | null {
+  if (checkMode === "SPOT" || inventoryModel === "SIMPLE") {
+    return null;
+  }
+  if (isProRebaselineCheck && area === "BAR") {
+    return "BAR";
+  }
+  return area === "BAR" ? "BAR" : null;
+}
 
 function scopeLocationFilter(scope: SalesGuardScope): string {
   if (scope === "BAR") {
@@ -17,7 +39,11 @@ function scopeLocationFilter(scope: SalesGuardScope): string {
 }
 
 function getSalesAnchorTimestamp(since: string | null): string {
-  return since ?? EARLIEST_SALES_ANCHOR;
+  if (since) return since;
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  return todayStart.toISOString();
 }
 
 async function getLastStockCheckTimestamp(

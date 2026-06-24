@@ -18,7 +18,7 @@ export default function AdminLogin() {
     setError(null);
 
     try {
-      const { data, error: authError } = await supabase.auth.signInWithPassword(
+      const { error: authError } = await supabase.auth.signInWithPassword(
         {
           email,
           password,
