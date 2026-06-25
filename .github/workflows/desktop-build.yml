@@ -43,8 +43,6 @@ jobs:
 
       - name: Build Windows package
         run: pnpm --filter desktop build:win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4

@@ -13,7 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "rebuild-sqlite": "npx rimraf ../../node_modules/better-sqlite3/build && npx @electron/rebuild -f -w better-sqlite3",
     "postinstall": "pnpm rebuild-sqlite",
-    "build:win": "pnpm build && electron-builder --win --config",
+    "build:win": "pnpm build && electron-builder --win --config --publish never",
     "dist": "pnpm build && electron-builder"
   },
   "build": {
