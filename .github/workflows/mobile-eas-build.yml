@@ -1,0 +1,75 @@
+name: Mobile EAS Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: EAS build profile
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - production
+      platform:
+        description: Target platform
+        required: true
+        default: android
+        type: choice
+        options:
+          - android
+          - ios
+          - all
+  push:
+    branches: [main]
+    paths:
+      - "apps/mobile/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - ".github/workflows/mobile-eas-build.yml"
+
+concurrency:
+  group: mobile-eas-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: EAS ${{ github.event.inputs.platform || 'android' }} (${{ github.event.inputs.profile || 'preview' }})
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Validate Expo config
+        working-directory: apps/mobile
+        run: npx expo config --type public
+
+      - name: Build with EAS
+        working-directory: apps/mobile
+        run: |
+          eas build \
+            --platform "${{ github.event.inputs.platform || 'android' }}" \
+            --profile "${{ github.event.inputs.profile || 'preview' }}" \
+            --non-interactive

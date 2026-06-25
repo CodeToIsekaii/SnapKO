@@ -6,19 +6,48 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://kxeervlkzyitlbksbfvp.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4ZWVydmxrenlpdGxia3NiZnZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYzMzQzNTcsImV4cCI6MjA4MTkxMDM1N30.8Nm7SxqobcRDrCJto1L6oZZeQJRlSYHfNjCiqNeQ_BM",
+        "EXPO_PUBLIC_EAS_PROJECT_ID": "d49fb5d3-0e2a-40c1-8f77-3fef51fdb1ca",
+        "EXPO_PUBLIC_BACKEND_URL": "https://api.snapko.io.vn",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB": "97732113685-kghsdojuaebvfefrb4hoov3r5vg8q88c.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS": "814041117110-lu47pe85f48r2d2ipnhp65pq5maq6qsr.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID": "814041117110-obsv25kg2uaovaoiimiadtkqi750df36.apps.googleusercontent.com",
+        "NODE_OPTIONS": "--max-old-space-size=4096"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://kxeervlkzyitlbksbfvp.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4ZWVydmxrenlpdGxia3NiZnZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYzMzQzNTcsImV4cCI6MjA4MTkxMDM1N30.8Nm7SxqobcRDrCJto1L6oZZeQJRlSYHfNjCiqNeQ_BM",
+        "EXPO_PUBLIC_EAS_PROJECT_ID": "d49fb5d3-0e2a-40c1-8f77-3fef51fdb1ca",
+        "EXPO_PUBLIC_BACKEND_URL": "https://api.snapko.io.vn",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB": "97732113685-kghsdojuaebvfefrb4hoov3r5vg8q88c.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS": "814041117110-lu47pe85f48r2d2ipnhp65pq5maq6qsr.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID": "814041117110-obsv25kg2uaovaoiimiadtkqi750df36.apps.googleusercontent.com",
+        "NODE_OPTIONS": "--max-old-space-size=4096"
+      },
       "android": {
         "buildType": "apk"
       }
- 
     },
     "production": {
       "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://kxeervlkzyitlbksbfvp.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4ZWVydmxrenlpdGxia3NiZnZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYzMzQzNTcsImV4cCI6MjA4MTkxMDM1N30.8Nm7SxqobcRDrCJto1L6oZZeQJRlSYHfNjCiqNeQ_BM",
+        "EXPO_PUBLIC_EAS_PROJECT_ID": "d49fb5d3-0e2a-40c1-8f77-3fef51fdb1ca",
+        "EXPO_PUBLIC_BACKEND_URL": "https://api.snapko.io.vn",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB": "97732113685-kghsdojuaebvfefrb4hoov3r5vg8q88c.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS": "814041117110-lu47pe85f48r2d2ipnhp65pq5maq6qsr.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID": "814041117110-obsv25kg2uaovaoiimiadtkqi750df36.apps.googleusercontent.com",
+        "NODE_OPTIONS": "--max-old-space-size=4096"
+      },
       "android": {
         "buildType": "app-bundle"
       }
