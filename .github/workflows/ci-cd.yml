@@ -31,9 +31,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build web landing
-        run: pnpm --filter web-landing build
-
       - name: Validate mobile Expo config
         run: pnpm --filter mobile exec expo config --type public
 
