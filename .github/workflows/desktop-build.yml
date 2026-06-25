@@ -1,191 +1,71 @@
-# 🖥️ Desktop App Build
-# Tự động build khi tạo tag version (v1.0.0, v1.0.1...)
-
-name: 🖥️ Desktop Build
+name: Desktop Windows Build
 
 on:
+  workflow_dispatch:
   push:
     tags:
-      - "v*" # Trigger khi push tag như v1.0.0
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to build (e.g. 1.0.0)"
-        required: false
-        default: "dev"
+      - "v*"
 
 jobs:
-  # ═══════════════════════════════════════════════════════════════
-  # Build cho Windows
-  # ═══════════════════════════════════════════════════════════════
   build-windows:
-    name: 🪟 Windows
+    name: Build Windows Installer
     runs-on: windows-latest
-
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: 📦 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: 📦 Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: 📦 Install dependencies
-        run: |
-          cd apps/desktop
-          pnpm install --frozen-lockfile
-
-      - name: 🔨 Rebuild SQLite
-        run: |
-          cd apps/desktop
-          pnpm rebuild-sqlite
-
-      - name: 🏗️ Build app
-        run: |
-          cd apps/desktop
-          pnpm build
-
-      - name: 📦 Package for Windows
-        run: |
-          cd apps/desktop
-          pnpm dist:win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 📤 Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-build
-          path: |
-            apps/desktop/release/*.exe
-            apps/desktop/release/*.msi
-          retention-days: 30
-
-  # ═══════════════════════════════════════════════════════════════
-  # Build cho macOS
-  # ═══════════════════════════════════════════════════════════════
-  build-macos:
-    name: 🍎 macOS
-    runs-on: macos-latest
-
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: 📦 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: 📦 Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: 📦 Install dependencies
-        run: |
-          cd apps/desktop
-          pnpm install --frozen-lockfile
-
-      - name: 🏗️ Build app
-        run: |
-          cd apps/desktop
-          pnpm build
-
-      - name: 📦 Package for macOS
-        run: |
-          cd apps/desktop
-          pnpm dist:mac
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 📤 Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-build
-          path: |
-            apps/desktop/release/*.dmg
-            apps/desktop/release/*.zip
-          retention-days: 30
-
-  # ═══════════════════════════════════════════════════════════════
-  # Build cho Linux
-  # ═══════════════════════════════════════════════════════════════
-  build-linux:
-    name: 🐧 Linux
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: 📦 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: 📦 Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: 📦 Install dependencies
-        run: |
-          cd apps/desktop
-          pnpm install --frozen-lockfile
-
-      - name: 🏗️ Build app
-        run: |
-          cd apps/desktop
-          pnpm build
-
-      - name: 📦 Package for Linux
-        run: |
-          cd apps/desktop
-          pnpm dist:linux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 📤 Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-build
-          path: |
-            apps/desktop/release/*.AppImage
-            apps/desktop/release/*.deb
-          retention-days: 30
-
-  # ═══════════════════════════════════════════════════════════════
-  # Tạo GitHub Release
-  # ═══════════════════════════════════════════════════════════════
-  create-release:
-    name: 📦 Create Release
-    runs-on: ubuntu-latest
-    needs: [build-windows, build-macos, build-linux]
-    if: startsWith(github.ref, 'refs/tags/v')
 
     permissions:
       contents: write
 
     steps:
-      - name: 📥 Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          path: release
+          node-version: "20"
 
-      - name: 📋 List files
-        run: find release -type f
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
 
-      - name: 🏷️ Create GitHub Release
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Write production desktop env
+        shell: pwsh
+        run: |
+          @"
+          VITE_SUPABASE_URL=https://kxeervlkzyitlbksbfvp.supabase.co
+          VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4ZWVydmxrenlpdGxia3NiZnZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYzMzQzNTcsImV4cCI6MjA4MTkxMDM1N30.8Nm7SxqobcRDrCJto1L6oZZeQJRlSYHfNjCiqNeQ_BM
+          VITE_BACKEND_URL=https://api.snapko.io.vn
+          "@ | Set-Content -Path apps/desktop/.env -Encoding utf8
+
+      - name: Typecheck
+        run: pnpm --filter desktop typecheck
+
+      - name: Build Windows package
+        run: pnpm --filter desktop build:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapko-desktop-windows
+          path: |
+            apps/desktop/dist-exes/**/*.exe
+            apps/desktop/dist-exes/**/*.blockmap
+            apps/desktop/dist-exes/**/*.yml
+          retention-days: 30
+
+      - name: Create draft release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            release/**/*.exe
-            release/**/*.dmg
-            release/**/*.AppImage
-            release/**/*.deb
           draft: true
           generate_release_notes: true
-          name: SnapKO ${{ github.ref_name }}
+          name: SnapKO Desktop ${{ github.ref_name }}
+          files: |
+            apps/desktop/dist-exes/**/*.exe
+            apps/desktop/dist-exes/**/*.blockmap
+            apps/desktop/dist-exes/**/*.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
