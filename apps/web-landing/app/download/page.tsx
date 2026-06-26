@@ -81,12 +81,18 @@ export default function DownloadPage() {
         }
 
         const releases = (await response.json()) as GitHubRelease[];
-        const release = releases.find(
-          (item) =>
-            !item.draft &&
-            !item.prerelease &&
-            item.tag_name.startsWith("windows-v"),
-        );
+        const release = releases
+          .filter(
+            (item) =>
+              !item.draft &&
+              !item.prerelease &&
+              item.tag_name.startsWith("windows-v")
+          )
+          .sort(
+            (a, b) =>
+              new Date(b.published_at).getTime() -
+              new Date(a.published_at).getTime()
+          )[0];
         const exeAsset = release?.assets.find((asset) => {
           const name = asset.name.toLowerCase();
           return (
