@@ -6,7 +6,7 @@
  * - Auto-refreshes on 401 with a queue to dedupe concurrent requests
  */
 
-const PRODUCTION_BACKEND_URL = "https://api.snapko.io.vn";
+const PRODUCTION_BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
 function resolveBackendUrl(): string {
   const configuredUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "";
