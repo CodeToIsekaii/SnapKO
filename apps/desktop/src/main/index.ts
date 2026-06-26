@@ -8,10 +8,18 @@
  * - Environment variables via env.main.ts with Zod validation
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  shell,
+  type MessageBoxOptions,
+} from "electron";
 import { join } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import Store from "electron-store";
+import { autoUpdater } from "electron-updater";
 import { Env } from "../env";
 import {
   initDatabase,
@@ -91,6 +99,9 @@ function clearSession() {
 // Store current session (in memory)
 let currentSession: any = null;
 let mainWindow: BrowserWindow | null = null;
+let autoUpdateCheckStarted = false;
+let updateDownloadInProgress = false;
+let updateDownloadedPromptShown = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -113,6 +124,93 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+}
+
+function showAppMessageBox(options: MessageBoxOptions) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return dialog.showMessageBox(mainWindow, options);
+  }
+
+  return dialog.showMessageBox(options);
+}
+
+function registerAutoUpdater() {
+  if (autoUpdateCheckStarted || !app.isPackaged || process.platform !== "win32") {
+    return;
+  }
+
+  autoUpdateCheckStarted = true;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("checking-for-update", () => {
+    console.log("[AutoUpdate] Checking for updates");
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    console.log("[AutoUpdate] No update available");
+  });
+
+  autoUpdater.on("update-available", async (info) => {
+    console.log("[AutoUpdate] Update available:", info.version);
+
+    if (updateDownloadInProgress) {
+      return;
+    }
+
+    const result = await showAppMessageBox({
+      type: "info",
+      buttons: ["Để sau", "Tải cập nhật"],
+      defaultId: 1,
+      cancelId: 0,
+      message: `Có bản SnapKO Desktop mới ${info.version}`,
+      detail:
+        "Ứng dụng sẽ tải bản cập nhật ở nền và hỏi bạn khởi động lại sau khi tải xong.",
+    });
+
+    if (result.response !== 1) {
+      return;
+    }
+
+    updateDownloadInProgress = true;
+    autoUpdater.downloadUpdate().catch((error) => {
+      updateDownloadInProgress = false;
+      console.error("[AutoUpdate] Download failed:", error);
+    });
+  });
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    console.log("[AutoUpdate] Update downloaded:", info.version);
+
+    if (updateDownloadedPromptShown) {
+      return;
+    }
+
+    updateDownloadedPromptShown = true;
+    const result = await showAppMessageBox({
+      type: "question",
+      buttons: ["Để lần sau", "Khởi động lại"],
+      defaultId: 1,
+      cancelId: 0,
+      message: `Đã tải xong SnapKO Desktop ${info.version}`,
+      detail: "Khởi động lại ứng dụng để cài bản cập nhật mới.",
+    });
+
+    if (result.response === 1) {
+      autoUpdater.quitAndInstall(false, true);
+    }
+  });
+
+  autoUpdater.on("error", (error) => {
+    updateDownloadInProgress = false;
+    console.error("[AutoUpdate] Error:", error);
+  });
+
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((error) => {
+      console.error("[AutoUpdate] Check failed:", error);
+    });
+  }, 3000);
 }
 
 // ==================== AUTH IPC HANDLERS ====================
@@ -980,6 +1078,7 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+  registerAutoUpdater();
 
   // Start realtime after window is created (if session is valid)
   if (currentSession && mainWindow) {

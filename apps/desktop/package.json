@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "SnapKO Desktop Application",
   "author": "SnapKO Team",
   "packageManager": "pnpm@9.12.3",
@@ -23,6 +23,13 @@
     "directories": {
       "output": "dist-exes"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "CodeToIsekaii",
+        "repo": "SnapKO"
+      }
+    ],
     "files": [
       "dist/**/*",
       "node_modules/**/*",
@@ -58,6 +65,7 @@
     "better-sqlite3": "^12.5.0",
     "dotenv": "^17.2.3",
     "electron-store": "8",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.562.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
