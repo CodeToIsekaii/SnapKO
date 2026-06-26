@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "SnapKO Desktop Application",
   "author": "SnapKO Team",
   "packageManager": "pnpm@9.12.3",
@@ -23,6 +23,7 @@
     "directories": {
       "output": "dist-exes"
     },
+    "artifactName": "SnapKO.Desktop.Setup.${version}.${ext}",
     "publish": [
       {
         "provider": "github",
@@ -42,8 +43,7 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ]
     },
     "nsis": {

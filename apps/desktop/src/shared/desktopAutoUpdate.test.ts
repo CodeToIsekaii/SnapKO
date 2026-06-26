@@ -22,6 +22,11 @@ test("desktop package is configured for GitHub auto-update", () => {
       repo: "SnapKO",
     },
   ]);
+  assert.equal(
+    packageJson.build.artifactName,
+    "SnapKO.Desktop.Setup.${version}.${ext}",
+  );
+  assert.deepEqual(packageJson.build.win.target, ["nsis"]);
 });
 
 test("desktop main process checks for updates in packaged builds", () => {
@@ -41,7 +46,17 @@ test("desktop release uploads updater metadata alongside the installer", () => {
     "utf8",
   );
 
-  assert.match(workflow, /SnapKO Desktop Setup \*\.exe/);
+  assert.match(workflow, /SnapKO\.Desktop\.Setup\.\*\.exe/);
   assert.match(workflow, /latest\.yml/);
   assert.match(workflow, /\.blockmap/);
+});
+
+test("web download page accepts GitHub-safe desktop installer asset names", () => {
+  const downloadPage = readFileSync(
+    join(repoRoot, "apps/web-landing/app/download/page.tsx"),
+    "utf8",
+  );
+
+  assert.match(downloadPage, /snapko\.desktop\.setup\./);
+  assert.match(downloadPage, /asset.name.toLowerCase\(\)/);
 });

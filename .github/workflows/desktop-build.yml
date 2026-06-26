@@ -51,8 +51,8 @@ jobs:
         with:
           name: snapko-desktop-windows-installer
           path: |
-            apps/desktop/dist-exes/**/SnapKO Desktop Setup *.exe
-            apps/desktop/dist-exes/**/SnapKO Desktop Setup *.exe.blockmap
+            apps/desktop/dist-exes/**/SnapKO.Desktop.Setup.*.exe
+            apps/desktop/dist-exes/**/SnapKO.Desktop.Setup.*.exe.blockmap
             apps/desktop/dist-exes/**/latest.yml
           retention-days: 30
 
@@ -67,8 +67,8 @@ jobs:
             Tải file `.exe` trong mục Assets bên dưới để cài SnapKO Desktop trên Windows.
             `latest.yml` và `.blockmap` là file kỹ thuật để SnapKO Desktop tự cập nhật.
           files: |
-            apps/desktop/dist-exes/**/SnapKO Desktop Setup *.exe
-            apps/desktop/dist-exes/**/SnapKO Desktop Setup *.exe.blockmap
+            apps/desktop/dist-exes/**/SnapKO.Desktop.Setup.*.exe
+            apps/desktop/dist-exes/**/SnapKO.Desktop.Setup.*.exe.blockmap
             apps/desktop/dist-exes/**/latest.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
