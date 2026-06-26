@@ -48,6 +48,10 @@ const DEFAULT_WINDOWS_DOWNLOAD: WindowsDownload = {
   isFallback: true,
 };
 
+function getReleasePublishedTime(release: GitHubRelease) {
+  return new Date(release.published_at).getTime();
+}
+
 export default function DownloadPage() {
   const [detectedOS, setDetectedOS] = useState<OS>("unknown");
   const [windowsDownload, setWindowsDownload] = useState<WindowsDownload>(
@@ -91,8 +95,7 @@ export default function DownloadPage() {
           )
           .sort(
             (a, b) =>
-              new Date(b.published_at).getTime() -
-              new Date(a.published_at).getTime()
+              getReleasePublishedTime(b) - getReleasePublishedTime(a)
           )[0];
         const exeAsset = release?.assets.find((asset) => {
           const name = asset.name.toLowerCase();
