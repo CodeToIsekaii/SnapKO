@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: snapko-desktop-windows-installer
-          path: apps/desktop/dist-exes/**/SnapKO.Desktop.Setup.*.exe
+          path: apps/desktop/dist-exes/**/SnapKO Desktop Setup *.exe
           retention-days: 30
 
       - name: Create GitHub release
@@ -58,6 +58,6 @@ jobs:
           draft: false
           generate_release_notes: true
           name: SnapKO Desktop ${{ github.ref_name }}
-          files: apps/desktop/dist-exes/**/SnapKO.Desktop.Setup.*.exe
+          files: apps/desktop/dist-exes/**/SnapKO Desktop Setup *.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

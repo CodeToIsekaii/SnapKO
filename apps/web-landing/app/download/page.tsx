@@ -89,7 +89,10 @@ export default function DownloadPage() {
         );
         const exeAsset = release?.assets.find((asset) => {
           const name = asset.name.toLowerCase();
-          return name.startsWith("snapko.desktop.setup.") && name.endsWith(".exe");
+          return (
+            name.startsWith("snapko desktop setup ") &&
+            name.endsWith(".exe")
+          );
         });
 
         if (!cancelled && release && exeAsset) {
