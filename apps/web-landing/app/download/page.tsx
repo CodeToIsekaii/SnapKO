@@ -15,17 +15,44 @@ import {
 
 type OS = "win" | "mac" | "ios" | "android" | "unknown";
 
-// TODO: Replace with actual download URLs from GitHub Releases
-const DOWNLOAD_URLS = {
-  windows:
-    "https://github.com/your-org/snapko/releases/latest/download/SnapKO-Setup.exe",
-  mac: "https://github.com/your-org/snapko/releases/latest/download/SnapKO.dmg",
-  ios: "https://apps.apple.com/app/snapko/id123456789",
-  android: "https://play.google.com/store/apps/details?id=com.snapko.app",
+type GitHubReleaseAsset = {
+  name: string;
+  browser_download_url: string;
+};
+
+type GitHubRelease = {
+  draft: boolean;
+  prerelease: boolean;
+  tag_name: string;
+  assets: GitHubReleaseAsset[];
+};
+
+type WindowsDownload = {
+  url: string;
+  fileName: string;
+  version: string;
+  isFallback: boolean;
+};
+
+const GITHUB_RELEASES_API =
+  "https://api.github.com/repos/CodeToIsekaii/SnapKO/releases";
+const GITHUB_RELEASES_PAGE = "https://github.com/CodeToIsekaii/SnapKO/releases";
+const GOOGLE_PLAY_URL =
+  "https://play.google.com/store/apps/details?id=com.snapko.app";
+
+const DEFAULT_WINDOWS_DOWNLOAD: WindowsDownload = {
+  url: GITHUB_RELEASES_PAGE,
+  fileName: "SnapKO Desktop.exe",
+  version: "Bản mới nhất",
+  isFallback: true,
 };
 
 export default function DownloadPage() {
   const [detectedOS, setDetectedOS] = useState<OS>("unknown");
+  const [windowsDownload, setWindowsDownload] = useState<WindowsDownload>(
+    DEFAULT_WINDOWS_DOWNLOAD,
+  );
+  const [isLoadingWindows, setIsLoadingWindows] = useState(true);
 
   useEffect(() => {
     const userAgent = navigator.userAgent.toLowerCase();
@@ -40,9 +67,61 @@ export default function DownloadPage() {
     }
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWindowsRelease() {
+      try {
+        const response = await fetch(GITHUB_RELEASES_API, {
+          headers: { Accept: "application/vnd.github+json" },
+        });
+
+        if (!response.ok) {
+          throw new Error(`GitHub releases request failed: ${response.status}`);
+        }
+
+        const releases = (await response.json()) as GitHubRelease[];
+        const release = releases.find(
+          (item) =>
+            !item.draft &&
+            !item.prerelease &&
+            item.tag_name.startsWith("windows-v"),
+        );
+        const exeAsset = release?.assets.find((asset) =>
+          asset.name.toLowerCase().endsWith(".exe"),
+        );
+
+        if (!cancelled && release && exeAsset) {
+          setWindowsDownload({
+            url: exeAsset.browser_download_url,
+            fileName: exeAsset.name,
+            version: release.tag_name.replace("windows-v", "v"),
+            isFallback: false,
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setWindowsDownload(DEFAULT_WINDOWS_DOWNLOAD);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingWindows(false);
+        }
+      }
+    }
+
+    void loadWindowsRelease();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const cardBase =
     "bg-white rounded-2xl border border-[#E0DCD5] p-6 hover:shadow-lg transition-shadow";
   const recommendedCard = "ring-2 ring-[#E07A2F] relative";
+  const disabledCard =
+    "bg-white rounded-2xl border border-[#E0DCD5] p-6 opacity-60 cursor-not-allowed";
 
   return (
     <div className="min-h-screen bg-[#FAF9F7]">
@@ -94,7 +173,9 @@ export default function DownloadPage() {
           <div className="grid md:grid-cols-2 gap-4">
             {/* Windows */}
             <a
-              href={DOWNLOAD_URLS.windows}
+              href={windowsDownload.url}
+              target="_blank"
+              rel="noopener noreferrer"
               className={`${cardBase} ${
                 detectedOS === "win" ? recommendedCard : ""
               } block`}
@@ -112,21 +193,30 @@ export default function DownloadPage() {
                   <h3 className="font-bold text-[#1E1E1E] mb-1">Windows</h3>
                   <p className="text-sm text-[#6F6B63] mb-3">
                     Windows 10/11 64-bit
+                    {!windowsDownload.isFallback && (
+                      <span className="block">
+                        Phiên bản {windowsDownload.version}
+                      </span>
+                    )}
                   </p>
                   <div className="flex items-center gap-2 text-[#E07A2F] font-semibold text-sm">
                     <Download className="w-4 h-4" />
-                    SnapKO-Setup.exe
+                    {isLoadingWindows
+                      ? "Đang kiểm tra bản mới nhất..."
+                      : windowsDownload.isFallback
+                        ? "Mở GitHub Releases"
+                        : windowsDownload.fileName}
                   </div>
                 </div>
               </div>
             </a>
 
             {/* macOS */}
-            <a
-              href={DOWNLOAD_URLS.mac}
+            <div
+              aria-disabled="true"
               className={`${cardBase} ${
                 detectedOS === "mac" ? recommendedCard : ""
-              } block`}
+              } ${disabledCard}`}
             >
               {detectedOS === "mac" && (
                 <span className="absolute -top-3 right-4 bg-[#E07A2F] text-white text-xs font-bold px-3 py-1 rounded-full">
@@ -142,13 +232,12 @@ export default function DownloadPage() {
                   <p className="text-sm text-[#6F6B63] mb-3">
                     Apple Silicon & Intel
                   </p>
-                  <div className="flex items-center gap-2 text-[#E07A2F] font-semibold text-sm">
-                    <Download className="w-4 h-4" />
-                    SnapKO.dmg
+                  <div className="flex items-center gap-2 text-[#6F6B63] font-semibold text-sm">
+                    Sắp có
                   </div>
                 </div>
               </div>
-            </a>
+            </div>
           </div>
         </section>
 
@@ -163,13 +252,11 @@ export default function DownloadPage() {
 
           <div className="grid md:grid-cols-2 gap-4">
             {/* iOS */}
-            <a
-              href={DOWNLOAD_URLS.ios}
-              target="_blank"
-              rel="noopener noreferrer"
+            <div
+              aria-disabled="true"
               className={`${cardBase} ${
                 detectedOS === "ios" ? recommendedCard : ""
-              } block`}
+              } ${disabledCard}`}
             >
               {detectedOS === "ios" && (
                 <span className="absolute -top-3 right-4 bg-[#E07A2F] text-white text-xs font-bold px-3 py-1 rounded-full">
@@ -183,16 +270,16 @@ export default function DownloadPage() {
                 <div className="flex-1">
                   <h3 className="font-bold text-[#1E1E1E] mb-1">iOS</h3>
                   <p className="text-sm text-[#6F6B63] mb-3">iPhone & iPad</p>
-                  <div className="flex items-center gap-2 text-[#E07A2F] font-semibold text-sm">
-                    Mở App Store →
+                  <div className="flex items-center gap-2 text-[#6F6B63] font-semibold text-sm">
+                    Sắp có
                   </div>
                 </div>
               </div>
-            </a>
+            </div>
 
             {/* Android */}
             <a
-              href={DOWNLOAD_URLS.android}
+              href={GOOGLE_PLAY_URL}
               target="_blank"
               rel="noopener noreferrer"
               className={`${cardBase} ${

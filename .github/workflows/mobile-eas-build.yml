@@ -22,6 +22,8 @@ on:
           - all
   push:
     branches: [main]
+    tags:
+      - "android-v*"
     paths:
       - "apps/mobile/**"
       - "packages/**"
@@ -36,8 +38,12 @@ concurrency:
 
 jobs:
   build:
-    name: EAS ${{ github.event.inputs.platform || 'android' }} (${{ github.event.inputs.profile || 'preview' }})
+    name: EAS ${{ startsWith(github.ref, 'refs/tags/android-v') && 'android' || github.event.inputs.platform || 'android' }} (${{ startsWith(github.ref, 'refs/tags/android-v') && 'production' || github.event_name == 'push' && 'production' || github.event.inputs.profile || 'preview' }})
     runs-on: ubuntu-latest
+    env:
+      BUILD_PLATFORM: ${{ startsWith(github.ref, 'refs/tags/android-v') && 'android' || github.event.inputs.platform || 'android' }}
+      BUILD_PROFILE: ${{ startsWith(github.ref, 'refs/tags/android-v') && 'production' || github.event_name == 'push' && 'production' || github.event.inputs.profile || 'preview' }}
+      SUBMIT_PROFILE: ${{ startsWith(github.ref, 'refs/tags/android-v') && 'production' || github.event_name == 'push' && 'internal' || '' }}
 
     steps:
       - name: Checkout
@@ -64,10 +70,29 @@ jobs:
         working-directory: apps/mobile
         run: npx expo config --type public
 
+      - name: Write Google Play service account
+        if: ${{ env.SUBMIT_PROFILE != '' && env.BUILD_PLATFORM == 'android' }}
+        working-directory: apps/mobile
+        run: |
+          test -n "${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}" || (echo "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON secret is missing" && exit 1)
+          cat > google-play-service-account.json <<'JSON'
+          ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          JSON
+
       - name: Build with EAS
         working-directory: apps/mobile
         run: |
           eas build \
-            --platform "${{ github.event.inputs.platform || 'android' }}" \
-            --profile "${{ github.event.inputs.profile || 'preview' }}" \
+            --platform "$BUILD_PLATFORM" \
+            --profile "$BUILD_PROFILE" \
+            --non-interactive
+
+      - name: Submit Android build to Google Play
+        if: ${{ env.SUBMIT_PROFILE != '' && env.BUILD_PLATFORM == 'android' }}
+        working-directory: apps/mobile
+        run: |
+          eas submit \
+            --platform android \
+            --profile "$SUBMIT_PROFILE" \
+            --latest \
             --non-interactive

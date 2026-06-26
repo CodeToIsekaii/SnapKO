@@ -21,6 +21,7 @@ mobile-screen.png
 # expo
 apps/mobile/.expo/
 apps/mobile/dist/
+apps/mobile/google-play-service-account.json
 
 # next
 apps/web-landing/.next/
