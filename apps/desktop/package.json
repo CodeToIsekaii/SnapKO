@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "SnapKO Desktop Application",
   "author": "SnapKO Team",
   "packageManager": "pnpm@9.12.3",
@@ -33,6 +33,7 @@
       "**/node_modules/better-sqlite3/**/*"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "signAndEditExecutable": false,
       "target": [
         "nsis",
@@ -40,6 +41,8 @@
       ]
     },
     "nsis": {
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
