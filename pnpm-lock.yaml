@@ -30,6 +30,9 @@ importers:
       better-sqlite3:
         specifier: ^12.5.0
         version: 12.5.0
+      builder-util-runtime:
+        specifier: 9.7.0
+        version: 9.7.0
       dotenv:
         specifier: ^17.2.3
         version: 17.2.3

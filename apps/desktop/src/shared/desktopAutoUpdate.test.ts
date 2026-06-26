@@ -15,6 +15,19 @@ test("desktop package is configured for GitHub auto-update", () => {
     packageJson.dependencies["electron-updater"],
     "electron-updater must be installed in desktop dependencies",
   );
+  assert.equal(
+    packageJson.dependencies["builder-util-runtime"],
+    "9.7.0",
+    "electron-updater runtime dependency must be packaged with the desktop app",
+  );
+  assert.ok(
+    packageJson.build.files.some(
+      (entry: unknown) =>
+        typeof entry === "string" &&
+        entry.includes("node_modules/builder-util-runtime"),
+    ),
+    "desktop package must explicitly include builder-util-runtime in app.asar",
+  );
   assert.deepEqual(packageJson.build.publish, [
     {
       provider: "github",
@@ -49,6 +62,8 @@ test("desktop release uploads updater metadata alongside the installer", () => {
   assert.match(workflow, /SnapKO\.Desktop\.Setup\.\*\.exe/);
   assert.match(workflow, /latest\.yml/);
   assert.match(workflow, /\.blockmap/);
+  assert.match(workflow, /builder-util-runtime/);
+  assert.match(workflow, /app\.asar/);
 });
 
 test("web download page accepts GitHub-safe desktop installer asset names", () => {

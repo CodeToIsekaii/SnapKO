@@ -46,6 +46,20 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: pnpm --filter desktop build:win
 
+      - name: Verify packaged updater dependencies
+        shell: pwsh
+        run: |
+          $asarPath = "apps/desktop/dist-exes/win-unpacked/resources/app.asar"
+          if (-not (Test-Path $asarPath)) {
+            throw "Missing packaged app.asar at $asarPath"
+          }
+
+          $asarList = pnpm exec asar list $asarPath
+          $hasUpdaterRuntime = $asarList | Select-String -SimpleMatch "\node_modules\builder-util-runtime\package.json" -Quiet
+          if (-not $hasUpdaterRuntime) {
+            throw "Missing builder-util-runtime in packaged app.asar"
+          }
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
