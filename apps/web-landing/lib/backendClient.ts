@@ -6,7 +6,26 @@
  * - Auto-refreshes on 401 with a queue to dedupe concurrent requests
  */
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+const PRODUCTION_BACKEND_URL = "https://api.snapko.io.vn";
+
+function resolveBackendUrl(): string {
+  const configuredUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "";
+
+  if (
+    configuredUrl.startsWith("http://localhost") ||
+    configuredUrl.startsWith("http://127.0.0.1") ||
+    configuredUrl.startsWith("https://localhost") ||
+    configuredUrl.startsWith("https://127.0.0.1")
+  ) {
+    if (typeof window !== "undefined" && !window.location.hostname.includes("localhost")) {
+      return PRODUCTION_BACKEND_URL;
+    }
+  }
+
+  return configuredUrl;
+}
+
+const BACKEND_URL = resolveBackendUrl();
 const REFRESH_KEY = "snapko_refresh_token";
 
 let accessToken: string | null = null;
