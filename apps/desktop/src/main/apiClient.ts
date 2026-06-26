@@ -142,11 +142,12 @@ export async function loginMobileExchange(
  */
 export async function logoutBackend(): Promise<void> {
   const rt = getStoredRefreshToken()
-  if (!rt) return
-  await fetch(`${Env.VITE_BACKEND_URL}/auth/logout`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refreshToken: rt }),
-  }).catch(() => {})
+  if (rt) {
+    await fetch(`${Env.VITE_BACKEND_URL}/auth/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: rt }),
+    }).catch(() => {})
+  }
   clearTokens()
 }
