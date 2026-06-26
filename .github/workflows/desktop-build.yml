@@ -42,6 +42,8 @@ jobs:
         run: pnpm --filter desktop typecheck
 
       - name: Build Windows package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
         run: pnpm --filter desktop build:win
 
       - name: Upload Windows artifacts
