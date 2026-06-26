@@ -6,23 +6,29 @@
  * - Auto-refreshes on 401 with a queue to dedupe concurrent requests
  */
 
-const PRODUCTION_BACKEND_URL = "https://api.snapko.io.vn";
-
 function resolveBackendUrl(): string {
   const configuredUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "";
-
-  if (
+  const isLocalBackend =
     configuredUrl.startsWith("http://localhost") ||
     configuredUrl.startsWith("http://127.0.0.1") ||
     configuredUrl.startsWith("https://localhost") ||
-    configuredUrl.startsWith("https://127.0.0.1")
-  ) {
-    if (typeof window !== "undefined" && !window.location.hostname.includes("localhost")) {
-      return PRODUCTION_BACKEND_URL;
-    }
+    configuredUrl.startsWith("https://127.0.0.1");
+
+  if (!configuredUrl) {
+    throw new Error("Missing NEXT_PUBLIC_BACKEND_URL");
   }
 
-  return configuredUrl;
+  if (
+    typeof window !== "undefined" &&
+    isLocalBackend &&
+    !["localhost", "127.0.0.1"].includes(window.location.hostname)
+  ) {
+    throw new Error(
+      "Invalid NEXT_PUBLIC_BACKEND_URL: localhost is not allowed outside local development"
+    );
+  }
+
+  return configuredUrl.replace(/\/+$/, "");
 }
 
 const BACKEND_URL = resolveBackendUrl();
