@@ -87,9 +87,10 @@ export default function DownloadPage() {
             !item.prerelease &&
             item.tag_name.startsWith("windows-v"),
         );
-        const exeAsset = release?.assets.find((asset) =>
-          asset.name.toLowerCase().endsWith(".exe"),
-        );
+        const exeAsset = release?.assets.find((asset) => {
+          const name = asset.name.toLowerCase();
+          return name.startsWith("snapko.desktop.setup.") && name.endsWith(".exe");
+        });
 
         if (!cancelled && release && exeAsset) {
           setWindowsDownload({
