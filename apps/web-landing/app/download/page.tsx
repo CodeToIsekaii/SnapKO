@@ -24,6 +24,7 @@ type GitHubRelease = {
   draft: boolean;
   prerelease: boolean;
   tag_name: string;
+  published_at: string;
   assets: GitHubReleaseAsset[];
 };
 

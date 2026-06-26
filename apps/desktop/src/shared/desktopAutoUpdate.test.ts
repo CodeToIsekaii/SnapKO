@@ -59,4 +59,5 @@ test("web download page accepts GitHub-safe desktop installer asset names", () =
 
   assert.match(downloadPage, /snapko\.desktop\.setup\./);
   assert.match(downloadPage, /asset.name.toLowerCase\(\)/);
+  assert.match(downloadPage, /published_at:\s*string/);
 });
