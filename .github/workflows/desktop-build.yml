@@ -56,8 +56,10 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           draft: false
-          generate_release_notes: true
+          generate_release_notes: false
           name: SnapKO Desktop ${{ github.ref_name }}
+          body: |
+            Tải file `.exe` trong mục Assets bên dưới để cài SnapKO Desktop trên Windows.
           files: apps/desktop/dist-exes/**/SnapKO Desktop Setup *.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
