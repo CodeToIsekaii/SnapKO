@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "SnapKO Desktop Application",
   "author": "SnapKO Team",
   "packageManager": "pnpm@9.12.3",
