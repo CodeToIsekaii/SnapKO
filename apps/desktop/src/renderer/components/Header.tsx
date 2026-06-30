@@ -8,7 +8,6 @@ import { RefreshCw, LogOut } from "lucide-react";
 
 interface HeaderProps {
   user: User;
-  businessId?: string;
   syncStatus: SyncStatus;
   onSync: () => void;
   onLogout: () => void;
@@ -16,7 +15,6 @@ interface HeaderProps {
 
 export function Header({
   user,
-  businessId,
   syncStatus,
   onSync,
   onLogout,
@@ -76,16 +74,6 @@ export function Header({
           }}
         >
           <span style={styles.userEmail}>{user.email}</span>
-          {/* Debug: Show Business ID */}
-          <span
-            style={{
-              fontSize: 10,
-              color: COLORS.textMuted,
-              fontFamily: "monospace",
-            }}
-          >
-            ID: {businessId?.substring(0, 8) || "Loading..."}
-          </span>
         </div>
         <button onClick={onLogout} style={styles.logoutButton}>
           <LogOut size={14} style={{ marginRight: 6 }} />

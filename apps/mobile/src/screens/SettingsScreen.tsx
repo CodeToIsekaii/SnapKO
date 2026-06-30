@@ -402,19 +402,6 @@ export default function SettingsScreen({
                     {isOwner ? "Chủ quán" : "Nhân viên"}
                   </Text>
                 </View>
-                {/* Debug: Show Business ID - Only in DEV */}
-                {__DEV__ && (
-                  <Text
-                    style={{
-                      color: COLORS.textMuted,
-                      fontSize: 10,
-                      marginTop: 4,
-                      fontFamily: "monospace",
-                    }}
-                  >
-                    ID: {profile?.business_id?.substring(0, 8)}...
-                  </Text>
-                )}
               </View>
             </View>
             {/* Edit Profile Button - All users can edit their own profile */}

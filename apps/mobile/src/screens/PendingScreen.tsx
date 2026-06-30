@@ -264,9 +264,6 @@ export default function PendingScreen({
           </Text>
         </View>
 
-        <Text style={{ color: "#64748B", fontSize: 12 }}>
-          ID: {profileId.slice(0, 8)}...
-        </Text>
       </View>
 
       {/* Tips */}
