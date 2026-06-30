@@ -22,6 +22,11 @@ export const metadata: Metadata = {
     "Vietnam",
   ],
   authors: [{ name: "SnapKO Team" }],
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
   openGraph: {
     title: "SnapKO - Quản lý kho F&B thông minh bằng AI",
     description:
