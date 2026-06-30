@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { api } from "../../services/api";
+import { showRewardedScanAd } from "./rewardedAds";
 
 interface QuotaModalProps {
   visible: boolean;
@@ -27,18 +28,33 @@ export function QuotaModal({
   onRewardGranted,
 }: QuotaModalProps) {
   const [loading, setLoading] = React.useState(false);
+  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!visible) {
+      setLoading(false);
+      setErrorMessage(null);
+    }
+  }, [visible]);
 
   const handleWatchAd = async () => {
     setLoading(true);
+    setErrorMessage(null);
+
     try {
-      // TODO: ADMOB_SDK — replace mock with actual rewarded ad
-      // await RewardedAd.load(...); await rewardedAd.show();
-      // The callback below should only run after the user earns the reward.
+      const didEarnReward = await showRewardedScanAd();
+
+      if (!didEarnReward) {
+        setErrorMessage(
+          "Bạn cần xem hết quảng cáo để nhận thêm lượt scan."
+        );
+        return;
+      }
 
       await api.post("/scans/reward-ad");
       onRewardGranted();
     } catch {
-      // ignore — user can retry or close
+      setErrorMessage("Không thể tải quảng cáo lúc này. Vui lòng thử lại.");
     } finally {
       setLoading(false);
     }
@@ -69,6 +85,9 @@ export function QuotaModal({
                 <Text style={styles.highlight}>+{adRewardScans} lượt</Text>
                 {limitText}.
               </Text>
+              {errorMessage && (
+                <Text style={styles.errorText}>{errorMessage}</Text>
+              )}
               <TouchableOpacity
                 style={styles.btnAd}
                 onPress={handleWatchAd}
@@ -115,6 +134,13 @@ const styles = StyleSheet.create({
   title: { fontSize: 18, fontWeight: "700", color: "#F5F3EF", marginBottom: 8 },
   body: { fontSize: 14, color: "#B8B3A8", textAlign: "center", marginBottom: 12 },
   adInfo: { fontSize: 13, color: "#B8B3A8", textAlign: "center", marginBottom: 16 },
+  errorText: {
+    color: "#FCA5A5",
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+    textAlign: "center",
+  },
   highlight: { color: "#E07A2F", fontWeight: "700" },
   btnAd: {
     backgroundColor: "#E07A2F",

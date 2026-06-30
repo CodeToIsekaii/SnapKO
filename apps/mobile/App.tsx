@@ -16,6 +16,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as SQLite from "expo-sqlite";
 
 import { AuthProvider, useAuth } from "./src/contexts";
+import { initializeAds } from "./src/features/ads/rewardedAds";
 import { initSyncEngine, cleanupSyncEngine } from "./src/sync/syncEngine";
 import { usePushNotifications } from "./src/hooks/usePushNotifications";
 import {
@@ -476,6 +477,12 @@ export default function App() {
       }),
     []
   );
+
+  useEffect(() => {
+    initializeAds().catch((error) => {
+      console.warn("[App] Ads initialization skipped:", error);
+    });
+  }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
