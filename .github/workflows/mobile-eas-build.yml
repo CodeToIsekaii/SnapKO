@@ -73,11 +73,11 @@ jobs:
       - name: Write Google Play service account
         if: ${{ env.SUBMIT_PROFILE != '' && env.BUILD_PLATFORM == 'android' }}
         working-directory: apps/mobile
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
         run: |
-          test -n "${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}" || (echo "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON secret is missing" && exit 1)
-          cat > google-play-service-account.json <<'JSON'
-          ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          JSON
+          test -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" || (echo "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON secret is missing" && exit 1)
+          printf '%s' "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" > google-play-service-account.json
 
       - name: Build with EAS
         working-directory: apps/mobile
