@@ -9,7 +9,7 @@
     "newArchEnabled": true,
     "scheme": "snapko",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#121212"
     },
@@ -73,6 +73,15 @@
         "expo-image-picker",
         {
           "photosPermission": "SnapKO cần truy cập thư viện ảnh để chọn hóa đơn có sẵn."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#121212"
         }
       ],
       "expo-secure-store",

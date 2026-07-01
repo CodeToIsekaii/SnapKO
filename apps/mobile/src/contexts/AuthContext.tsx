@@ -16,8 +16,10 @@ import React, {
   useCallback,
   type ReactNode,
 } from "react";
+import * as AuthSession from "expo-auth-session";
 import * as SecureStore from "expo-secure-store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as WebBrowser from "expo-web-browser";
 import { createClient, type User } from "@supabase/supabase-js";
 import type { ProfileRoleEnum, ProfileStatusEnum } from "@snapko/ts-types";
 import { Env } from "../env";
@@ -82,6 +84,7 @@ export type AuthState =
 type AuthContextValue = {
   authState: AuthState;
   signIn: (e: string, p: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   signUp: (e: string, p: string, n?: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -100,6 +103,8 @@ export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
     detectSessionInUrl: false,
   },
 });
+
+WebBrowser.maybeCompleteAuthSession();
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -161,6 +166,44 @@ function unwrap<T>(res: unknown): T {
     return (res as { data: T }).data;
   }
   return res as T;
+}
+
+function getOAuthRedirectUrl(): string {
+  return AuthSession.makeRedirectUri({
+    scheme: "snapko",
+    path: "auth/callback",
+  });
+}
+
+function decodeOAuthValue(value: string): string {
+  return decodeURIComponent(value.replace(/\+/g, " "));
+}
+
+function getOAuthCallbackParams(callbackUrl: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  const hashIndex = callbackUrl.indexOf("#");
+  const queryIndex = callbackUrl.indexOf("?");
+  const rawParts: string[] = [];
+
+  if (queryIndex >= 0) {
+    const end = hashIndex > queryIndex ? hashIndex : callbackUrl.length;
+    rawParts.push(callbackUrl.slice(queryIndex + 1, end));
+  }
+
+  if (hashIndex >= 0) {
+    rawParts.push(callbackUrl.slice(hashIndex + 1));
+  }
+
+  for (const part of rawParts.join("&").split("&")) {
+    if (!part) continue;
+    const [rawKey, ...rawValueParts] = part.split("=");
+    if (!rawKey) continue;
+    params[decodeOAuthValue(rawKey)] = decodeOAuthValue(
+      rawValueParts.join("="),
+    );
+  }
+
+  return params;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -357,6 +400,75 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [exchangeForBackendTokens, fetchProfile],
   );
 
+  const signInWithGoogle = useCallback(async () => {
+    const redirectTo = getOAuthRedirectUrl();
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo,
+        skipBrowserRedirect: true,
+      },
+    });
+
+    if (error) throw new Error(error.message);
+    if (!data?.url) throw new Error("Không tạo được đường dẫn đăng nhập Google");
+
+    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+    if (result.type !== "success") {
+      throw new Error(
+        result.type === "cancel"
+          ? "Bạn đã hủy đăng nhập Google"
+          : "Đăng nhập Google chưa hoàn tất",
+      );
+    }
+
+    const params = getOAuthCallbackParams(result.url);
+    if (params.error || params.error_code) {
+      throw new Error(
+        params.error_description || params.error || "Đăng nhập Google thất bại",
+      );
+    }
+
+    let session = null;
+    if (params.code) {
+      const { data: exchangeData, error: exchangeError } =
+        await supabase.auth.exchangeCodeForSession(params.code);
+      if (exchangeError) throw new Error(exchangeError.message);
+      session = exchangeData.session;
+    } else if (params.access_token && params.refresh_token) {
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.setSession({
+          access_token: params.access_token,
+          refresh_token: params.refresh_token,
+        });
+      if (sessionError) throw new Error(sessionError.message);
+      session = sessionData.session;
+    } else {
+      const { data: sessionData } = await supabase.auth.getSession();
+      session = sessionData.session;
+    }
+
+    if (!session?.user) throw new Error("Không lấy được phiên đăng nhập Google");
+
+    const fullName =
+      typeof session.user.user_metadata?.full_name === "string"
+        ? session.user.user_metadata.full_name
+        : typeof session.user.user_metadata?.name === "string"
+        ? session.user.user_metadata.name
+        : undefined;
+
+    await exchangeForBackendTokens(session.access_token, { fullName });
+
+    const profile = await fetchProfile();
+    if (!profile) throw new Error("Không tìm thấy hồ sơ người dùng");
+
+    if (profile.role === "OWNER" && !profile.businessId) {
+      setAuthState({ status: "needs_setup", user: session.user, profile });
+    } else {
+      setAuthState({ status: "authenticated", user: session.user, profile });
+    }
+  }, [exchangeForBackendTokens, fetchProfile]);
+
   // Sign up new Owner
   const signUp = useCallback(
     async (email: string, password: string, fullName?: string) => {
@@ -536,6 +648,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         authState,
         signIn,
+        signInWithGoogle,
         signUp,
         signOut,
         refreshProfile,

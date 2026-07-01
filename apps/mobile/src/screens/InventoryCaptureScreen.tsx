@@ -40,6 +40,7 @@ import {
 import { getDB } from "../db";
 // processSyncQueue removed - use syncPendingLogs only to avoid duplicate sync
 import { syncPendingLogs } from "../sync/syncEngine";
+import { pullLatestRecipes } from "../sync/pullSync";
 import {
   parseInvoiceMultiWithAI,
   parseSalesMultiWithAI,
@@ -355,8 +356,23 @@ function parseAliases(value: unknown): string[] {
       ? parsed.filter((alias): alias is string => typeof alias === "string")
       : [];
   } catch {
-    return [];
+    return value
+      .split(/[,\n;]/)
+      .map((alias) => alias.trim())
+      .filter(Boolean);
   }
+}
+
+function itemMatchesSearch(
+  item: LocalIngredient | LocalRecipe,
+  searchQuery: string,
+): boolean {
+  const query = normalizeLookup(searchQuery);
+  if (!query) return true;
+
+  return [item.name, ...parseAliases(item.aliases)]
+    .map(normalizeLookup)
+    .some((value) => value.includes(query));
 }
 
 function parseYyyyMmDd(value: string | null | undefined): Date | null {
@@ -659,9 +675,17 @@ export default function InventoryCaptureScreen({
   const loadRecipes = async () => {
     try {
       const db = await getDB();
-      const rows = await db.getAllAsync<LocalRecipe>(
+      let rows = await db.getAllAsync<LocalRecipe>(
         "SELECT id, name, aliases, category, price FROM local_recipes WHERE is_active = 1",
       );
+      if (rows.length === 0) {
+        const syncResult = await pullLatestRecipes();
+        if (syncResult.synced > 0) {
+          rows = await db.getAllAsync<LocalRecipe>(
+            "SELECT id, name, aliases, category, price FROM local_recipes WHERE is_active = 1",
+          );
+        }
+      }
       setRecipes(rows);
       console.log(`[Capture] Loaded ${rows.length} recipes`);
     } catch (err) {
@@ -1611,8 +1635,6 @@ export default function InventoryCaptureScreen({
   // Get filtered suggestions for dropdown
   // Returns recipes + resale_items for SALES mode, ingredients for IMPORT/STOCK
   const getFilteredSuggestions = (): (LocalIngredient | LocalRecipe)[] => {
-    const query = searchQuery.toLowerCase();
-
     if (snapMode === "SALES") {
       // Get resale items (ingredients that are sold directly without recipe)
       const resaleItems = ingredients.filter(
@@ -1624,24 +1646,14 @@ export default function InventoryCaptureScreen({
 
       if (!searchQuery) return allSalesItems.slice(0, 15);
       return allSalesItems
-        .filter(
-          (item) =>
-            item.name.toLowerCase().includes(query) ||
-            parseAliases((item as LocalRecipe | LocalIngredient).aliases).some((alias) =>
-              alias.toLowerCase().includes(query),
-            ),
-        )
+        .filter((item) => itemMatchesSearch(item, searchQuery))
         .slice(0, 15);
     }
 
     // Return ingredients for IMPORT/STOCK
     if (!searchQuery) return ingredients.slice(0, 10);
     return ingredients
-      .filter(
-        (ing) =>
-          ing.name.toLowerCase().includes(query) ||
-          (ing.aliases && ing.aliases.toLowerCase().includes(query)),
-      )
+      .filter((ing) => itemMatchesSearch(ing, searchQuery))
       .slice(0, 10);
   };
 

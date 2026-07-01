@@ -36,6 +36,36 @@ export class ApiError extends Error {
   }
 }
 
+function isHtmlErrorBody(text: string): boolean {
+  return /<!doctype html|<html|<body|<\/html>/i.test(text);
+}
+
+function formatHttpErrorMessage(
+  status: number,
+  data: unknown,
+  text: string,
+): string {
+  if (status === 401) {
+    return "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.";
+  }
+
+  if (status === 502 || status === 503 || status === 504) {
+    return "Server đang xử lý quá lâu hoặc tạm thời không phản hồi. Vui lòng thử lại.";
+  }
+
+  if (isHtmlErrorBody(text)) {
+    return `Server trả về lỗi HTTP ${status}. Vui lòng thử lại.`;
+  }
+
+  if (data && typeof data === "object") {
+    return String(
+      (data as any).message ?? (data as any).error ?? text ?? `HTTP ${status}`,
+    );
+  }
+
+  return text || `HTTP ${status}`;
+}
+
 export function setBackendAccessToken(token: string | null): void {
   backendAccessToken = token;
 }
@@ -187,17 +217,7 @@ export async function apiFetch<T = unknown>(
       data = text;
     }
 
-    const message =
-      res.status === 401
-        ? "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại."
-        : data && typeof data === "object"
-        ? String(
-            (data as any).message ??
-              (data as any).error ??
-              text ??
-              `HTTP ${res.status}`,
-          )
-        : text || `HTTP ${res.status}`;
+    const message = formatHttpErrorMessage(res.status, data, text);
 
     throw new ApiError(message, res.status, data, path);
   }
@@ -244,7 +264,7 @@ export async function loginMobile(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `login-mobile failed: HTTP ${res.status}`);
+    throw new Error(formatHttpErrorMessage(res.status, text, text));
   }
 
   const json = (await res.json()) as { data?: TokenRes } & Partial<TokenRes>;
