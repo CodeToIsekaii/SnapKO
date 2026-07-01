@@ -18,6 +18,7 @@ import {
   ScrollView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatCard } from "../components/StatCard";
 import { NotificationModal } from "../components/NotificationModal";
 import { LowStockModal } from "../components/LowStockModal";
@@ -81,6 +82,7 @@ export default function DashboardScreen({
   onOpenQuickOut,
   refreshKey = 0,
 }: DashboardScreenProps) {
+  const insets = useSafeAreaInsets();
   const {
     model: contextModel,
     businessId,
@@ -609,7 +611,13 @@ export default function DashboardScreen({
   const DashboardHeader = () => (
     <>
       {/* Subscription Banner */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 0 }}>
+      <View
+        style={{
+          paddingHorizontal: 16,
+          paddingTop: Math.max(insets.top + 10, 16),
+          paddingBottom: 0,
+        }}
+      >
         {isOwner && subscription.showExpiredBanner && (
           <Pressable
             style={{
@@ -700,7 +708,8 @@ export default function DashboardScreen({
           justifyContent: "space-between",
           alignItems: "center",
           padding: 16,
-          paddingTop: 60,
+          paddingTop: 20,
+          minHeight: 84,
           borderBottomWidth: 1,
           borderBottomColor: "#2A2A2A",
         }}
@@ -879,7 +888,7 @@ export default function DashboardScreen({
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingRight: 16 }}
+              contentContainerStyle={{ paddingRight: 20 }}
             >
               <StatCard
                 title="Giá trị kho"
