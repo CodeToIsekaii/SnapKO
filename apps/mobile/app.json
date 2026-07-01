@@ -32,10 +32,13 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.CAMERA",
+        "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
         "android.permission.RECORD_AUDIO"
       ],
       "intentFilters": [
@@ -61,7 +64,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "SnapKO cần truy cập Camera để chụp hóa đơn nhập kho."
+          "cameraPermission": "SnapKO cần truy cập Camera để chụp hóa đơn nhập kho.",
+          "recordAudioAndroid": false
         }
       ],
       [
@@ -77,6 +81,14 @@
         {
           "androidAppId": "ca-app-pub-3940256099942544~3347511713",
           "iosAppId": "ca-app-pub-3940256099942544~1458002511"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true
+          }
         }
       ]
     ],
