@@ -25,11 +25,12 @@ export const metadata: Metadata = {
   authors: [{ name: "SnapKO Team" }],
   icons: {
     icon: [
+      { url: "/favicon.ico", sizes: "48x48", type: "image/x-icon" },
       { url: "/favicon-48x48.png", sizes: "48x48", type: "image/png" },
       { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
       { url: "/logo.png", sizes: "500x500", type: "image/png" },
     ],
-    shortcut: "/favicon-48x48.png",
+    shortcut: "/favicon.ico",
     apple: [
       { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
     ],
