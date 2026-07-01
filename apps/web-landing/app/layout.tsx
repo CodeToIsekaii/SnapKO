@@ -8,6 +8,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://snapko.io.vn"),
   title: "SnapKO - Quản lý kho F&B thông minh bằng AI",
   description:
     "Ứng dụng quản lý kho F&B local-first với AI nhận dạng hàng hóa, COGS realtime, tuân thủ Nghị định 13. Onboarding nhân viên chỉ 10 giây.",
@@ -23,9 +24,15 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: "SnapKO Team" }],
   icons: {
-    icon: "/logo.png",
-    shortcut: "/logo.png",
-    apple: "/logo.png",
+    icon: [
+      { url: "/favicon-48x48.png", sizes: "48x48", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/logo.png", sizes: "500x500", type: "image/png" },
+    ],
+    shortcut: "/favicon-48x48.png",
+    apple: [
+      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+    ],
   },
   openGraph: {
     title: "SnapKO - Quản lý kho F&B thông minh bằng AI",
@@ -34,11 +41,20 @@ export const metadata: Metadata = {
     type: "website",
     locale: "vi_VN",
     siteName: "SnapKO",
+    images: [
+      {
+        url: "/logo.png",
+        width: 500,
+        height: 500,
+        alt: "SnapKO",
+      },
+    ],
   },
   twitter: {
-    card: "summary_large_image",
+    card: "summary",
     title: "SnapKO - Quản lý kho F&B thông minh bằng AI",
     description: "AI nhận dạng hàng hóa, COGS realtime, tuân thủ Nghị định 13.",
+    images: ["/logo.png"],
   },
   robots: {
     index: true,
